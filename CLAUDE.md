@@ -133,7 +133,8 @@ Likewise: `.env`, `.env.*`, `*.pem`, `*.key`, and all `*.tar.gz` archives are gi
 
 ## Known Gotchas & Footguns
 
-- **Build is currently RED.** `scripts/no-placeholder-gate.cjs` matches its own regex literal at `client/src/components/bid-jacket/ArtifactsPanel.tsx:345` (the line defines `PLACEHOLDER_REGEX = /\b(placeholder|tbd|lorem|ipsum|fake|test|sample|xxx|todo)\b/i`). Do not "fix" this by weakening the gate; use a narrow per-line exemption. Queued as Ticket #1.
+- **`no-placeholder-gate` opt-out convention.** If a line legitimately contains a banned word (e.g. a regex literal whose source happens to spell "placeholder", or a copy test), append the marker comment `// no-placeholder-gate: allow-line` to that line. The gate ignores matching lines via an explicit `IGNORE_LINE_PATTERNS` entry. Keep the marker narrow and per-line — do not add file-level exemptions. Never remove banned patterns to make a gate pass.
+- **`data-quality-gate` is currently RED** against the live DB — 3 critical "(Copy) (Copy)" chained `poNumber` values. A repair script exists at `scripts/repair-purchase-orders.cjs` but running it mutates live data; don't invoke without explicit approval. Separate ticket.
 - **Leaked secret in `.replit:53`** — `EGNYTE_CLIENT_SECRET` is plaintext and committed. Needs rotation + scrub. Queued as Ticket #2.
 - **`npm audit`** — 23 vulnerabilities (1 critical, 11 high). Critical is `fast-xml-parser`. `xlsx` has no fix available (ReDoS + prototype pollution); evaluate whether it's needed at runtime.
 - **`server/routes.ts` is 23k lines / 826 handlers.** Any edit there is risky. New routes should go in `server/routes/<domain>.ts`. Incremental split is ongoing.

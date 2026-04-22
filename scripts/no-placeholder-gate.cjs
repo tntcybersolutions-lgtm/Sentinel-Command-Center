@@ -33,6 +33,10 @@ const IGNORE_LINE_PATTERNS = [
   /example\./i,
   /for example/i,
   /ExampleComponent/i,
+  // Opt-out marker for lines that legitimately contain banned words
+  // (e.g. a regex literal whose source characters include "placeholder"
+  // or a string in a copy test). Keep usage narrow and per-line.
+  /no-placeholder-gate:\s*allow-line/i,
 ];
 
 function scanFile(filePath) {
