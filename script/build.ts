@@ -32,6 +32,9 @@ const allowlist = [
 ];
 
 async function buildAll() {
+  console.log("running secret-scan gate...");
+  execSync("node scripts/secret-scan-gate.cjs", { stdio: "inherit" });
+
   console.log("running no-placeholder gate...");
   execSync("node scripts/no-placeholder-gate.cjs", { stdio: "inherit" });
 

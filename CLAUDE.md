@@ -30,7 +30,7 @@ See **HERBIE.md** for Herbie's persona, memory architecture, and behavior contra
 9. **If unsure about product direction, ask.** If unsure about implementation, propose 2 options with tradeoffs.
 10. **Do not modify `.gitignore`** to expose `server/data/` or `attached_assets/`. If a feature seems to need data from there, stop and ask.
 11. **Treat `main` as protected.** Work only on `feature/phase-1-herbie`. Never commit to `main` directly.
-12. **`.replit` currently contains a plaintext `EGNYTE_CLIENT_SECRET`** (line 53). Do not push changes that keep it there; flag immediately if a task touches `.replit`. Rotation + scrub is a queued ticket.
+12. **Secrets never in tracked files.** `.replit` previously contained a plaintext `EGNYTE_CLIENT_SECRET` (committed in `4a018a8`); it has been scrubbed and the value must be treated as compromised and rotated at Egnyte. All secrets belong in **Replit Secrets** (UI) or a local gitignored `.env`. The `secret-scan` build gate (`scripts/secret-scan-gate.cjs`) will fail the build if a credential-shaped value lands in any tracked file again.
 
 ---
 
@@ -88,7 +88,7 @@ shared/
 ```bash
 npm install                  # install deps (currently 23 vulns — see Known Gotchas)
 npm run dev                  # NODE_ENV=development tsx server/index.ts (port 5000; serves API + Vite middleware)
-npm run build                # tsx script/build.ts (currently RED — see Known Gotchas)
+npm run build                # tsx script/build.ts (runs secret-scan + no-placeholder + data-quality gates, then vite + esbuild)
 npm start                    # NODE_ENV=production node dist/index.cjs (serves built client from dist/public)
 npm run check                # tsc --noEmit (strict TS)
 npm run db:push              # drizzle-kit push (requires DATABASE_URL)

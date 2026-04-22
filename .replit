@@ -49,8 +49,9 @@ integrations = ["javascript_database:1.0.0", "javascript_openai_ai_integrations:
 [userenv]
 
 [userenv.shared]
-EGNYTE_CLIENT_ID = "bMd5EZxATtg7VgPL4dHE3ztswURQRaNg5ZUgXoGrqdNfFYZP"
-EGNYTE_CLIENT_SECRET = "yIeQAM8ovBGKlokp4ioiHFQjHYEIDxpSYRxDBXUoBF6lgxCDs5hXPktCofKguB9t"
+# EGNYTE_CLIENT_ID and EGNYTE_CLIENT_SECRET moved to Replit Secrets.
+# Rotate the secret at the Egnyte provider first — the previously
+# committed value must be treated as compromised.
 EGNYTE_DOMAIN = "tntcyber"
 FORCE_VITE_DEV = "true"
 HIGHERGOV_BASE_URL = "https://www.highergov.com"
