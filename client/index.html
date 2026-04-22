@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <script>
+      // Boot timing - set early so all scripts can use it
+      window.__BOOT_START = Date.now();
+      window.__BOOT_OK = false;
+    </script>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1" />
+    <title>BLACKHAWK SENTINEL - Enterprise Bid Intelligence Platform</title>
+    <meta name="description" content="BLACKHAWK SENTINEL - Enterprise-grade bid intelligence and operations automation platform for BlackHawk Construction. AI-powered opportunity monitoring, bid management, and workflow automation." />
+    <meta property="og:title" content="BLACKHAWK SENTINEL - Enterprise Bid Intelligence Platform" />
+    <meta property="og:description" content="AI-powered bid intelligence platform with SAM.gov monitoring, automated scoring, and approval workflows." />
+    <link rel="icon" type="image/png" href="/favicon.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Architects+Daughter&family=DM+Sans:ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&family=Fira+Code:wght@300..700&family=Geist+Mono:wght@100..900&family=Geist:wght@100..900&family=IBM+Plex+Mono:ital,wght@0,100;0,200;0,300;0,400;0,500;0,600;0,700;1,100;1,200;1,300;1,400;1,500;1,600;1,700&family=IBM+Plex+Sans:ital,wght@0,100..700;1,100..700&family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&family=JetBrains+Mono:ital,wght@0,100..800;1,100..800&family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&family=Lora:ital,wght@0,400..700;1,400..700&family=Merriweather:ital,opsz,wght@0,18..144,300..900;1,18..144,300..900&family=Montserrat:ital,wght@0,100..900;1,100..900&family=Open+Sans:ital,wght@0,300..800;1,300..800&family=Outfit:wght@100..900&family=Oxanium:wght@200..800&family=Playfair+Display:ital,wght@0,400..900;1,400..900&family=Plus+Jakarta+Sans:ital,wght@0,200..800;1,200..800&family=Poppins:ital,wght@0,100;0,200;0,300;0,400;0,500;0,600;0,700;0,800;0,900;1,100;1,200;1,300;1,400;1,500;1,600;1,700;1,800;1,900&family=Roboto+Mono:ital,wght@0,100..700;1,100..700&family=Roboto:ital,wght@0,100..900;1,100..900&family=Source+Code+Pro:ital,wght@0,200..900;1,200..900&family=Source+Serif+4:ital,opsz,wght@0,8..60,200..900;1,8..60,200..900&family=Space+Grotesk:wght@300..700&family=Space+Mono:ital,wght@0,400;0,700;1,400;1,700&display=swap" rel="stylesheet">
+  </head>
+  <body>
+    <div id="root">
+      <!-- Boot diagnostics - visible until React mounts -->
+      <div id="boot-loader" style="
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: #0a0a0a;
+        color: #22c55e;
+        font-family: monospace;
+        font-size: 14px;
+        padding: 20px;
+        z-index: 99999;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      ">
+        <div style="font-size: 18px; font-weight: bold; color: #fff;">BLACKHAWK SENTINEL</div>
+        <div id="boot-status">APP BOOTING...</div>
+        <div id="boot-time" style="color: #666;"></div>
+        <div id="boot-errors" style="color: #ef4444; margin-top: 10px;"></div>
+      </div>
+    </div>
+    <script>
+      // Boot timing and diagnostics (some variables already set in head)
+      window.__BOOT_LOGS = window.__BOOT_LOGS || [];
+      
+      function bootLog(msg) {
+        var elapsed = Date.now() - window.__BOOT_START;
+        var entry = '[' + elapsed + 'ms] ' + msg;
+        window.__BOOT_LOGS.push(entry);
+        console.log('[BOOT] ' + entry);
+        var status = document.getElementById('boot-status');
+        if (status) status.textContent = msg;
+        var time = document.getElementById('boot-time');
+        if (time) time.textContent = 'Elapsed: ' + elapsed + 'ms';
+      }
+      
+      function bootError(err) {
+        var errDiv = document.getElementById('boot-errors');
+        if (errDiv) {
+          errDiv.innerHTML += '<div>' + (err.message || err) + '</div>';
+        }
+        console.error('[BOOT ERROR]', err);
+      }
+      
+      window.onerror = function(msg, src, line, col, err) {
+        bootError('JS Error: ' + msg + ' at ' + src + ':' + line);
+      };
+      
+      window.onunhandledrejection = function(e) {
+        bootError('Promise rejection: ' + (e.reason?.message || e.reason));
+      };
+      
+      bootLog('HTML loaded, waiting for JS bundle...');
+      
+      setTimeout(function() {
+        if (!window.__BOOT_OK) {
+          var errDiv = document.getElementById('boot-errors');
+          if (errDiv) {
+            errDiv.innerHTML += '<div style="margin-top: 20px;"><strong>App failed to load within 15 seconds.</strong></div>' +
+              '<button onclick="window.location.reload()" style="margin-top: 10px; padding: 8px 16px; background: #3b82f6; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 14px;">Reload App</button>' +
+              '<button onclick="window.location.href=\'/api/debug/ui\'" style="margin-top: 10px; margin-left: 8px; padding: 8px 16px; background: #333; color: white; border: 1px solid #555; border-radius: 4px; cursor: pointer; font-size: 14px;">View Diagnostics</button>';
+          }
+        }
+      }, 15000);
+    </script>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

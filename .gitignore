@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+server/public/
+
+# OS files
+.DS_Store
+
+# Vite local config
+vite.config.ts.*
+
+# Archives & exports (often huge)
+*.tar.gz
+*.tar.gz.*
+*.zip
+
+# Replit-attached uploads (large client asset bundles)
+attached_assets/
+
+# CONFIDENTIAL CLIENT DATA — never push to GitHub
+server/data/
+
+# Env / secrets
+.env
+.env.*
+*.pem
+*.key
