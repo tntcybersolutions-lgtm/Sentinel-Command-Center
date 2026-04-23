@@ -241,9 +241,11 @@ export class HerbieOrchestrator {
         results.push({
           type: "tool_result",
           tool_use_id: call.id,
-          content: result.success
-            ? JSON.stringify(result.data).slice(0, 8_000)
-            : `ERROR ${result.code ?? "UNKNOWN"}: ${result.error}`,
+              content: (() => {
+                if (result.success && 'data' in result) return JSON.stringify((result as unknown as {data: unknown}).data).slice(0, 8_000);
+                if (!result.success) return `ERROR ${result.code ?? "UNKNOWN"}: ${result.error}`;
+                return JSON.stringify((result as any).would_have ?? result);
+              })(),
           is_error: !result.success,
         });
       }
