@@ -46,7 +46,28 @@ export interface HerbieToolCall {
 
 export type HerbieToolResult =
   | { success: true; data: unknown }
-  | { success: false; error: string; code?: string };
+  | { success: false; error: string; code?: string }
+  | { success: true; preview: true; would_have: { tool: string; args: Record<string, any> } };
+
+/**
+ * Write-capable tools blocked by HERBIE_PREVIEW_MODE.
+ * Read-only tools (get_project_status, search_project, read_document,
+ * extract_fields) are intentionally excluded — they never mutate state.
+ */
+export const WRITE_CAPABLE_TOOLS = new Set([
+  "record_fact",
+  "record_decision",
+  "create_rfi",
+  "create_submittal",
+  "flag_for_review",
+  "log_daily",
+  "draft_message",
+]);
+
+/** Returns true when the orchestrator should block write-capable tools. */
+export function isPreviewMode(): boolean {
+  return process.env.HERBIE_PREVIEW_MODE === "true";
+}
 
 export interface HerbieToolSpec {
   name: string;
@@ -262,6 +283,15 @@ export async function executeHerbieTool(
   if (!spec) {
     return { success: false, error: `Unknown tool: ${call.tool}`, code: "UNKNOWN_TOOL" };
   }
+
+  if (isPreviewMode() && WRITE_CAPABLE_TOOLS.has(call.tool)) {
+    return {
+      success: true,
+      preview: true,
+      would_have: { tool: call.tool, args: call.args },
+    };
+  }
+
   try {
     switch (call.tool) {
       case "record_fact":

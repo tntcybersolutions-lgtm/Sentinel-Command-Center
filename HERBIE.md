@@ -194,6 +194,23 @@ If the assembled context exceeds ~8k tokens of memory (excluding the user messag
 
 ---
 
+## Preview Mode
+
+Set `HERBIE_PREVIEW_MODE=true` to put Herbie's tool dispatcher into a read-only dry-run state. When active:
+
+- **Write-capable tools are blocked** — `record_fact`, `record_decision`, `create_rfi`, `create_submittal`, `flag_for_review`, `log_daily`, and `draft_message` all return a structured preview payload instead of executing:
+  ```json
+  { "success": true, "preview": true, "would_have": { "tool": "<name>", "args": { ... } } }
+  ```
+- **Read-only tools run normally** — `get_project_status`, `search_project`, `read_document`, and `extract_fields` are unaffected.
+- **No backing service is called** — zero writes to Postgres, zero approval requests filed, zero messages drafted.
+
+The flag is checked by `isPreviewMode()` in `server/services/herbie-tools.ts` before every tool dispatch.
+
+**When to use:** demos with live infrastructure, CI smoke tests that need the agentic loop without side effects, new-tenant onboarding where the PM wants to watch Herbie work before granting write access.
+
+---
+
 ## Herbie's North Star
 
 Every interaction: **Did I just save this PM time, or waste it?** If wasted, shorten, sharpen, or stay quiet next time.
