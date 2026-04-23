@@ -8,6 +8,12 @@ export interface HerbieChatInput {
   userId: string;
   message: string;
   screenContext?: string;
+  // Phase 1 Feature 6 — when provided, Herbie pulls the three-layer
+  // memory block (facts + decisions + relationships) for this project
+  // into the system prompt per HERBIE.md's "System-prompt assembly"
+  // rules. tenantId is required alongside so the read is scoped.
+  projectId?: string;
+  tenantId?: string;
 }
 
 export interface ChunkResult {
@@ -96,6 +102,7 @@ export async function retrieveChunks(
 }
 
 import { buildHerbieSystemPrompt } from "../herbie-identity.service";
+import { getProjectMemoryBlock } from "../herbie-facts.service";
 
 export class HerbieOrchestrator {
   async chat(input: HerbieChatInput): Promise<HerbieChatResponse> {
@@ -116,11 +123,16 @@ export class HerbieOrchestrator {
 
     userPrompt += input.message;
 
-    // Identity layer from HERBIE.md. See HERBIE.md "System-prompt
-    // assembly" — this is slot [1]; project memory / preferences /
-    // recency would be slots [2]-[5] when wired into the combined
-    // context assembler.
-    const systemPrompt = buildHerbieSystemPrompt();
+    // Identity layer from HERBIE.md + optional project-memory block
+    // (facts / decisions / relationships) when we know which project
+    // the user is asking about. See HERBIE.md "System-prompt
+    // assembly" for the intended ordering.
+    const projectMemoryBlock =
+      input.tenantId && input.projectId
+        ? await formatProjectMemoryBlock(input.tenantId, input.projectId)
+        : undefined;
+
+    const systemPrompt = buildHerbieSystemPrompt({ projectMemoryBlock });
 
     const response = await getOpenAI().responses.create({
       model: "gpt-5.1",
@@ -135,5 +147,68 @@ export class HerbieOrchestrator {
       blocks: [],
       sources: chunks,
     };
+  }
+}
+
+/**
+ * Render the three-layer memory block for a project into a plain-text
+ * string suitable for inclusion in the system prompt. Keeps the
+ * formatting consistent so Herbie sees the same shape on every call.
+ *
+ * Bounded by getProjectMemoryBlock's defaults (30 facts / 10
+ * decisions / 20 relationships) — plenty for a Phase 1 demo and well
+ * under the ~2k-token "project memory" slice of HERBIE.md's ~8k
+ * context budget.
+ */
+export async function formatProjectMemoryBlock(
+  tenantId: string,
+  projectId: string,
+): Promise<string | undefined> {
+  try {
+    const { facts, decisions, relationships } = await getProjectMemoryBlock({
+      tenantId,
+      projectId,
+    });
+    if (!facts.length && !decisions.length && !relationships.length) {
+      return undefined;
+    }
+    const lines: string[] = [];
+    if (facts.length) {
+      lines.push("Facts:");
+      for (const f of facts) {
+        const subj = `${f.subjectType}${f.subjectId ? `:${f.subjectId}` : ""}`;
+        const obj = f.object ?? JSON.stringify(f.objectJson ?? null);
+        lines.push(
+          `  • ${subj} ${f.predicate} = ${obj} (source: ${f.sourceType}, confidence: ${f.confidence})`,
+        );
+      }
+    }
+    if (decisions.length) {
+      lines.push("");
+      lines.push("Decisions:");
+      for (const d of decisions) {
+        lines.push(
+          `  • ${d.decidedAt.toISOString().slice(0, 10)} — ${d.summary} (by ${d.decidedBy})` +
+            (d.rationale ? ` — ${d.rationale}` : ""),
+        );
+      }
+    }
+    if (relationships.length) {
+      lines.push("");
+      lines.push("Relationships:");
+      for (const r of relationships) {
+        const target =
+          r.contactId ? `contact:${r.contactId}` :
+          r.vendorId  ? `vendor:${r.vendorId}` :
+          r.companyId ? `company:${r.companyId}` : "unknown";
+        lines.push(`  • ${target} — ${r.role} (${r.status})`);
+      }
+    }
+    return lines.join("\n");
+  } catch (err) {
+    // Memory read failures should never block a chat. Log and skip
+    // the block — Herbie still has identity + conversational context.
+    console.error("formatProjectMemoryBlock failed:", err);
+    return undefined;
   }
 }
