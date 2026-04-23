@@ -301,6 +301,7 @@ function Router() {
       <Route path="/execution/inventory" component={() => <SafeRoute component={Inventory} name="Inventory" />} />
       <Route path="/execution/workforce" component={() => <SafeRoute component={Workforce} name="Workforce" />} />
       <Route path="/execution/vendors" component={() => <SafeRoute component={Vendors} name="Vendors" />} />
+        <Route path="/coi" component={() => <Suspense fallback={<div>Loading...</div>}><CoiTracker /></Suspense>} />
 
       {/* ── Financial Control ── */}
       <Route path="/financial/overview" component={() => <SafeRoute component={Finance} name="Finance" />} />
