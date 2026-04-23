@@ -78,7 +78,27 @@ export class ApprovalService {
   }
 
   async processDecision(decision: ApprovalDecision, tenantId: string): Promise<boolean> {
-    const [action] = await db.insert(approvalActions).values({
+    // Idempotent: if an action already exists for this request, return
+    // that prior outcome without writing a second row. Without this
+    // guard, double-submit of a decision (network retry, rapid clicks,
+    // dispatcher replays) would duplicate approval_actions rows and
+    // re-fire the audit event.
+    const prior = await db.select({
+      id: approvalActions.id,
+      decision: approvalActions.decision,
+    })
+      .from(approvalActions)
+      .where(and(
+        eq(approvalActions.tenantId, tenantId),
+        eq(approvalActions.approvalRequestId, decision.requestId),
+      ))
+      .limit(1);
+
+    if (prior.length > 0) {
+      return prior[0].decision === "approved";
+    }
+
+    await db.insert(approvalActions).values({
       tenantId,
       approvalRequestId: decision.requestId,
       actor: decision.actor,

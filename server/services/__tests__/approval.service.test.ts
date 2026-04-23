@@ -60,11 +60,29 @@ describe("approvalService.processDecision", () => {
     vi.clearAllMocks();
   });
 
-  function wireDecisionMocks() {
-    (db.insert as any).mockReturnValue({
-      values: () => ({
-        returning: async () => [{ id: "action-1" }],
+  // Captures the values passed to db.insert(approvalActions).values(...)
+  // so tests can assert on the row shape (e.g. that notes pass through).
+  let lastInsertValues: any = null;
+
+  function wireDecisionMocks(
+    options: { priorAction?: { id: string; decision: string } } = {},
+  ) {
+    lastInsertValues = null;
+    (db.select as any).mockReturnValue({
+      from: () => ({
+        where: () => ({
+          limit: async () =>
+            options.priorAction ? [options.priorAction] : [],
+        }),
       }),
+    });
+    (db.insert as any).mockReturnValue({
+      values: (v: any) => {
+        lastInsertValues = v;
+        return {
+          returning: async () => [{ id: "action-1" }],
+        };
+      },
     });
     (db.update as any).mockReturnValue({
       set: () => ({
@@ -101,6 +119,48 @@ describe("approvalService.processDecision", () => {
     );
     expect(db.insert).toHaveBeenCalledOnce();
     expect(db.update).toHaveBeenCalledOnce();
+  });
+
+  it("is idempotent: second decide returns the prior outcome without inserting again", async () => {
+    // A prior approval already exists for this request. The second
+    // decide call should short-circuit — no new action row, no request
+    // status update, no audit event.
+    wireDecisionMocks({ priorAction: { id: "action-prior", decision: "approved" } });
+    const result = await approvalService.processDecision(
+      { requestId: "req-already-decided", actor: "user-1", decision: "approved" },
+      "tenant-1",
+    );
+    expect(result).toBe(true);
+    expect(db.insert).not.toHaveBeenCalled();
+    expect(db.update).not.toHaveBeenCalled();
+    expect(auditService.logEvent).not.toHaveBeenCalled();
+  });
+
+  it("idempotency honors the prior outcome — even if a later caller says 'approved', a prior denial wins", async () => {
+    wireDecisionMocks({ priorAction: { id: "action-prior", decision: "denied" } });
+    const result = await approvalService.processDecision(
+      { requestId: "req-already-denied", actor: "user-2", decision: "approved" },
+      "tenant-1",
+    );
+    expect(result).toBe(false);
+    expect(db.insert).not.toHaveBeenCalled();
+  });
+
+  it("rejecting with a reason stores the notes verbatim in approval_actions", async () => {
+    wireDecisionMocks();
+    await approvalService.processDecision(
+      {
+        requestId: "req-5",
+        actor: "user-1",
+        decision: "denied",
+        notes: "Missing insurance limits — bond amount short of requirement.",
+      },
+      "tenant-1",
+    );
+    expect(lastInsertValues.notes).toBe(
+      "Missing insurance limits — bond amount short of requirement.",
+    );
+    expect(lastInsertValues.decision).toBe("denied");
   });
 });
 
@@ -147,11 +207,11 @@ describe("approvalService.checkApproval", () => {
 });
 
 // TODO (Phase 1 Roadmap, Feature 10):
-// Prescribed behaviors from HERBIE.md not yet implemented in the service
-// contract. Kept as .skip markers so they turn into tests as soon as the
-// corresponding feature lands.
-describe("approvalService — prescribed Phase 1 behaviors (not yet implemented)", () => {
-  it.skip("double-approve on the same request is idempotent (no duplicate action row)", () => {});
-  it.skip("a draft_external_message approval triggers the configured outbound dispatcher", () => {});
-  it.skip("rejecting with a reason stores it verbatim in approval_actions.notes", () => {});
+// One prescribed behavior is still deferred — the others are now
+// covered by the processDecision suite above.
+describe("approvalService — deferred Phase 1 behaviors", () => {
+  it.skip("a draft_external_message approval triggers the configured outbound dispatcher", () => {
+    // Feature 10 scope. Needs a dispatcher registry + a
+    // draft_external_message action type + the send hook.
+  });
 });
