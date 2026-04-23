@@ -61,15 +61,15 @@ Postgres tables, per-tenant, per-project where applicable:
 
 | Prescribed table | Purpose | Status in repo |
 |---|---|---|
-| `herbie_facts` | Atomic facts extracted from documents/messages. Every fact carries source (`doc_id` / `message_id`), confidence, extracted_at, superseded_by. | **Gap — to be added.** Partial coverage in `herbie_extraction_evidence`. |
-| `herbie_decisions` | Decisions made on a project (e.g. "approved CO-07 for $4,200 on 2026-03-14"), with rationale + actor. | **Gap — to be added.** Partial coverage in `bid_decisions`, `opportunity_decisions`, `award_decisions` (bid-side, not contractor-side). |
-| `herbie_relationships` | People + orgs + their role on the project (PM, super, foreman, sub, client, architect, AHJ). | **Gap — to be added.** Adjacent data in `contacts`, `vendors`, `companies`. |
+| `herbie_facts` | Atomic facts extracted from documents/messages. Every fact carries source (`doc_id` / `message_id`), confidence, extracted_at, superseded_by. | **Defined in schema + service.** Pending `npm run db:push` to materialize. |
+| `herbie_decisions` | Decisions made on a project (e.g. "approved CO-07 for $4,200 on 2026-03-14"), with rationale + actor. | **Defined in schema + service.** Pending `npm run db:push`. |
+| `herbie_relationships` | People + orgs + their role on the project (PM, super, foreman, sub, client, architect, AHJ). | **Defined in schema + service.** Pending `npm run db:push`. |
 | `herbie_preferences` | Per-user prefs (tone nudges, what they want flagged, quiet hours, channel preferences). | **Partial — `preference_signals` exists.** May cover this; audit in Ticket. |
 | `herbie_messages` | Append-only conversation log with pgvector embeddings for semantic recall. | **Covered — `conversation_memory` exists with embedding column.** |
 
-Adjacent existing tables Herbie already reads/writes: `herbie_actions`, `herbie_extraction_evidence`, `herbie_review_queue`, `herbie_outreach_log`, `org_memory_items`, `org_memory_entity_links`, `org_memory_approvals`.
+Facts/decisions/relationships live in `server/services/herbie-facts.service.ts`. Call `recordFact`, `recordDecision`, `recordRelationship` for writes; `getFacts`, `getDecisions`, `getRelationships`, `getProjectMemoryBlock` for reads. `recordFact` with confidence < `FACT_CONFIDENCE_THRESHOLD` (0.7) routes to `herbie_review_queue` instead of persisting.
 
-**The gap between prescribed and current schema is a Phase 1 roadmap item.** Do not bolt facts/decisions/relationships onto existing tables opportunistically — the three-layer model is part of Herbie's promise.
+Adjacent existing tables Herbie already reads/writes: `herbie_actions`, `herbie_extraction_evidence`, `herbie_review_queue`, `herbie_outreach_log`, `org_memory_items`, `org_memory_entity_links`, `org_memory_approvals`.
 
 ### 3. Conversational Memory — vector + recency
 

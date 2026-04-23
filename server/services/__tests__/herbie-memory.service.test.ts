@@ -128,14 +128,6 @@ describe("herbie-memory — graceful DB-failure behavior", () => {
   });
 });
 
-// TODO (Phase 1 Roadmap, Feature 8 — three-layer Herbie memory):
-// These describe behaviors prescribed by HERBIE.md but not yet
-// implemented in the service. Each becomes a real test when its
-// feature lands.
-describe("herbie-memory — prescribed Phase 1 behaviors (not yet implemented)", () => {
-  it.skip("record_fact writes to herbie_facts with source_id and confidence", () => {});
-  it.skip("a fact with conflicting predicate marks the prior fact superseded_by instead of deleting", () => {});
-  it.skip("confidence < 0.7 routes to herbie_review_queue, not herbie_facts", () => {});
-  it.skip("record_decision writes to herbie_decisions with rationale and decided_by", () => {});
-  it.skip("herbie_relationships upsert is idempotent on (tenant, project, contact, role)", () => {});
-});
+// Prescribed three-layer memory behaviors (facts / decisions /
+// relationships) now live in their own service and are covered by
+// server/services/__tests__/herbie-facts.service.test.ts.
