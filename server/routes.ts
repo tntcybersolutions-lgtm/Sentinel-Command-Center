@@ -607,7 +607,22 @@ export async function registerRoutes(
       bidStatus: r.bid_status,
     }));
 
-    return { approvals, opportunities: opps, tasks: tasksRaw, kpis, jackets };
+    const tasks = tasksRaw.map((t) => ({
+      id: t.id,
+      title: t.title,
+      description: t.description,
+      priority: t.priority,
+      status: t.status,
+      dueAt: t.dueAt ? t.dueAt.toISOString() : null,
+      source: t.source,
+      sourceEntityType: t.sourceEntityType,
+      sourceEntityId: t.sourceEntityId,
+      actionType: t.actionType,
+      actionPayload: t.actionPayload,
+      completedAt: t.completedAt ? t.completedAt.toISOString() : null,
+    }));
+
+    return { approvals, opportunities: opps, tasks, kpis, jackets };
   }
 
   // ── Unified Command Center Endpoint ──────────────────────────────────────
@@ -23406,7 +23421,7 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
   app.get("/api/projects/:id/cockpit", async (req: Request, res: Response) => {
     try {
       const tenantId = DEFAULT_TENANT_ID;
-      const projectId = req.params.id;
+      const projectId = String(req.params.id);
 
       const [projectRows, rfiRows, submittalRows, coRows, logRows, taskRows, reportRows] = await Promise.all([
         db.select().from(projects).where(and(eq(projects.tenantId, tenantId), eq(projects.id, projectId))).limit(1),
@@ -23467,7 +23482,7 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
   app.get("/api/projects/:id/agent-reports", async (req: Request, res: Response) => {
     try {
       const tenantId = DEFAULT_TENANT_ID;
-      const projectId = req.params.id;
+      const projectId = String(req.params.id);
 
       const reports = await db.select().from(agentActivities)
         .where(and(

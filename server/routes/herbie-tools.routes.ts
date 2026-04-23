@@ -265,7 +265,7 @@ router.get("/changesets", async (_req: Request, res: Response) => {
 
 router.get("/changesets/:id", async (req: Request, res: Response) => {
   try {
-    const cs = getChangeSet(req.params.id);
+    const cs = getChangeSet(String(req.params.id));
     if (!cs) return res.status(404).json({ error: "Change set not found" });
     res.json(cs);
   } catch (error) {
@@ -275,7 +275,7 @@ router.get("/changesets/:id", async (req: Request, res: Response) => {
 
 router.post("/changesets/:id/rollback", async (req: Request, res: Response) => {
   try {
-    const result = rollbackChangeSet(req.params.id);
+    const result = rollbackChangeSet(String(req.params.id));
     res.json(result);
   } catch (error: any) {
     res.status(400).json({ error: error.message || "Failed to rollback" });

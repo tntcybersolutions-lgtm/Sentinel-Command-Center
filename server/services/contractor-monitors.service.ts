@@ -282,6 +282,7 @@ export async function runAllMonitors(tenantId: string = DEFAULT_TENANT_ID): Prom
   tenantId: string;
   summary: { total: number; critical: number; high: number; medium: number; low: number };
   monitors: Record<string, MonitorResult>;
+  materialized: { tasksCreated: number; approvalsCreated: number };
 }> {
   const [
     stalledRfis,

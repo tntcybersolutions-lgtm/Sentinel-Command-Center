@@ -190,7 +190,7 @@ export async function runKPIAnalysis(tenantId: string): Promise<ExecScorecard> {
   const pipelineOpps = allOpps.filter(o =>
     !["won", "lost", "cancelled", "archived", "no_bid", "declined"].includes(o.status || "")
   );
-  const pipelineValue = pipelineOpps.reduce((s, o) => s + (Number(o.estimatedValue) || 0), 0);
+  const pipelineValue = pipelineOpps.reduce((s, o) => s + (Number(o.contractValue) || 0), 0);
 
   let backlogTrend: BacklogMetrics["backlogTrend"] = "stable";
   if (backlogMonths > 12) backlogTrend = "growing";
