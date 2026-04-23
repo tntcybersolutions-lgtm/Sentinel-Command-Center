@@ -162,7 +162,7 @@ export default function CoiTracker() {
 
   const { data: expiring, isLoading, refetch } = useQuery<CoiCertificate[]>({
     queryKey: ["/api/coi/expiring/365"],
-    queryFn: () => apiRequest("GET", "/api/coi/expiring/365").then(r => r.json()) as Promise<CoiCertificate[]>,
+    queryFn: async (): Promise<CoiCertificate[]> => { const r = await apiRequest("GET", "/api/coi/expiring/365"); const data = await r.json(); return (data.rows ?? data) as CoiCertificate[]; },
   });
 
   const coisWithTier: CoiWithTier[] = (expiring ?? []).map(coi => ({
