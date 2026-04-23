@@ -95,7 +95,7 @@ export async function retrieveChunks(
   }));
 }
 
-const SYSTEM_PROMPT = `You are HERBIE, the AI assistant for BlackHawk Construction's bid intelligence platform (BLACKHAWK SENTINEL). You help users understand bid documents, answer questions about active opportunities, and provide strategic guidance on federal construction contracting. Be concise, professional, and actionable. When document context is provided, base your answers on that context and cite specific details from the documents.`;
+import { buildHerbieSystemPrompt } from "../herbie-identity.service";
 
 export class HerbieOrchestrator {
   async chat(input: HerbieChatInput): Promise<HerbieChatResponse> {
@@ -116,10 +116,16 @@ export class HerbieOrchestrator {
 
     userPrompt += input.message;
 
+    // Identity layer from HERBIE.md. See HERBIE.md "System-prompt
+    // assembly" — this is slot [1]; project memory / preferences /
+    // recency would be slots [2]-[5] when wired into the combined
+    // context assembler.
+    const systemPrompt = buildHerbieSystemPrompt();
+
     const response = await getOpenAI().responses.create({
       model: "gpt-5.1",
       input: [
-        { role: "system", content: SYSTEM_PROMPT },
+        { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt },
       ],
     });
