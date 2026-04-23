@@ -36,6 +36,7 @@ import {
   Plug,
   Settings,
   ArrowDownToLine,
+  Mic,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -108,6 +109,7 @@ export const navConfig: NavGroupConfig[] = [
       { id: "pm.projects", label: "Active Projects", icon: FolderGit2, route: "/projects/active", portfolioOnly: true },
       { id: "pm.tasks", label: "Tasks", icon: ListChecks, route: "/execution/tasks", badgeKey: "overdueTaskCount" },
       { id: "pm.rfis", label: "RFIs", icon: FileQuestion, route: "/execution/rfis", badgeKey: "openRfiCount" },
+      { id: "pm.voiceLog", label: "Voice Daily Log", icon: Mic, route: "/voice-daily-log", projectOnly: true },
       { id: "pm.submittals", label: "Submittals", icon: FileCheck, route: "/execution/submittals", badgeKey: "pendingSubmittalCount" },
     ],
   },
