@@ -25,6 +25,7 @@ import {
 } from "./coi.service";
 import { upsertVoiceDailyLog } from "./voice-daily-log.service";
 import { draftMessage } from "./outbound-message-draft.service";
+import { createRAGService } from "./rag.service";
 
 export interface HerbieToolContext {
   tenantId: string;
@@ -358,9 +359,26 @@ export async function executeHerbieTool(
             draftedBy: ctx.userId,
           }),
         };
+      case "search_project": {
+        const rag = createRAGService(ctx.tenantId);
+        const limit = typeof call.args.limit === "number" ? call.args.limit : 5;
+        const results = await rag.search(String(call.args.query ?? ""), limit);
+        // rag.search returns tenant-scoped results, not project-
+        // scoped. Until the RAG index grows a projectId facet, we
+        // filter in memory when the model asks for a specific
+        // project — dropping any hit whose source is tagged with a
+        // different project.
+        const projectId = call.args.projectId;
+        const filtered = projectId
+          ? results.filter((r: any) => {
+              const p = r?.metadata?.projectId ?? r?.projectId;
+              return !p || p === projectId;
+            })
+          : results;
+        return { success: true, data: { results: filtered } };
+      }
       case "read_document":
       case "extract_fields":
-      case "search_project":
         return {
           success: false,
           error: `Tool '${call.tool}' is registered but its handler isn't wired yet. See HERBIE.md + ROADMAP.md for the owning feature.`,

@@ -33,6 +33,12 @@ vi.mock("../coi.service", () => ({
 vi.mock("../outbound-message-draft.service", () => ({
   draftMessage: (...a: any[]) => draftMessageMock(...a),
 }));
+const ragSearchMock = vi.fn();
+vi.mock("../rag.service", () => ({
+  createRAGService: (_tenantId: string) => ({
+    search: (...a: any[]) => ragSearchMock(...a),
+  }),
+}));
 
 // herbie-tools.ts also writes to herbie_review_queue via db.insert;
 // mock the db chain with a minimal returning stub.
@@ -69,6 +75,7 @@ function reset() {
   partitionByTierMock.mockReset();
   coisExpiringWithinMock.mockReset();
   draftMessageMock.mockReset();
+  ragSearchMock.mockReset();
   dbInsertMock.mockReset();
 }
 
@@ -239,13 +246,43 @@ describe("herbie-tools — dispatch", () => {
   });
 
   it("returns NOT_IMPLEMENTED for tools whose backing service isn't wired", async () => {
-    for (const tool of ["read_document", "extract_fields", "search_project"]) {
+    for (const tool of ["read_document", "extract_fields"]) {
       const r = await executeHerbieTool({ tool, args: {} }, ctx);
       expect(r.success).toBe(false);
       if (!r.success) {
         expect(r.code).toBe("NOT_IMPLEMENTED");
       }
     }
+  });
+
+  it("search_project dispatches to rag.service.search and returns results", async () => {
+    ragSearchMock.mockResolvedValue([
+      { documentId: "d1", content: "...", score: 0.87, metadata: { projectId: "p1" } },
+      { documentId: "d2", content: "...", score: 0.81, metadata: { projectId: "p2" } },
+    ]);
+    const r = await executeHerbieTool(
+      { tool: "search_project", args: { projectId: "p1", query: "concrete spec" } },
+      ctx,
+    );
+    expect(r.success).toBe(true);
+    // Only the p1 hit passes the in-memory project filter.
+    const data = (r as any).data;
+    expect(data.results).toHaveLength(1);
+    expect(ragSearchMock).toHaveBeenCalledWith("concrete spec", 5);
+  });
+
+  it("search_project without projectId returns unfiltered results", async () => {
+    ragSearchMock.mockResolvedValue([
+      { documentId: "d1", content: "...", score: 0.87 },
+      { documentId: "d2", content: "...", score: 0.81 },
+    ]);
+    const r = await executeHerbieTool(
+      { tool: "search_project", args: { query: "coi limits" } },
+      { tenantId: "t1", userId: "u1" }, // no projectId in context
+    );
+    expect(r.success).toBe(true);
+    const data = (r as any).data;
+    expect(data.results).toHaveLength(2);
   });
 
   it("draft_message dispatches to outbound-message-draft.draftMessage", async () => {
