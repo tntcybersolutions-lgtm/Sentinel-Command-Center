@@ -160,6 +160,32 @@ Likewise: `.env`, `.env.*`, `*.pem`, `*.key`, and all `*.tar.gz` archives are gi
 
 **Phase 1 — Herbie MVP.** Rebrand as Sentinel Command Center, prune federal-contracting surfaces from the user-facing app, build the 10 Phase 1 features in `ROADMAP.md`, hit a 15-minute demo that makes a contractor say "when can I have this."
 
+### Foundation complete
+
+- Build gates: `secret-scan`, `no-placeholder`, `data-quality` (data-quality is still red against live DB — PO repair pending user authorization).
+- `.replit` secret scrub + `scripts/secret-scan-gate.cjs` enforcing no-credentials-in-tracked-files.
+- Vitest harness split: `npm test` (unit, no DB) vs `npm run test:integration` (live server).
+- Zero TypeScript errors (`npm run check` clean).
+- `npm audit`: 23 → 10 vulnerabilities, no critical remaining.
+
+### Feature work in progress
+
+- **Feature 1 (brand rebrand) — done.** All user-visible surfaces renamed. One intentional deferral: `server/services/herbie/orchestrator.ts` still names the old brand in a hard-coded system prompt — that prompt should become a thin shim loading `HERBIE.md`, part of Feature 6.
+- **Feature 8 (three-layer memory) — schema + service landed.** `herbie_facts`, `herbie_decisions`, `herbie_relationships` in schema; `server/services/herbie-facts.service.ts` with confidence-gated routing, supersession, upsert-by-role. Pending `npm run db:push` to materialize, pending wiring into routes/UI.
+- **Feature 2 (GC taxonomy foundation) — done.** `shared/gc-artifact-taxonomy.ts` holds the canonical 11-category GC taxonomy that Features 2/3/4/5/9 read from.
+- **Feature 3 (COI tracker) — schema + service landed.** `coi_certificates` table + `server/services/coi.service.ts` with expiry tiers (expired / 1d / 7d / 14d / 30d / ok), tier severity, upsert-by-composite-key, scoped reads. Pending `npm run db:push`, pending wiring into routes/UI/monitor.
+- **`approval.service.processDecision`** is now idempotent — second decision on a request returns the prior outcome rather than duplicating rows.
+
+### Not yet started
+
+Features 4, 5, 6, 7, 9, 10. See `ROADMAP.md` for dependency-sorted build order.
+
+### Known external actions required
+
+- **Run `npm run db:push`** to materialize the new `herbie_facts`, `herbie_decisions`, `herbie_relationships`, `coi_certificates` tables. Pending user authorization — `db:push` mutates the live DB schema.
+- **Rotate `EGNYTE_CLIENT_SECRET` in Egnyte admin** and add the new value to Replit Secrets. The old committed value is burned.
+- **Run `node scripts/repair-purchase-orders.cjs`** to turn the build fully green. The script is idempotent; needs user-level permission approval to run against live DB.
+
 Update this section as milestones land.
 
 ---
