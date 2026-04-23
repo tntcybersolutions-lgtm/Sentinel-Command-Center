@@ -5,10 +5,10 @@ import { queryClient, apiRequest } from "@/lib/queryClient";
 import {
   FileQuestion, FileCheck, ArrowLeftRight, ClipboardList, ListChecks, Bot,
   Loader2, Play, ChevronDown, ChevronRight, AlertTriangle, Clock, CheckCircle2,
-  XCircle, ArrowUp, ArrowRight, Minus,
+  XCircle, ArrowUp, ArrowRight, Minus, Brain, Lightbulb, GitBranch,
 } from "lucide-react";
 
-type TabId = "rfis" | "submittals" | "change-orders" | "daily-logs" | "tasks" | "agent-reports";
+type TabId = "rfis" | "submittals" | "change-orders" | "daily-logs" | "tasks" | "agent-reports" | "herbie-memory";
 
 const TABS: { id: TabId; label: string; icon: typeof FileQuestion }[] = [
   { id: "rfis", label: "RFIs", icon: FileQuestion },
@@ -17,6 +17,7 @@ const TABS: { id: TabId; label: string; icon: typeof FileQuestion }[] = [
   { id: "daily-logs", label: "Daily Reports", icon: ClipboardList },
   { id: "tasks", label: "Tasks", icon: ListChecks },
   { id: "agent-reports", label: "Agent Reports", icon: Bot },
+  { id: "herbie-memory", label: "Memory", icon: Brain },
 ];
 
 function formatDate(d: string | Date | null | undefined): string {
@@ -487,6 +488,85 @@ function EmptyState({ label }: { label: string }) {
   );
 }
 
+
+function HerbieMemoryTab({ projectId }: { projectId: string }) {
+  const { data, isLoading } = useQuery<{ facts: any[]; decisions: any[]; relationships: any[] }>({
+    queryKey: ["/api/herbie/memory/project", projectId],
+    queryFn: () => fetch(`/api/herbie/memory/project/${projectId}`).then(r => r.json()),
+  });
+  if (isLoading) return <div className="flex items-center gap-2 py-8 text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" /> Loading memory…</div>;
+  const facts = data?.facts ?? [];
+  const decisions = data?.decisions ?? [];
+  const rels = data?.relationships ?? [];
+  if (facts.length === 0 && decisions.length === 0 && rels.length === 0) {
+    return (
+      <div className="text-center py-12 text-muted-foreground">
+        <Brain className="h-8 w-8 mx-auto mb-2 opacity-40" />
+        <p className="text-sm">Herbie hasn't learned anything about this project yet.</p>
+        <p className="text-xs mt-1">Run a document ingestion cycle to populate project memory.</p>
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-6">
+      {facts.length > 0 && (
+        <div>
+          <h3 className="flex items-center gap-2 text-sm font-semibold mb-3">
+            <Lightbulb className="h-4 w-4 text-yellow-500" /> Facts ({facts.length})
+          </h3>
+          <div className="space-y-2">
+            {facts.map((f: any, i: number) => (
+              <div key={f.id ?? i} className="flex items-center gap-2 text-sm py-1 border-b last:border-0">
+                <span className="text-xs font-mono text-muted-foreground w-28 shrink-0 truncate">{f.subjectType}</span>
+                <ChevronRight className="h-3 w-3 text-muted-foreground shrink-0" />
+                <span className="font-medium text-primary">{f.predicate}</span>
+                <ChevronRight className="h-3 w-3 text-muted-foreground shrink-0" />
+                <span className="truncate">{f.object ?? "—"}</span>
+                <div className="ml-auto flex items-center gap-1 shrink-0">
+                  <div className={`h-1.5 w-1.5 rounded-full ${f.confidence >= 0.85 ? "bg-green-500" : f.confidence >= 0.6 ? "bg-yellow-500" : "bg-red-500"}`} />
+                  <span className="text-xs text-muted-foreground font-mono">{Math.round((f.confidence ?? 0) * 100)}%</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {decisions.length > 0 && (
+        <div>
+          <h3 className="flex items-center gap-2 text-sm font-semibold mb-3">
+            <Brain className="h-4 w-4 text-purple-500" /> Decisions ({decisions.length})
+          </h3>
+          <div className="space-y-2">
+            {decisions.map((d: any, i: number) => (
+              <div key={d.id ?? i} className="py-2 border-b last:border-0">
+                <p className="text-sm font-medium">{d.summary}</p>
+                {d.rationale && <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{d.rationale}</p>}
+                <p className="text-xs text-muted-foreground mt-1">by {d.decidedBy}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {rels.length > 0 && (
+        <div>
+          <h3 className="flex items-center gap-2 text-sm font-semibold mb-3">
+            <GitBranch className="h-4 w-4 text-blue-500" /> Relationships ({rels.length})
+          </h3>
+          <div className="space-y-1.5">
+            {rels.map((r: any, i: number) => (
+              <div key={r.id ?? i} className="flex items-center gap-2 text-xs py-1 border-b last:border-0">
+                <span className="font-mono text-muted-foreground">{r.fromEntityType}:{r.fromEntityId?.slice(0,8)}</span>
+                <span className="text-primary font-medium">—[{r.role}]→</span>
+                <span className="font-mono text-muted-foreground">{r.toEntityType}:{r.toEntityId?.slice(0,8)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function ProjectCockpit() {
   const [, params] = useRoute("/projects/:id/cockpit");
   const projectId = params?.id || "";
@@ -608,6 +688,7 @@ export default function ProjectCockpit() {
         {activeTab === "daily-logs" && <DailyLogsTab projectId={projectId} />}
         {activeTab === "tasks" && <TasksTab projectId={projectId} />}
         {activeTab === "agent-reports" && <AgentReportsTab projectId={projectId} />}
+            {activeTab === "herbie-memory" && <HerbieMemoryTab projectId={projectId} />}
       </div>
     </div>
   );
