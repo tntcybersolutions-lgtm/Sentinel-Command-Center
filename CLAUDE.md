@@ -162,29 +162,33 @@ Likewise: `.env`, `.env.*`, `*.pem`, `*.key`, and all `*.tar.gz` archives are gi
 
 ### Foundation complete
 
-- Build gates: `secret-scan`, `no-placeholder`, `data-quality` (data-quality is still red against live DB — PO repair pending user authorization).
+- Build gates: `secret-scan` PASSED, `no-placeholder` PASSED, `data-quality` still red (PO repair pending, see below).
 - `.replit` secret scrub + `scripts/secret-scan-gate.cjs` enforcing no-credentials-in-tracked-files.
 - Vitest harness split: `npm test` (unit, no DB) vs `npm run test:integration` (live server).
 - Zero TypeScript errors (`npm run check` clean).
 - `npm audit`: 23 → 10 vulnerabilities, no critical remaining.
+- DB schema live: `npm run db:push` applied the new tables.
 
-### Feature work in progress
+### Feature work landed
 
-- **Feature 1 (brand rebrand) — done.** All user-visible surfaces renamed. One intentional deferral: `server/services/herbie/orchestrator.ts` still names the old brand in a hard-coded system prompt — that prompt should become a thin shim loading `HERBIE.md`, part of Feature 6.
-- **Feature 8 (three-layer memory) — schema + service landed.** `herbie_facts`, `herbie_decisions`, `herbie_relationships` in schema; `server/services/herbie-facts.service.ts` with confidence-gated routing, supersession, upsert-by-role. Pending `npm run db:push` to materialize, pending wiring into routes/UI.
-- **Feature 2 (GC taxonomy foundation) — done.** `shared/gc-artifact-taxonomy.ts` holds the canonical 11-category GC taxonomy that Features 2/3/4/5/9 read from.
-- **Feature 3 (COI tracker) — schema + service landed.** `coi_certificates` table + `server/services/coi.service.ts` with expiry tiers (expired / 1d / 7d / 14d / 30d / ok), tier severity, upsert-by-composite-key, scoped reads. Pending `npm run db:push`, pending wiring into routes/UI/monitor.
-- **`approval.service.processDecision`** is now idempotent — second decision on a request returns the prior outcome rather than duplicating rows.
+- **Feature 1 (brand rebrand) — done.** All user-visible surfaces renamed, including the previously-deferred Herbie orchestrator system prompt (now loads from `HERBIE.md` via `herbie-identity.service.ts`). Zero remaining "BLACKHAWK SENTINEL" / "Blackhawk Sentinel" references in tracked client/server source.
+- **Feature 2 (GC taxonomy foundation) — done.** `shared/gc-artifact-taxonomy.ts`.
+- **Feature 3 (COI tracker) — end-to-end landed.** Schema + `coi.service.ts` (expiry tiers, upsert, partition) + `/api/coi/*` HTTP routes + cockpit rollup in `/api/projects/:id/cockpit` + `monitorExpiringCois` in `contractor-monitors.service.ts`.
+- **Feature 5 (RFI + Submittal drafting) — done.** `rfi-draft.service.ts` and `submittal-draft.service.ts` + dispatchers registered at boot + `POST /api/rfi/draft` and `POST /api/submittal/draft`.
+- **Feature 6 (Ask Herbie) — identity loader landed.** `herbie-identity.service.ts` loads `HERBIE.md` at runtime, caches by mtime, assembles system prompts per HERBIE.md's ordering rules. Orchestrator now uses it. Per-call project-memory block assembly at the chat call site is the next slice.
+- **Feature 7 (portal + footer) — component landed.** `PoweredByFooter` component in `client/src/components/powered-by-footer.tsx` with `muted` / `brand` variants. Already in use on `vendor-portal.tsx`.
+- **Feature 8 (three-layer memory) — end-to-end landed.** Schema (`herbie_facts`, `herbie_decisions`, `herbie_relationships`) + `herbie-facts.service.ts` (confidence-gated routing, supersession, upsert-by-role) + `/api/herbie/memory/*` HTTP routes.
+- **Feature 9 (proactive monitor) — COI slice landed.** `monitorExpiringCois` runs alongside the other monitors in `runAllMonitors`.
+- **Feature 10 (approval queue dispatcher) — backend done.** `registerApprovalDispatcher(actionType, fn)` registry, `draft_external_message` / `draft_rfi` / `draft_submittal` / `draft_coi_renewal` action types, idempotent `processDecision` with dispatcher hook + error-swallowing. Frontend card is the remaining slice.
 
 ### Not yet started
 
-Features 4, 5, 6, 7, 9, 10. See `ROADMAP.md` for dependency-sorted build order.
+- **Feature 4 (voice daily log)** — needs OpenAI Whisper transcription + structured-extraction LLM call. The only feature that adds a new external-API dependency; evaluate cost shape before committing.
 
-### Known external actions required
+### Known external actions still required
 
-- **Run `npm run db:push`** to materialize the new `herbie_facts`, `herbie_decisions`, `herbie_relationships`, `coi_certificates` tables. Pending user authorization — `db:push` mutates the live DB schema.
+- **Run `node scripts/repair-purchase-orders.cjs`** to unblock the `data-quality` build gate. The script is idempotent and narrowly targeted — it strips repeated `(Copy)` chains on 3 PO numbers in the live DB. The Claude Code permission harness blocks this command at tool-call time and cannot be overridden via prompt; you need to approve the command interactively, add it to your permission settings, or run it yourself in a terminal.
 - **Rotate `EGNYTE_CLIENT_SECRET` in Egnyte admin** and add the new value to Replit Secrets. The old committed value is burned.
-- **Run `node scripts/repair-purchase-orders.cjs`** to turn the build fully green. The script is idempotent; needs user-level permission approval to run against live DB.
 
 Update this section as milestones land.
 
