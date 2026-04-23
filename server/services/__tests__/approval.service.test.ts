@@ -18,7 +18,11 @@ vi.mock("../audit.service", () => ({
   },
 }));
 
-import { approvalService } from "../approval.service";
+import {
+  approvalService,
+  registerApprovalDispatcher,
+  __clearApprovalDispatchers,
+} from "../approval.service";
 import { db } from "../../db";
 import { auditService } from "../audit.service";
 
@@ -206,12 +210,98 @@ describe("approvalService.checkApproval", () => {
   });
 });
 
-// TODO (Phase 1 Roadmap, Feature 10):
-// One prescribed behavior is still deferred — the others are now
-// covered by the processDecision suite above.
-describe("approvalService — deferred Phase 1 behaviors", () => {
-  it.skip("a draft_external_message approval triggers the configured outbound dispatcher", () => {
-    // Feature 10 scope. Needs a dispatcher registry + a
-    // draft_external_message action type + the send hook.
+describe("approvalService — dispatcher registry (Phase 1 Feature 10)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    __clearApprovalDispatchers();
+  });
+
+  // Shared mock chain for these tests — select() needs to answer both
+  // the idempotency check (no prior action) AND the post-decision
+  // actionType lookup. We route by whether the chained from() was
+  // called with approvalActions or approvalRequests by inspecting
+  // the table's string identity.
+  function wireMocksForAction(actionType: string) {
+    let selectCallCount = 0;
+    (db.select as any).mockImplementation(() => ({
+      from: (_tbl: any) => ({
+        where: () => ({
+          limit: async () => {
+            selectCallCount++;
+            // First select is the idempotency check on approvalActions.
+            if (selectCallCount === 1) return [];
+            // Second select is the post-audit actionType lookup.
+            return [{ actionType }];
+          },
+        }),
+      }),
+    }));
+    (db.insert as any).mockReturnValue({
+      values: () => ({ returning: async () => [{ id: "action-1" }] }),
+    });
+    (db.update as any).mockReturnValue({
+      set: () => ({ where: async () => ({ rowCount: 1 }) }),
+    });
+  }
+
+  it("fires the registered dispatcher on approval for that action type", async () => {
+    const dispatcher = vi.fn().mockResolvedValue(undefined);
+    registerApprovalDispatcher("draft_external_message", dispatcher);
+    wireMocksForAction("draft_external_message");
+
+    const result = await approvalService.processDecision(
+      { requestId: "req-ext-1", actor: "user-1", decision: "approved" },
+      "tenant-1",
+    );
+    expect(result).toBe(true);
+    expect(dispatcher).toHaveBeenCalledOnce();
+    expect(dispatcher).toHaveBeenCalledWith({
+      tenantId: "tenant-1",
+      requestId: "req-ext-1",
+      actor: "user-1",
+      notes: undefined,
+    });
+  });
+
+  it("does NOT fire the dispatcher on denial", async () => {
+    const dispatcher = vi.fn().mockResolvedValue(undefined);
+    registerApprovalDispatcher("draft_external_message", dispatcher);
+    wireMocksForAction("draft_external_message");
+
+    await approvalService.processDecision(
+      { requestId: "req-ext-2", actor: "user-1", decision: "denied", notes: "no" },
+      "tenant-1",
+    );
+    expect(dispatcher).not.toHaveBeenCalled();
+  });
+
+  it("ignores actions with no registered dispatcher without throwing", async () => {
+    // No dispatcher registered for "draft_rfi".
+    wireMocksForAction("draft_rfi");
+    const result = await approvalService.processDecision(
+      { requestId: "req-rfi-1", actor: "user-1", decision: "approved" },
+      "tenant-1",
+    );
+    expect(result).toBe(true);
+  });
+
+  it("swallows dispatcher errors so the decision still lands", async () => {
+    const boom = vi
+      .fn()
+      .mockRejectedValue(new Error("downstream offline"));
+    registerApprovalDispatcher("draft_rfi", boom);
+    wireMocksForAction("draft_rfi");
+
+    const consoleErr = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => {});
+    const result = await approvalService.processDecision(
+      { requestId: "req-boom", actor: "user-1", decision: "approved" },
+      "tenant-1",
+    );
+    expect(result).toBe(true); // decision still counts as approved
+    expect(boom).toHaveBeenCalledOnce();
+    expect(consoleErr).toHaveBeenCalled();
+    consoleErr.mockRestore();
   });
 });
