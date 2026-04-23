@@ -1394,10 +1394,18 @@ export async function registerRoutes(
   // transition. Idempotent — safe to call on every boot.
   const { registerRfiDispatcher } = await import("./services/rfi-draft.service");
   registerRfiDispatcher();
+  const { registerSubmittalDispatcher } = await import(
+    "./services/submittal-draft.service"
+  );
+  registerSubmittalDispatcher();
 
-  // Register RFI draft HTTP routes (Phase 1 Feature 5)
+  // Register RFI / Submittal draft HTTP routes (Phase 1 Feature 5)
   const { rfiDraftRouter } = await import("./routes/rfi-draft.routes");
   app.use("/api/rfi", rfiDraftRouter);
+  const { submittalDraftRouter } = await import(
+    "./routes/submittal-draft.routes"
+  );
+  app.use("/api/submittal", submittalDraftRouter);
 
   // Register Vendor Portal routes (external, token-based, no auth)
   const { vendorRouter } = await import("./routes/vendor-portal.routes");
