@@ -1,4 +1,4 @@
-import { useState, useEffect, Component, ErrorInfo, ReactNode } from "react";
+import { useState, useEffect, Component, ErrorInfo, ReactNode, lazy, Suspense } from "react";
 import { Switch, Route, useLocation, useRoute } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
@@ -240,6 +240,7 @@ import ExecutionRFIs from "@/pages/execution-rfis";
 import ExecutionPurchaseOrders from "@/pages/execution-purchase-orders";
 import DataHygiene from "@/pages/data-hygiene";
 import ProjectCockpit from "@/pages/project-cockpit";
+const CoiTracker = lazy(() => import("@/pages/coi-tracker"));
 import NotFound from "@/pages/not-found";
 
 function LegacyRedirect({ to }: { to: string }) {

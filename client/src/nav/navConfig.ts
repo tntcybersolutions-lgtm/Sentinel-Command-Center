@@ -133,6 +133,7 @@ export const navConfig: NavGroupConfig[] = [
     items: [
       { id: "dir.contacts", label: "Contacts", icon: Users, route: "/knowledge/contacts" },
       { id: "dir.vendors", label: "Vendors & Subs", icon: Factory, route: "/execution/vendors" },
+        { id: "dir.coi", label: "COI Tracker", icon: Shield, route: "/coi" },
       { id: "dir.workforce", label: "Workforce", icon: HardHat, route: "/execution/workforce" },
       { id: "dir.agencies", label: "Agencies", icon: Building2, route: "/capture/agencies" },
     ],
