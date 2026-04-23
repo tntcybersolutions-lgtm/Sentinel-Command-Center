@@ -24,6 +24,7 @@ import {
   partitionByTier as partitionCoisByTier,
 } from "./coi.service";
 import { upsertVoiceDailyLog } from "./voice-daily-log.service";
+import { draftMessage } from "./outbound-message-draft.service";
 
 export interface HerbieToolContext {
   tenantId: string;
@@ -344,10 +345,22 @@ export async function executeHerbieTool(
             transcriber: { transcribe: async () => ({ text: String(call.args.transcript ?? ""), stub: true }) },
           }),
         };
+      case "draft_message":
+        return {
+          success: true,
+          data: await draftMessage({
+            tenantId: ctx.tenantId,
+            projectId: call.args.projectId ?? ctx.projectId,
+            recipient: call.args.recipient,
+            channel: call.args.channel,
+            subject: call.args.subject,
+            body: call.args.body,
+            draftedBy: ctx.userId,
+          }),
+        };
       case "read_document":
       case "extract_fields":
       case "search_project":
-      case "draft_message":
         return {
           success: false,
           error: `Tool '${call.tool}' is registered but its handler isn't wired yet. See HERBIE.md + ROADMAP.md for the owning feature.`,

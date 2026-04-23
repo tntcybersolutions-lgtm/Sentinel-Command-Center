@@ -10,6 +10,7 @@ const upsertVoiceMock = vi.fn();
 const listForProjectMock = vi.fn();
 const partitionByTierMock = vi.fn();
 const coisExpiringWithinMock = vi.fn();
+const draftMessageMock = vi.fn();
 
 vi.mock("../herbie-facts.service", () => ({
   recordFact: (...a: any[]) => recordFactMock(...a),
@@ -28,6 +29,9 @@ vi.mock("../coi.service", () => ({
   listForProject: (...a: any[]) => listForProjectMock(...a),
   partitionByTier: (...a: any[]) => partitionByTierMock(...a),
   coisExpiringWithin: (...a: any[]) => coisExpiringWithinMock(...a),
+}));
+vi.mock("../outbound-message-draft.service", () => ({
+  draftMessage: (...a: any[]) => draftMessageMock(...a),
 }));
 
 // herbie-tools.ts also writes to herbie_review_queue via db.insert;
@@ -64,6 +68,7 @@ function reset() {
   listForProjectMock.mockReset();
   partitionByTierMock.mockReset();
   coisExpiringWithinMock.mockReset();
+  draftMessageMock.mockReset();
   dbInsertMock.mockReset();
 }
 
@@ -234,13 +239,39 @@ describe("herbie-tools — dispatch", () => {
   });
 
   it("returns NOT_IMPLEMENTED for tools whose backing service isn't wired", async () => {
-    for (const tool of ["read_document", "extract_fields", "search_project", "draft_message"]) {
+    for (const tool of ["read_document", "extract_fields", "search_project"]) {
       const r = await executeHerbieTool({ tool, args: {} }, ctx);
       expect(r.success).toBe(false);
       if (!r.success) {
         expect(r.code).toBe("NOT_IMPLEMENTED");
       }
     }
+  });
+
+  it("draft_message dispatches to outbound-message-draft.draftMessage", async () => {
+    draftMessageMock.mockResolvedValue({
+      draftId: "req-out-1",
+      approvalRequestId: "req-out-1",
+    });
+    const r = await executeHerbieTool(
+      {
+        tool: "draft_message",
+        args: {
+          recipient: "vendor@acme.test",
+          channel: "email",
+          subject: "Renewal of GL COI",
+          body: "Hi — your GL COI expires Friday. Can you send the renewal today?",
+        },
+      },
+      ctx,
+    );
+    expect(r.success).toBe(true);
+    expect(draftMessageMock).toHaveBeenCalledOnce();
+    const arg = draftMessageMock.mock.calls[0][0];
+    expect(arg.tenantId).toBe("t1");
+    expect(arg.projectId).toBe("p1");
+    expect(arg.draftedBy).toBe("u1");
+    expect(arg.recipient).toBe("vendor@acme.test");
   });
 
   it("returns UNKNOWN_TOOL for a tool not in the spec list", async () => {

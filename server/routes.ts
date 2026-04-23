@@ -1398,6 +1398,10 @@ export async function registerRoutes(
     "./services/submittal-draft.service"
   );
   registerSubmittalDispatcher();
+  const { registerOutboundMessageDispatcher } = await import(
+    "./services/outbound-message-draft.service"
+  );
+  registerOutboundMessageDispatcher();
 
   // Register RFI / Submittal draft HTTP routes (Phase 1 Feature 5)
   const { rfiDraftRouter } = await import("./routes/rfi-draft.routes");
