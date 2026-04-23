@@ -1389,6 +1389,10 @@ export async function registerRoutes(
   );
   app.use("/api/herbie/tools-exec", herbieToolsExecuteRouter);
 
+  // Register Herbie proactive digest routes (Phase 1 Feature 9 polish)
+  const { herbieDigestRouter } = await import("./routes/herbie-digest.routes");
+  app.use("/api/herbie/digest", herbieDigestRouter);
+
   // Register Herbie three-layer memory routes (Phase 1 Feature 8)
   const { herbieMemoryRouter } = await import("./routes/herbie-memory.routes");
   app.use("/api/herbie/memory", herbieMemoryRouter);
