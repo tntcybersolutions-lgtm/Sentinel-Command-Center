@@ -31,6 +31,7 @@ import {
 import { upsertVoiceDailyLog } from "./voice-daily-log.service";
 import { draftMessage } from "./outbound-message-draft.service";
 import { createRAGService } from "./rag.service";
+import { extractCoiFields } from "./extractors/coi-extractor";
 
 export interface HerbieToolContext {
   tenantId: string;
@@ -393,17 +394,33 @@ export async function executeHerbieTool(
         }
         return { success: true, data: doc };
       }
-      case "extract_fields":
-        // Genuine extraction pipeline lives in herbie-extraction.service
-        // and is substantial enough to warrant its own tool-wiring
-        // commit (Feature 2 main). Returning a clear deferred
-        // message so Herbie doesn't hallucinate fields.
+      case "extract_fields": {
+        const category = String(call.args.category ?? "").toLowerCase();
+        const text = typeof call.args.text === "string" ? call.args.text : "";
+        const fileName = typeof call.args.fileName === "string" ? call.args.fileName : "";
+        // If we have a documentId but no inline text, look it up and
+        // use the stored name + any text field. Full OCR text fetch
+        // is Feature 2 main scope.
+        let effectiveText = text;
+        let effectiveFileName = fileName;
+        if (!effectiveText && call.args.documentId) {
+          const doc = await lookupDocument(ctx.tenantId, String(call.args.documentId));
+          if (doc) effectiveFileName = doc.name ?? effectiveFileName;
+        }
+        if (category === "coi") {
+          const extraction = extractCoiFields({
+            text: effectiveText || undefined,
+            fileName: effectiveFileName || undefined,
+          });
+          return { success: true, data: { category: "coi", ...extraction } };
+        }
         return {
           success: false,
           error:
-            "extract_fields is not wired yet — this tool depends on the Feature 2 main extraction pipeline. For now, use read_document to surface the document, then record_fact manually from what you see.",
+            `extract_fields has a COI extractor wired; other categories (category='${category}') depend on Feature 2 main. For now, use read_document + record_fact.`,
           code: "NOT_IMPLEMENTED",
         };
+      }
       default:
         return {
           success: false,
