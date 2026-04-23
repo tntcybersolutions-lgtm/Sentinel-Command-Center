@@ -1477,6 +1477,14 @@ export const dailyLogs = pgTable("daily_logs", {
   submittedAt: timestamp("submitted_at"),
   approvedByUserId: varchar("approved_by_user_id", { length: 36 }).references(() => users.id),
   approvedAt: timestamp("approved_at"),
+  // Phase 1 Feature 4 — voice daily log capture.
+  // audioDocumentId links to the uploaded audio blob (in object storage
+  // or server/data). transcript holds the raw Whisper output. source
+  // tracks how this log was created so UI can show a "voice" badge
+  // and we can analyze voice adoption over time.
+  audioDocumentId: varchar("audio_document_id", { length: 36 }),
+  transcript: text("transcript"),
+  source: text("source").notNull().default("manual"), // "voice" | "manual" | "photo"
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => ({

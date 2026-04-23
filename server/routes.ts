@@ -1407,6 +1407,12 @@ export async function registerRoutes(
   );
   app.use("/api/submittal", submittalDraftRouter);
 
+  // Register Voice Daily Log routes (Phase 1 Feature 4)
+  const { voiceDailyLogRouter } = await import(
+    "./routes/voice-daily-log.routes"
+  );
+  app.use("/api", voiceDailyLogRouter);
+
   // Register Vendor Portal routes (external, token-based, no auth)
   const { vendorRouter } = await import("./routes/vendor-portal.routes");
   app.use("/api/v", vendorRouter);
