@@ -37,6 +37,7 @@ import {
   Settings,
   ArrowDownToLine,
   Mic,
+  TrendingUp,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -157,7 +158,8 @@ export const navConfig: NavGroupConfig[] = [
     icon: Bot,
     order: 70,
     items: [
-      { id: "herbie.chat", label: "Chat Assistant", icon: Bot, route: "/automation/herbie" },
+      { id: "herbie.digest", label: "Digest", icon: TrendingUp, route: "/herbie-digest" },
+        { id: "herbie.chat", label: "Chat Assistant", icon: Bot, route: "/automation/herbie" },
         { id: "herbie.autonomous", label: "Autonomous", icon: Zap, route: "/herbie-autonomous" },
         { id: "herbie.memory", label: "Memory Inspector", icon: Brain, route: "/herbie-memory" },
       { id: "herbie.reviewQueue", label: "AI Review Queue", icon: Sparkles, route: "/automation/workflows" },
