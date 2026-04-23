@@ -69,6 +69,60 @@ function CountBadge({ label, count, accent }: { label: string; count: number; ac
   );
 }
 
+// Feature 3 / 9 — COI rollup card. Green when everything's OK, amber
+// when something's in the 30-day warning window, red when anything
+// is inside 7 days or already expired. The individual-tier counts
+// render as small pills below the total so a PM can see the shape
+// at a glance.
+interface CoiRollup {
+  total?: number;
+  expired?: number;
+  critical_1d?: number;
+  critical_7d?: number;
+  warning_14d?: number;
+  warning_30d?: number;
+  ok?: number;
+}
+function CoiRollupBadge({ rollup }: { rollup?: CoiRollup }) {
+  const r = rollup ?? {};
+  const total = r.total ?? 0;
+  const expired = r.expired ?? 0;
+  const crit = (r.critical_1d ?? 0) + (r.critical_7d ?? 0);
+  const warn = (r.warning_14d ?? 0) + (r.warning_30d ?? 0);
+  const ok = r.ok ?? 0;
+  const severity =
+    expired > 0 || r.critical_1d ? "red" :
+    crit > 0 ? "red" :
+    warn > 0 ? "amber" :
+    "green";
+  const accentByBand: Record<string, string> = {
+    red: "text-red-400",
+    amber: "text-amber-400",
+    green: "text-emerald-400",
+  };
+  const accent = accentByBand[severity];
+  return (
+    <div
+      data-testid="count-coi"
+      className="border border-white/10 bg-black/30 px-4 py-2 flex flex-col"
+      title={`Expired ${expired} · Critical ${crit} · Warning ${warn} · OK ${ok}`}
+    >
+      <span className="text-[10px] uppercase tracking-wider text-zinc-500 font-mono">
+        COIs
+      </span>
+      <div className="flex items-baseline gap-2">
+        <span className={`text-xl font-mono font-bold ${accent}`}>{total}</span>
+        <span className="text-[10px] font-mono text-zinc-500">
+          {expired > 0 && <span className="text-red-400">{expired}exp </span>}
+          {crit > 0 && <span className="text-red-400">{crit}crit </span>}
+          {warn > 0 && <span className="text-amber-400">{warn}warn</span>}
+          {total === 0 && <span>no policies</span>}
+        </span>
+      </div>
+    </div>
+  );
+}
+
 function RFIsTab({ projectId }: { projectId: string }) {
   const { data, isLoading } = useQuery<any[]>({ queryKey: ["/api/projects", projectId, "rfis"], queryFn: () => fetch(`/api/projects/${projectId}/rfis`).then(r => r.json()) });
   if (isLoading) return <LoadingState />;
@@ -440,6 +494,7 @@ export default function ProjectCockpit() {
         <CountBadge label="Tasks" count={counts.tasks || 0} />
         <CountBadge label="Open Tasks" count={counts.openTasks || 0} accent={counts.openTasks > 0 ? "text-amber-400" : undefined} />
         <CountBadge label="Agent Reports" count={counts.agentReports || 0} accent="text-cyan-400" />
+        <CoiRollupBadge rollup={cockpit?.coiRollup} />
       </div>
 
       <div className="border-b border-white/10 px-6 flex gap-0">
