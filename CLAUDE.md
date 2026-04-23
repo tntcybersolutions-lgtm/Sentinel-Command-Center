@@ -169,26 +169,24 @@ Likewise: `.env`, `.env.*`, `*.pem`, `*.key`, and all `*.tar.gz` archives are gi
 - `npm audit`: 23 → 10 vulnerabilities, no critical remaining.
 - DB schema live: `npm run db:push` applied the new tables.
 
-### Feature work landed
+### Feature work landed — all 10 Phase 1 features have working foundations
 
-- **Feature 1 (brand rebrand) — done.** All user-visible surfaces renamed, including the previously-deferred Herbie orchestrator system prompt (now loads from `HERBIE.md` via `herbie-identity.service.ts`). Zero remaining "BLACKHAWK SENTINEL" / "Blackhawk Sentinel" references in tracked client/server source.
+- **Feature 1 (brand rebrand) — done.** All user-visible surfaces renamed, including the Herbie orchestrator system prompt (now loads from `HERBIE.md` via `herbie-identity.service.ts`). Zero remaining "BLACKHAWK SENTINEL" / "Blackhawk Sentinel" references in tracked client/server source.
 - **Feature 2 (GC taxonomy foundation) — done.** `shared/gc-artifact-taxonomy.ts`.
 - **Feature 3 (COI tracker) — end-to-end landed.** Schema + `coi.service.ts` (expiry tiers, upsert, partition) + `/api/coi/*` HTTP routes + cockpit rollup in `/api/projects/:id/cockpit` + `monitorExpiringCois` in `contractor-monitors.service.ts`.
+- **Feature 4 (voice daily log) — landed.** Schema columns (`daily_logs.audio_document_id`, `transcript`, `source`) + `voice-daily-log.service.ts` with pluggable `Transcriber`/`Extractor` interfaces (OpenAI Whisper + gpt-4o-mini defaults, deterministic stubs when keys are absent) + `POST /api/projects/:projectId/daily-logs/voice` accepting multipart or JSON `{ audioUrl }`.
 - **Feature 5 (RFI + Submittal drafting) — done.** `rfi-draft.service.ts` and `submittal-draft.service.ts` + dispatchers registered at boot + `POST /api/rfi/draft` and `POST /api/submittal/draft`.
-- **Feature 6 (Ask Herbie) — identity loader landed.** `herbie-identity.service.ts` loads `HERBIE.md` at runtime, caches by mtime, assembles system prompts per HERBIE.md's ordering rules. Orchestrator now uses it. Per-call project-memory block assembly at the chat call site is the next slice.
-- **Feature 7 (portal + footer) — component landed.** `PoweredByFooter` component in `client/src/components/powered-by-footer.tsx` with `muted` / `brand` variants. Already in use on `vendor-portal.tsx`.
+- **Feature 6 (Ask Herbie) — landed.** `herbie-identity.service.ts` loads `HERBIE.md` at runtime, caches by mtime. Orchestrator's `chat()` now accepts optional `projectId`/`tenantId` and assembles the three-layer project-memory block (facts / decisions / relationships) into the system prompt via `formatProjectMemoryBlock()`.
+- **Feature 7 (portal + footer) — landed.** `PoweredByFooter` component with `muted` / `brand` variants, in use on `vendor-portal.tsx`.
 - **Feature 8 (three-layer memory) — end-to-end landed.** Schema (`herbie_facts`, `herbie_decisions`, `herbie_relationships`) + `herbie-facts.service.ts` (confidence-gated routing, supersession, upsert-by-role) + `/api/herbie/memory/*` HTTP routes.
 - **Feature 9 (proactive monitor) — COI slice landed.** `monitorExpiringCois` runs alongside the other monitors in `runAllMonitors`.
-- **Feature 10 (approval queue dispatcher) — backend done.** `registerApprovalDispatcher(actionType, fn)` registry, `draft_external_message` / `draft_rfi` / `draft_submittal` / `draft_coi_renewal` action types, idempotent `processDecision` with dispatcher hook + error-swallowing. Frontend card is the remaining slice.
-
-### Not yet started
-
-- **Feature 4 (voice daily log)** — needs OpenAI Whisper transcription + structured-extraction LLM call. The only feature that adds a new external-API dependency; evaluate cost shape before committing.
+- **Feature 10 (approval queue) — end-to-end landed.** Backend: `registerApprovalDispatcher(actionType, fn)` registry, `draft_external_message` / `draft_rfi` / `draft_submittal` / `draft_coi_renewal` action types, idempotent `processDecision` with dispatcher hook + error swallowing. Frontend: `approvals.tsx` renders Herbie-drafted items with action-specific labels, verbs, glyphs, and PM-facing summary copy.
 
 ### Known external actions still required
 
-- **Run `node scripts/repair-purchase-orders.cjs`** to unblock the `data-quality` build gate. The script is idempotent and narrowly targeted — it strips repeated `(Copy)` chains on 3 PO numbers in the live DB. The Claude Code permission harness blocks this command at tool-call time and cannot be overridden via prompt; you need to approve the command interactively, add it to your permission settings, or run it yourself in a terminal.
+- **Run `node scripts/repair-purchase-orders.cjs`** to unblock the `data-quality` build gate. The script is idempotent and narrowly targeted — it strips repeated `(Copy)` chains on 3 PO numbers in the live DB. The Claude Code permission harness blocks this command at tool-call time and cannot be overridden via prompt; approve it interactively, add it to your permission settings, or run it yourself in a terminal.
 - **Rotate `EGNYTE_CLIENT_SECRET` in Egnyte admin** and add the new value to Replit Secrets. The old committed value is burned.
+- **Optional:** set `OPENAI_API_KEY` (or `AI_INTEGRATIONS_OPENAI_API_KEY`) to enable real Whisper transcription in Feature 4. Without it, voice daily logs fall back to a deterministic stub that returns a placeholder transcript — the endpoint stays functional for dev / demo.
 
 Update this section as milestones land.
 
