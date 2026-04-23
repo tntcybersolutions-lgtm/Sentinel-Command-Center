@@ -17,7 +17,12 @@ import { recordFact, recordDecision } from "./herbie-facts.service";
 import { draftRfi } from "./rfi-draft.service";
 import { draftSubmittal } from "./submittal-draft.service";
 import { db } from "../db";
-import { herbieReviewQueue } from "@shared/schema";
+import {
+  herbieReviewQueue,
+  docFiles,
+  projectDocuments,
+  bidJacketArtifacts,
+} from "@shared/schema";
 import {
   coisExpiringWithin,
   listForProject as listCoisForProject,
@@ -377,11 +382,26 @@ export async function executeHerbieTool(
           : results;
         return { success: true, data: { results: filtered } };
       }
-      case "read_document":
+      case "read_document": {
+        const docId = String(call.args.documentId ?? "");
+        if (!docId) {
+          return { success: false, error: "documentId is required", code: "BAD_ARGS" };
+        }
+        const doc = await lookupDocument(ctx.tenantId, docId);
+        if (!doc) {
+          return { success: false, error: "Document not found", code: "NOT_FOUND" };
+        }
+        return { success: true, data: doc };
+      }
       case "extract_fields":
+        // Genuine extraction pipeline lives in herbie-extraction.service
+        // and is substantial enough to warrant its own tool-wiring
+        // commit (Feature 2 main). Returning a clear deferred
+        // message so Herbie doesn't hallucinate fields.
         return {
           success: false,
-          error: `Tool '${call.tool}' is registered but its handler isn't wired yet. See HERBIE.md + ROADMAP.md for the owning feature.`,
+          error:
+            "extract_fields is not wired yet — this tool depends on the Feature 2 main extraction pipeline. For now, use read_document to surface the document, then record_fact manually from what you see.",
           code: "NOT_IMPLEMENTED",
         };
       default:
@@ -398,6 +418,99 @@ export async function executeHerbieTool(
       code: "HANDLER_ERROR",
     };
   }
+}
+
+/**
+ * Look up a document across the three tables that store uploaded
+ * files in this repo. Returns a normalized shape Herbie can reason
+ * about without caring which table it came from.
+ */
+async function lookupDocument(
+  tenantId: string,
+  documentId: string,
+): Promise<
+  | {
+      source: "project_document" | "doc_file" | "bid_jacket_artifact";
+      id: string;
+      name: string | null;
+      category: string | null;
+      mimeType: string | null;
+      storageKey: string | null;
+      projectId: string | null;
+      createdAt: Date | null;
+    }
+  | undefined
+> {
+  const { eq, and } = await import("drizzle-orm");
+  // project_documents — the GC-facing Phase 1 target.
+  const pdRows = await db
+    .select()
+    .from(projectDocuments)
+    .where(
+      and(
+        eq(projectDocuments.tenantId, tenantId),
+        eq(projectDocuments.id, documentId),
+      ),
+    )
+    .limit(1);
+  if (pdRows[0]) {
+    const r: any = pdRows[0];
+    return {
+      source: "project_document",
+      id: r.id,
+      name: r.fileName ?? r.name ?? null,
+      category: r.category ?? r.folder ?? null,
+      mimeType: r.mimeType ?? null,
+      storageKey: r.storageKey ?? r.storagePath ?? null,
+      projectId: r.projectId ?? null,
+      createdAt: r.createdAt ?? null,
+    };
+  }
+  // doc_files — the older cross-module document table.
+  const dfRows = await db
+    .select()
+    .from(docFiles)
+    .where(and(eq(docFiles.tenantId, tenantId), eq(docFiles.id, documentId)))
+    .limit(1);
+  if (dfRows[0]) {
+    const r: any = dfRows[0];
+    return {
+      source: "doc_file",
+      id: r.id,
+      name: r.name ?? r.fileName ?? null,
+      category: r.category ?? null,
+      mimeType: r.mimeType ?? null,
+      storageKey: r.storageKey ?? null,
+      projectId: r.projectId ?? null,
+      createdAt: r.createdAt ?? null,
+    };
+  }
+  // bid_jacket_artifacts — federal-bidding side, here for
+  // completeness while both surfaces coexist in Phase 1.
+  const bjaRows = await db
+    .select()
+    .from(bidJacketArtifacts)
+    .where(
+      and(
+        eq(bidJacketArtifacts.tenantId, tenantId),
+        eq(bidJacketArtifacts.id, documentId),
+      ),
+    )
+    .limit(1);
+  if (bjaRows[0]) {
+    const r: any = bjaRows[0];
+    return {
+      source: "bid_jacket_artifact",
+      id: r.id,
+      name: r.title ?? r.templateCode ?? null,
+      category: r.folder ?? r.templateCode ?? null,
+      mimeType: null,
+      storageKey: r.sourceUrl ?? null,
+      projectId: null,
+      createdAt: r.createdAt ?? null,
+    };
+  }
+  return undefined;
 }
 
 /**

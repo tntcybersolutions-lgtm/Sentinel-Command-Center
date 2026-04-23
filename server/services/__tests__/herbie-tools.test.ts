@@ -43,6 +43,9 @@ vi.mock("../rag.service", () => ({
 // herbie-tools.ts also writes to herbie_review_queue via db.insert;
 // mock the db chain with a minimal returning stub.
 const dbInsertMock = vi.fn();
+// Document lookup stubs for read_document. Each test can set these
+// before dispatching; defaults return empty (→ NOT_FOUND).
+let dbSelectResults: any[] = [];
 vi.mock("../../db", () => ({
   pool: {},
   db: {
@@ -53,6 +56,13 @@ vi.mock("../../db", () => ({
           returning: async () => [{ id: "rq-1" }],
         };
       },
+    }),
+    select: (_cols?: any) => ({
+      from: (_tbl: any) => ({
+        where: (_pred: any) => ({
+          limit: async (_n: number) => dbSelectResults.slice(0, _n),
+        }),
+      }),
     }),
   },
 }));
@@ -77,6 +87,7 @@ function reset() {
   draftMessageMock.mockReset();
   ragSearchMock.mockReset();
   dbInsertMock.mockReset();
+  dbSelectResults = [];
 }
 
 describe("herbie-tools — specs", () => {
@@ -246,13 +257,61 @@ describe("herbie-tools — dispatch", () => {
   });
 
   it("returns NOT_IMPLEMENTED for tools whose backing service isn't wired", async () => {
-    for (const tool of ["read_document", "extract_fields"]) {
-      const r = await executeHerbieTool({ tool, args: {} }, ctx);
-      expect(r.success).toBe(false);
-      if (!r.success) {
-        expect(r.code).toBe("NOT_IMPLEMENTED");
-      }
+    // Only extract_fields remains deferred (Feature 2 main).
+    const r = await executeHerbieTool(
+      { tool: "extract_fields", args: { documentId: "d1" } },
+      ctx,
+    );
+    expect(r.success).toBe(false);
+    if (!r.success) {
+      expect(r.code).toBe("NOT_IMPLEMENTED");
     }
+  });
+
+  it("read_document returns BAD_ARGS when documentId is missing", async () => {
+    const r = await executeHerbieTool(
+      { tool: "read_document", args: {} },
+      ctx,
+    );
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.code).toBe("BAD_ARGS");
+  });
+
+  it("read_document returns NOT_FOUND when nothing matches in any doc table", async () => {
+    dbSelectResults = []; // all three lookups return empty
+    const r = await executeHerbieTool(
+      { tool: "read_document", args: { documentId: "missing" } },
+      ctx,
+    );
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.code).toBe("NOT_FOUND");
+  });
+
+  it("read_document returns a normalized row when found in project_documents", async () => {
+    // The mock returns dbSelectResults for every select.from().where().limit()
+    // call. The service calls project_documents first; when it gets a hit
+    // it short-circuits without checking the other two tables.
+    dbSelectResults = [
+      {
+        id: "doc-1",
+        fileName: "GL-coi-acme-2026.pdf",
+        category: "coi",
+        mimeType: "application/pdf",
+        storageKey: "s3://bucket/doc-1.pdf",
+        projectId: "p1",
+        createdAt: new Date("2026-04-01T00:00:00Z"),
+      },
+    ];
+    const r = await executeHerbieTool(
+      { tool: "read_document", args: { documentId: "doc-1" } },
+      ctx,
+    );
+    expect(r.success).toBe(true);
+    const data = (r as any).data;
+    expect(data.source).toBe("project_document");
+    expect(data.name).toBe("GL-coi-acme-2026.pdf");
+    expect(data.category).toBe("coi");
+    expect(data.storageKey).toBe("s3://bucket/doc-1.pdf");
   });
 
   it("search_project dispatches to rag.service.search and returns results", async () => {
