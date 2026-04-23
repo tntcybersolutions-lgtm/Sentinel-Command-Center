@@ -1,6 +1,11 @@
 import { db } from "../db";
 import { projectTasks, approvalRequests } from "@shared/schema";
 import { sql, eq, and } from "drizzle-orm";
+import {
+  coisExpiringWithin,
+  expiryTier,
+  tierSeverity,
+} from "./coi.service";
 
 export interface MonitorAlert {
   type: string;
@@ -178,6 +183,47 @@ export async function monitorExpiringInsurance(tenantId: string = DEFAULT_TENANT
   return { alerts };
 }
 
+// Roadmap Feature 9 — proactive COI monitor. Reads from
+// coi_certificates via coi.service (Feature 3) and emits alerts at
+// the 30/14/7/1-day tiers prescribed by HERBIE.md. Complements
+// monitorExpiringInsurance above (that one watches
+// company_certifications: licenses, DBE/SBA, etc.).
+export async function monitorExpiringCois(
+  tenantId: string = DEFAULT_TENANT_ID,
+): Promise<MonitorResult> {
+  const now = new Date();
+  const cois = await coisExpiringWithin(tenantId, 30, now);
+  const MS_PER_DAY = 86_400_000;
+  const alerts: MonitorAlert[] = cois.map((coi) => {
+    const tier = expiryTier(coi, now);
+    const daysUntil = Math.ceil(
+      (new Date(coi.expiryDate).getTime() - now.getTime()) / MS_PER_DAY,
+    );
+    const policyLabel = coi.policyType.toUpperCase();
+    const carrier = coi.carrier ? ` · ${coi.carrier}` : "";
+    const policyRef = coi.policyNumber ? ` (policy ${coi.policyNumber})` : "";
+    return {
+      type: "coi_expiring",
+      severity: tierSeverity(tier),
+      entity: {
+        type: "coi_certificate",
+        id: coi.id,
+        label: `${policyLabel}${carrier}`,
+        projectId: coi.projectId ?? undefined,
+      },
+      message:
+        tier === "expired"
+          ? `COI ${policyLabel}${policyRef} has EXPIRED.`
+          : `COI ${policyLabel}${policyRef} expires in ${Math.max(0, daysUntil)} days.`,
+      action:
+        tier === "expired"
+          ? "Stop work if required by contract; renew immediately."
+          : "Draft renewal and send to carrier/vendor for signature.",
+    };
+  });
+  return { alerts };
+}
+
 export async function monitorMissingVendorDocs(tenantId: string = DEFAULT_TENANT_ID): Promise<MonitorResult> {
   const result = await db.execute(sql`
     SELECT v.id, v.company_name, v.vendor_number, v.status,
@@ -291,6 +337,7 @@ export async function runAllMonitors(tenantId: string = DEFAULT_TENANT_ID): Prom
     payAppsDue,
     arAging,
     expiringInsurance,
+    expiringCois,
     missingDocs,
   ] = await Promise.all([
     monitorStalledRfis(tenantId),
@@ -299,6 +346,7 @@ export async function runAllMonitors(tenantId: string = DEFAULT_TENANT_ID): Prom
     monitorPayAppsDueSoon(tenantId),
     monitorArAging(tenantId),
     monitorExpiringInsurance(tenantId),
+    monitorExpiringCois(tenantId),
     monitorMissingVendorDocs(tenantId),
   ]);
 
@@ -309,6 +357,7 @@ export async function runAllMonitors(tenantId: string = DEFAULT_TENANT_ID): Prom
     payAppsDue,
     arAging,
     expiringInsurance,
+    expiringCois,
     missingDocs,
   };
 
