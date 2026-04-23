@@ -158,7 +158,8 @@ export const navConfig: NavGroupConfig[] = [
     icon: Bot,
     order: 70,
     items: [
-      { id: "herbie.digest", label: "Digest", icon: TrendingUp, route: "/herbie-digest" },
+      { id: "vendor.confidence", label: "Vendor Confidence", icon: Building2, route: "/vendor-confidence" },
+    { id: "herbie.digest", label: "Digest", icon: TrendingUp, route: "/herbie-digest" },
         { id: "herbie.chat", label: "Chat Assistant", icon: Bot, route: "/automation/herbie" },
         { id: "herbie.autonomous", label: "Autonomous", icon: Zap, route: "/herbie-autonomous" },
         { id: "herbie.memory", label: "Memory Inspector", icon: Brain, route: "/herbie-memory" },
