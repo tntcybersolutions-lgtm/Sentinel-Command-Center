@@ -1,4 +1,5 @@
 import { useState } from "react";
+import React from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRoute } from "wouter";
 import { queryClient, apiRequest } from "@/lib/queryClient";
@@ -246,6 +247,7 @@ function RFIsTab({ projectId }: { projectId: string }) {
             <th className="py-2 px-3">Status</th>
             <th className="py-2 px-3">Priority</th>
             <th className="py-2 px-3">Age</th>
+              <th className="py-2 px-3">Herbie</th>
             <th className="py-2 px-3">Created</th>
             <th className="py-2 px-3">AI</th>
           </tr>
@@ -282,6 +284,10 @@ function RFIsTab({ projectId }: { projectId: string }) {
 function SubmittalsTab({ projectId }: { projectId: string }) {
   const { data, isLoading } = useQuery<any[]>({ queryKey: ["/api/projects", projectId, "submittals"], queryFn: () => fetch(`/api/projects/${projectId}/submittals`).then(r => r.json()) });
   if (isLoading) return <LoadingState />;
+
+  const qc = useQueryClient();
+  const [draftingS, setDraftingS] = React.useState<string|null>(null);
+  const draftSub = async (r: any) => { setDraftingS(r.id); try { await apiRequest("POST","/api/submittal/draft",{projectId,submittalNumber:r.submittalNumber||r.submittal_number,name:r.name,description:r.description||"",draftedBy:"Herbie"}); await qc.invalidateQueries({queryKey:["/api/projects",projectId,"submittals"]}); } finally { setDraftingS(null); } };
   const rows = data || [];
   if (rows.length === 0) return <EmptyState label="No submittals found for this project" />;
   return (
@@ -304,6 +310,7 @@ function SubmittalsTab({ projectId }: { projectId: string }) {
               <td className="py-2 px-3"><StatusPill status={r.status} /></td>
               <td className="py-2 px-3 font-mono text-zinc-400">v{r.revision ?? 0}</td>
               <td className="py-2 px-3 text-zinc-400 font-mono text-xs">{daysSince(r.createdAt || r.created_at)}d</td>
+            <td className="py-2 px-3"><button onClick={() => draftSub(r)} disabled={draftingS === r.id} data-testid={`btn-draft-submittal-${r.id}`} className="flex items-center gap-1 px-2 py-1 rounded text-xs bg-amber-500/10 border border-amber-500/30 text-amber-400 hover:bg-amber-500/20 disabled:opacity-50 transition-colors">{draftingS === r.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Zap className="w-3 h-3" />}Draft</button></td>
             </tr>
           ))}
         </tbody>
