@@ -1,11 +1,11 @@
 import { useState } from "react";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRoute } from "wouter";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import {
   FileQuestion, FileCheck, ArrowLeftRight, ClipboardList, ListChecks, Bot,
   Loader2, Play, ChevronDown, ChevronRight, AlertTriangle, Clock, CheckCircle2,
-  XCircle, ArrowUp, ArrowRight, Minus, Brain, Lightbulb, GitBranch,
+  XCircle, ArrowUp, ArrowRight, Minus, Brain, Lightbulb, GitBranch, Zap,
 } from "lucide-react";
 
 type TabId = "rfis" | "submittals" | "change-orders" | "daily-logs" | "tasks" | "agent-reports" | "herbie-memory";
@@ -206,12 +206,38 @@ function CoiRollupBadge({ rollup }: { rollup?: CoiRollup }) {
 }
 
 function RFIsTab({ projectId }: { projectId: string }) {
+  const qc = useQueryClient();
   const { data, isLoading } = useQuery<any[]>({ queryKey: ["/api/projects", projectId, "rfis"], queryFn: () => fetch(`/api/projects/${projectId}/rfis`).then(r => r.json()) });
+  const [draftingId, setDraftingId] = useState<string | null>(null);
+  const [draftResult, setDraftResult] = useState<{ rfiId: string; approvalId: string } | null>(null);
+
+  const draftRfi = async (rfiId: string) => {
+    setDraftingId(rfiId);
+    try {
+      const res = await apiRequest("POST", "/api/rfi/draft", { rfiId, projectId });
+      const data = await res.json();
+      setDraftResult({ rfiId, approvalId: data.approvalId ?? data.draftId });
+      qc.invalidateQueries({ queryKey: ["/api/projects", projectId, "rfis"] });
+    } catch (err) {
+      console.error("RFI draft failed:", err);
+    } finally {
+      setDraftingId(null);
+    }
+  };
+
   if (isLoading) return <LoadingState />;
   const rows = data || [];
   if (rows.length === 0) return <EmptyState label="No RFIs found for this project" />;
   return (
-    <div className="overflow-x-auto">
+    <div className="space-y-3">
+      {draftResult && (
+        <div className="rounded-md bg-green-950/30 border border-green-900 p-2.5 text-xs text-green-400 flex items-center gap-2">
+          <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
+          Herbie drafted an RFI response — check the Approvals queue to review &amp; send.
+          <button className="ml-auto underline hover:no-underline" onClick={() => setDraftResult(null)}>Dismiss</button>
+        </div>
+      )}
+      <div className="overflow-x-auto">
       <table className="w-full text-sm" data-testid="table-rfis">
         <thead>
           <tr className="border-b border-white/10 text-left text-zinc-500 text-xs uppercase tracking-wider font-mono">
@@ -221,6 +247,7 @@ function RFIsTab({ projectId }: { projectId: string }) {
             <th className="py-2 px-3">Priority</th>
             <th className="py-2 px-3">Age</th>
             <th className="py-2 px-3">Created</th>
+            <th className="py-2 px-3">AI</th>
           </tr>
         </thead>
         <tbody>
@@ -232,10 +259,22 @@ function RFIsTab({ projectId }: { projectId: string }) {
               <td className="py-2 px-3"><PriorityIcon priority={r.priority} /></td>
               <td className="py-2 px-3 text-zinc-400 font-mono text-xs">{daysSince(r.createdAt || r.created_at)}d</td>
               <td className="py-2 px-3 text-zinc-500 text-xs">{formatDate(r.createdAt || r.created_at)}</td>
+              <td className="py-2 px-3">
+                <button
+                  onClick={() => draftRfi(String(r.id))}
+                  disabled={draftingId === String(r.id)}
+                  className="flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  title="Have Herbie draft a response"
+                >
+                  {draftingId === String(r.id) ? <Loader2 className="h-3 w-3 animate-spin" /> : <Zap className="h-3 w-3" />}
+                  Draft
+                </button>
+              </td>
             </tr>
           ))}
         </tbody>
       </table>
+      </div>
     </div>
   );
 }
