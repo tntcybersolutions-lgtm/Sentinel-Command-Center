@@ -1389,6 +1389,16 @@ export async function registerRoutes(
   const { coiRouter } = await import("./routes/coi.routes");
   app.use("/api/coi", coiRouter);
 
+  // Register approval dispatchers (Phase 1 Feature 5 / 10).
+  // Each dispatcher wires a draft_* action type to its post-approval
+  // transition. Idempotent — safe to call on every boot.
+  const { registerRfiDispatcher } = await import("./services/rfi-draft.service");
+  registerRfiDispatcher();
+
+  // Register RFI draft HTTP routes (Phase 1 Feature 5)
+  const { rfiDraftRouter } = await import("./routes/rfi-draft.routes");
+  app.use("/api/rfi", rfiDraftRouter);
+
   // Register Vendor Portal routes (external, token-based, no auth)
   const { vendorRouter } = await import("./routes/vendor-portal.routes");
   app.use("/api/v", vendorRouter);
