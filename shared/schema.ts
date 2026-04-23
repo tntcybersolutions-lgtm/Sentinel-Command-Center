@@ -6416,6 +6416,51 @@ export const insertHerbieRelationshipSchema = createInsertSchema(herbieRelations
 export type InsertHerbieRelationship = z.infer<typeof insertHerbieRelationshipSchema>;
 export type HerbieRelationship = typeof herbieRelationships.$inferSelect;
 
+// ============================================================================
+// COI TRACKER (Phase 1, Roadmap Feature 3)
+// ----------------------------------------------------------------------------
+// Certificates of Insurance for vendors/subs and the GC itself. Expiry is
+// the primary signal the proactive monitor (Feature 9) uses to prompt
+// Herbie to draft a renewal email (Feature 10 approval queue).
+// ============================================================================
+
+export const coiCertificates = pgTable("coi_certificates", {
+  id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id", { length: 36 }).notNull(),
+  // project_id nullable — company-level COIs (the GC's own master policy)
+  // are tenant-scoped but not project-scoped.
+  projectId: varchar("project_id", { length: 36 }),
+  // vendor_id nullable — GC-owned COIs (e.g. the GC's own GL) aren't
+  // attributable to a vendor row.
+  vendorId: varchar("vendor_id", { length: 36 }),
+  policyType: text("policy_type").notNull(), // "gl" | "wc" | "auto" | "umbrella" | "professional" | "pollution" | "builders_risk"
+  carrier: text("carrier"),
+  policyNumber: text("policy_number"),
+  // limits_json: flexible per policy type — e.g. { each_occurrence: 1000000,
+  // aggregate: 2000000, waiver_of_subrogation: true }.
+  limitsJson: jsonb("limits_json"),
+  effectiveDate: timestamp("effective_date"),
+  expiryDate: timestamp("expiry_date").notNull(),
+  documentId: varchar("document_id", { length: 36 }), // link to the actual uploaded cert
+  status: text("status").notNull().default("active"), // "active" | "expired" | "pending_renewal" | "cancelled"
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => ({
+  coiTenantVendorIdx: index("coi_tenant_vendor_idx").on(t.tenantId, t.vendorId),
+  coiTenantProjectIdx: index("coi_tenant_project_idx").on(t.tenantId, t.projectId),
+  coiTenantExpiryIdx: index("coi_tenant_expiry_idx").on(t.tenantId, t.expiryDate),
+  coiUpsertKey: unique("coi_upsert_key").on(t.tenantId, t.projectId, t.vendorId, t.policyType),
+}));
+
+export const insertCoiCertificateSchema = createInsertSchema(coiCertificates).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export type InsertCoiCertificate = z.infer<typeof insertCoiCertificateSchema>;
+export type CoiCertificate = typeof coiCertificates.$inferSelect;
+
 export type HomeBucketKey = "urgent" | "needsAttention" | "highValue" | "approvals";
 export type HomePriority = "critical" | "high" | "medium" | "low";
 
