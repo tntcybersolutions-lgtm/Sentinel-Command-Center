@@ -92,8 +92,16 @@ npm run build                # tsx script/build.ts (runs secret-scan + no-placeh
 npm start                    # NODE_ENV=production node dist/index.cjs (serves built client from dist/public)
 npm run check                # tsc --noEmit (strict TS)
 npm run db:push              # drizzle-kit push (requires DATABASE_URL)
-npx vitest                   # run existing Vitest suite (note: current test needs a live server on :5000)
+npm test                     # unit tests — no DB, no server required (db module is mocked per test)
+npm run test:watch           # unit tests in watch mode
+npm run test:integration     # integration tests (requires a live server on :5000)
+npm run test:all             # unit + integration, sequentially
 ```
+
+**Test layout:**
+- Unit tests live next to what they test: `server/services/__tests__/*.test.ts`, `client/src/**/__tests__/*.test.ts(x)`. Discovered via `**/__tests__/**/*.test.{ts,tsx}`.
+- Integration tests live under `server/tests/integration/` and run against a live server (`:5000`).
+- `vitest.config.ts` excludes the integration path from default runs; `vitest.integration.config.ts` targets it exclusively.
 
 Required env vars (minimum to boot): `DATABASE_URL`, `PORT` (defaults to 5000). Additional env vars (OpenAI, SAM.gov, HigherGov, Egnyte, Microsoft, QuickBooks, Teams) are only needed for the integrations that touch them.
 
