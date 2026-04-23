@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
 import { useParams } from "wouter";
+import { PoweredByFooter } from "@/components/powered-by-footer";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -830,12 +831,7 @@ export default function VendorPortal() {
         )}
       </main>
 
-      <footer className="border-t mt-8">
-        <div className="max-w-5xl mx-auto px-4 py-4 text-center text-xs text-muted-foreground">
-          <p>This is a secure portal. All access is logged and audited.</p>
-          <p>Powered by Sentinel + Herbie</p>
-        </div>
-      </footer>
+      <PoweredByFooter variant="brand" className="mt-8" />
     </div>
   );
 }
