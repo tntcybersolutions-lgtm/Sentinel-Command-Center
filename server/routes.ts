@@ -1381,6 +1381,14 @@ export async function registerRoutes(
 
   app.use("/api/herbie/tools", herbieToolsRouter);
 
+  // Register Herbie three-layer memory routes (Phase 1 Feature 8)
+  const { herbieMemoryRouter } = await import("./routes/herbie-memory.routes");
+  app.use("/api/herbie/memory", herbieMemoryRouter);
+
+  // Register COI tracker routes (Phase 1 Feature 3)
+  const { coiRouter } = await import("./routes/coi.routes");
+  app.use("/api/coi", coiRouter);
+
   // Register Vendor Portal routes (external, token-based, no auth)
   const { vendorRouter } = await import("./routes/vendor-portal.routes");
   app.use("/api/v", vendorRouter);
