@@ -23431,7 +23431,10 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
       const tenantId = DEFAULT_TENANT_ID;
       const projectId = String(req.params.id);
 
-      const [projectRows, rfiRows, submittalRows, coRows, logRows, taskRows, reportRows] = await Promise.all([
+      const { listForProject: listCoisForProject } = await import("./services/coi.service");
+      const { partitionByTier: partitionCoisByTier } = await import("./services/coi.service");
+
+      const [projectRows, rfiRows, submittalRows, coRows, logRows, taskRows, reportRows, coiRows] = await Promise.all([
         db.select().from(projects).where(and(eq(projects.tenantId, tenantId), eq(projects.id, projectId))).limit(1),
         db.select({ id: rfis.id, status: rfis.status }).from(rfis).where(and(eq(rfis.tenantId, tenantId), eq(rfis.projectId, projectId))),
         db.select({ id: submittals.id, status: submittals.status }).from(submittals).where(and(eq(submittals.tenantId, tenantId), eq(submittals.projectId, projectId))),
@@ -23443,11 +23446,14 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
           eq(agentActivities.actionType, "report"),
           eq(agentActivities.entityId, projectId),
         )),
+        listCoisForProject(tenantId, projectId),
       ]);
 
       if (projectRows.length === 0) {
         return res.status(404).json({ error: "Project not found" });
       }
+
+      const coiBuckets = partitionCoisByTier(coiRows);
 
       const recentReports = await db.select().from(agentActivities)
         .where(and(
@@ -23471,6 +23477,19 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
           tasks: taskRows.length,
           openTasks: taskRows.filter(t => t.status !== "completed" && t.status !== "closed").length,
           agentReports: reportRows.length,
+          cois: coiRows.length,
+          coisExpired: coiBuckets.expired.length,
+          coisCritical: coiBuckets.critical_1d.length + coiBuckets.critical_7d.length,
+          coisWarning: coiBuckets.warning_14d.length + coiBuckets.warning_30d.length,
+        },
+        coiRollup: {
+          total: coiRows.length,
+          expired: coiBuckets.expired.length,
+          critical_1d: coiBuckets.critical_1d.length,
+          critical_7d: coiBuckets.critical_7d.length,
+          warning_14d: coiBuckets.warning_14d.length,
+          warning_30d: coiBuckets.warning_30d.length,
+          ok: coiBuckets.ok.length,
         },
         recentAgentReports: recentReports.map(r => ({
           id: r.id,
