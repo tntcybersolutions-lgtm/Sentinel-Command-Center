@@ -241,6 +241,7 @@ import ExecutionPurchaseOrders from "@/pages/execution-purchase-orders";
 import DataHygiene from "@/pages/data-hygiene";
 import ProjectCockpit from "@/pages/project-cockpit";
 const CoiTracker = lazy(() => import("@/pages/coi-tracker"));
+const VoiceDailyLog = lazy(() => import("./pages/voice-daily-log"));
 import NotFound from "@/pages/not-found";
 
 function LegacyRedirect({ to }: { to: string }) {
@@ -302,6 +303,7 @@ function Router() {
       <Route path="/execution/workforce" component={() => <SafeRoute component={Workforce} name="Workforce" />} />
       <Route path="/execution/vendors" component={() => <SafeRoute component={Vendors} name="Vendors" />} />
         <Route path="/coi" component={() => <Suspense fallback={<div>Loading...</div>}><CoiTracker /></Suspense>} />
+        <Route path="/voice-daily-log" component={() => <Suspense fallback={<div>Loading...</div>}><VoiceDailyLog /></Suspense>} />
 
       {/* ── Financial Control ── */}
       <Route path="/financial/overview" component={() => <SafeRoute component={Finance} name="Finance" />} />
