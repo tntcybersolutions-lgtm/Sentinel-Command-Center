@@ -1381,6 +1381,14 @@ export async function registerRoutes(
 
   app.use("/api/herbie/tools", herbieToolsRouter);
 
+  // Register Herbie tool-execution HTTP surface (HERBIE.md tool registry).
+  // Mounted at /api/herbie/tools-exec to avoid colliding with the existing
+  // herbie-tools code-scoped router above.
+  const { herbieToolsExecuteRouter } = await import(
+    "./routes/herbie-tools-execute.routes"
+  );
+  app.use("/api/herbie/tools-exec", herbieToolsExecuteRouter);
+
   // Register Herbie three-layer memory routes (Phase 1 Feature 8)
   const { herbieMemoryRouter } = await import("./routes/herbie-memory.routes");
   app.use("/api/herbie/memory", herbieMemoryRouter);
