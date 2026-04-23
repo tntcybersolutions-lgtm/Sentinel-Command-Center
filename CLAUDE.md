@@ -41,7 +41,7 @@ See **HERBIE.md** for Herbie's persona, memory architecture, and behavior contra
 | Frontend | React 18, TypeScript, Vite 7, Wouter, TanStack Query, shadcn/ui + Radix, Tailwind 3, Zustand, Framer Motion |
 | Backend | Express 5, Node 20, TypeScript ESM (dev via `tsx`, prod bundled to CJS via esbuild) |
 | Database | PostgreSQL 16, Drizzle ORM, drizzle-zod |
-| AI | OpenAI SDK (`openai` v6). No Anthropic wired today. |
+| AI | **Anthropic SDK (`@anthropic-ai/sdk`)** — Claude Opus 4.7 for orchestration, Claude Haiku 4.5 for extraction. OpenAI SDK kept only for Whisper transcription. |
 | Object storage | Replit Object Storage (`@replit/object-storage`) + `@google-cloud/storage` |
 | Queue/workers | Postgres-backed queue in `server/queue/` + `SKIP LOCKED` worker in `server/workers/` |
 | Auth | Passport + passport-local, `express-session` backed by `connect-pg-simple` |

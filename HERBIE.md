@@ -155,7 +155,22 @@ The current gatekeepers for these rules are `approval.service.ts` (the approval 
 
 ## LLM Provider
 
-Herbie currently runs on **OpenAI** (`AI_INTEGRATIONS_OPENAI_API_KEY`, optionally `AI_INTEGRATIONS_OPENAI_BASE_URL`). All agent code imports the OpenAI SDK directly — there is no provider abstraction today. Any future provider switch (e.g. Anthropic) requires introducing an LLM abstraction layer; that is tracked in `ROADMAP.md` as a later-phase concern, not Phase 1.
+Herbie runs on **Claude** via a provider abstraction (`server/services/llm/`). The default backend is `AnthropicProvider` (`@anthropic-ai/sdk`), controlled by `ANTHROPIC_API_KEY` and an optional `LLM_PROVIDER` env var.
+
+**Model tiers** (edit in `server/services/llm/anthropic.ts`):
+
+| Tier | Model | Used by |
+|---|---|---|
+| `orchestration` | `claude-opus-4-7` | Herbie chat + tool-use agentic loop |
+| `extraction` | `claude-haiku-4-5` | Structured parsing (voice daily log, COI extraction) |
+| `cheap` | `claude-haiku-4-5` | Classification, simple tagging |
+
+**Key design choices:**
+- **Adaptive thinking only.** Opus 4.7 rejects `temperature`, `top_p`, `top_k`, and the legacy `budget_tokens` form. Orchestrator passes `thinking: true` at call sites that benefit from reasoning.
+- **Prompt caching on HERBIE.md.** The identity layer (this file) is sent as a `cacheable: true` system block on every orchestrator call. A stable ~7KB prefix that renders first on every request is a textbook cache candidate — after the first call it's served at ~0.1× cost.
+- **Project memory block is NOT cached** — it's volatile per-project and comes in as a separate non-cacheable system block below the identity layer.
+- **Stub mode.** When `ANTHROPIC_API_KEY` is absent, the provider returns deterministic stubs. Dev without keys still produces working (if meaningless) responses; tests never touch the network.
+- **Whisper stays OpenAI.** Claude doesn't do audio transcription — the voice daily log's `transcribe()` step uses OpenAI Whisper, and only the structured-extraction step switches to Claude.
 
 ---
 

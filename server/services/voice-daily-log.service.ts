@@ -104,36 +104,40 @@ Rules:
 - If a section wasn't mentioned, omit it or use [] / null.
 - Do not fabricate. Do not output any prose outside the JSON.`;
 
+// Kept for backwards compatibility with any caller still asking for
+// the OpenAI extractor by name. New callers should use
+// createClaudeExtractor() (or the default, which resolves to Claude).
 export function createOpenAIExtractor(): Extractor {
+  return createClaudeExtractor();
+}
+
+// Default structured-extraction backend: Claude Haiku 4.5. Haiku is
+// the right tier here — the task is deterministic transcript parsing,
+// not reasoning, and Haiku is cheap + fast. If ANTHROPIC_API_KEY is
+// absent, the provider's stub mode returns a deterministic fallback
+// so dev without keys still produces a usable daily log.
+export function createClaudeExtractor(): Extractor {
   return {
     async extract(transcript) {
-      const apiKey =
-        process.env.AI_INTEGRATIONS_OPENAI_API_KEY ||
-        process.env.OPENAI_API_KEY;
-      if (!apiKey) {
+      const { getLLMProvider } = await import("./llm");
+      const provider = getLLMProvider();
+      if (provider.stub) {
         return { draft: stubExtraction(transcript), stub: true };
       }
-      const OpenAI = (await import("openai")).default;
-      const client = new OpenAI({
-        apiKey,
-        baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
+      const { data, raw } = await provider.extractJson<unknown>({
+        system: EXTRACTION_SYSTEM_PROMPT,
+        userPrompt: transcript,
+        tier: "extraction",
+        maxTokens: 2_048,
       });
-      const completion = await client.chat.completions.create({
-        model: "gpt-4o-mini",
-        messages: [
-          { role: "system", content: EXTRACTION_SYSTEM_PROMPT },
-          { role: "user", content: transcript },
-        ],
-        response_format: { type: "json_object" },
-        temperature: 0,
-      });
-      const content = completion.choices?.[0]?.message?.content ?? "{}";
-      try {
-        const parsed = JSON.parse(content);
-        return { draft: normalizeDraft(parsed), stub: false };
-      } catch {
+      if (data === undefined) {
+        console.warn(
+          "[voice-daily-log] Claude returned non-JSON, falling back to stub. raw=",
+          raw.slice(0, 200),
+        );
         return { draft: stubExtraction(transcript), stub: true };
       }
+      return { draft: normalizeDraft(data), stub: false };
     },
   };
 }
@@ -199,8 +203,11 @@ export interface VoiceDailyLogResult {
 export async function upsertVoiceDailyLog(
   input: VoiceDailyLogInput,
 ): Promise<VoiceDailyLogResult> {
+  // Whisper stays on OpenAI (Claude doesn't do audio transcription).
+  // Structured extraction defaults to Claude Haiku via the LLM
+  // abstraction — cheap, fast, tier-appropriate.
   const transcriber = input.transcriber ?? createOpenAITranscriber();
-  const extractor = input.extractor ?? createOpenAIExtractor();
+  const extractor = input.extractor ?? createClaudeExtractor();
 
   const { text: transcript, stub: stubT } = await transcriber.transcribe(input.audio);
   const { draft, stub: stubE } = await extractor.extract(transcript);
