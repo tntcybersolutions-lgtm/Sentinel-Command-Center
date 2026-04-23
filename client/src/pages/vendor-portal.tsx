@@ -832,8 +832,8 @@ export default function VendorPortal() {
 
       <footer className="border-t mt-8">
         <div className="max-w-5xl mx-auto px-4 py-4 text-center text-xs text-muted-foreground">
-          <p>This is a secure bid portal. All access is logged and audited.</p>
-          <p>BLACKHAWK SENTINEL - Enterprise Bid Intelligence Platform</p>
+          <p>This is a secure portal. All access is logged and audited.</p>
+          <p>Powered by Sentinel + Herbie</p>
         </div>
       </footer>
     </div>

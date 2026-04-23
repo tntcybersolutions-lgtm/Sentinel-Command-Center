@@ -20076,7 +20076,7 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Health Check - BLACKHAWK SENTINEL</title>
+  <title>Health Check — Sentinel Command Center</title>
   <style>
     body { 
       font-family: monospace; 
@@ -20097,7 +20097,7 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
   </style>
 </head>
 <body>
-  <h1>BLACKHAWK SENTINEL - Health Check</h1>
+  <h1>Sentinel Command Center — Health Check</h1>
   <div class="box">
     <div class="ok">SERVER: OK</div>
     <div class="ok">HTML SERVING: OK</div>

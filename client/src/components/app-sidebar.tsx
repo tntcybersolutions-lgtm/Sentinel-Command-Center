@@ -382,7 +382,7 @@ export function AppSidebar() {
                 />
               </div>
             </TooltipTrigger>
-            <TooltipContent side="right">BLACKHAWK SENTINEL</TooltipContent>
+            <TooltipContent side="right">Sentinel Command Center</TooltipContent>
           </Tooltip>
         ) : (
           <>
