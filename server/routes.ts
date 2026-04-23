@@ -607,7 +607,22 @@ export async function registerRoutes(
       bidStatus: r.bid_status,
     }));
 
-    return { approvals, opportunities: opps, tasks: tasksRaw, kpis, jackets };
+    const tasks = tasksRaw.map((t) => ({
+      id: t.id,
+      title: t.title,
+      description: t.description,
+      priority: t.priority,
+      status: t.status,
+      dueAt: t.dueAt ? t.dueAt.toISOString() : null,
+      source: t.source,
+      sourceEntityType: t.sourceEntityType,
+      sourceEntityId: t.sourceEntityId,
+      actionType: t.actionType,
+      actionPayload: t.actionPayload,
+      completedAt: t.completedAt ? t.completedAt.toISOString() : null,
+    }));
+
+    return { approvals, opportunities: opps, tasks, kpis, jackets };
   }
 
   // ── Unified Command Center Endpoint ──────────────────────────────────────
@@ -1365,6 +1380,54 @@ export async function registerRoutes(
   app.use("/api/herbie", herbieRouter);
 
   app.use("/api/herbie/tools", herbieToolsRouter);
+
+  // Register Herbie tool-execution HTTP surface (HERBIE.md tool registry).
+  // Mounted at /api/herbie/tools-exec to avoid colliding with the existing
+  // herbie-tools code-scoped router above.
+  const { herbieToolsExecuteRouter } = await import(
+    "./routes/herbie-tools-execute.routes"
+  );
+  app.use("/api/herbie/tools-exec", herbieToolsExecuteRouter);
+
+  // Register Herbie proactive digest routes (Phase 1 Feature 9 polish)
+  const { herbieDigestRouter } = await import("./routes/herbie-digest.routes");
+  app.use("/api/herbie/digest", herbieDigestRouter);
+
+  // Register Herbie three-layer memory routes (Phase 1 Feature 8)
+  const { herbieMemoryRouter } = await import("./routes/herbie-memory.routes");
+  app.use("/api/herbie/memory", herbieMemoryRouter);
+
+  // Register COI tracker routes (Phase 1 Feature 3)
+  const { coiRouter } = await import("./routes/coi.routes");
+  app.use("/api/coi", coiRouter);
+
+  // Register approval dispatchers (Phase 1 Feature 5 / 10).
+  // Each dispatcher wires a draft_* action type to its post-approval
+  // transition. Idempotent — safe to call on every boot.
+  const { registerRfiDispatcher } = await import("./services/rfi-draft.service");
+  registerRfiDispatcher();
+  const { registerSubmittalDispatcher } = await import(
+    "./services/submittal-draft.service"
+  );
+  registerSubmittalDispatcher();
+  const { registerOutboundMessageDispatcher } = await import(
+    "./services/outbound-message-draft.service"
+  );
+  registerOutboundMessageDispatcher();
+
+  // Register RFI / Submittal draft HTTP routes (Phase 1 Feature 5)
+  const { rfiDraftRouter } = await import("./routes/rfi-draft.routes");
+  app.use("/api/rfi", rfiDraftRouter);
+  const { submittalDraftRouter } = await import(
+    "./routes/submittal-draft.routes"
+  );
+  app.use("/api/submittal", submittalDraftRouter);
+
+  // Register Voice Daily Log routes (Phase 1 Feature 4)
+  const { voiceDailyLogRouter } = await import(
+    "./routes/voice-daily-log.routes"
+  );
+  app.use("/api", voiceDailyLogRouter);
 
   // Register Vendor Portal routes (external, token-based, no auth)
   const { vendorRouter } = await import("./routes/vendor-portal.routes");
@@ -20061,7 +20124,7 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Health Check - BLACKHAWK SENTINEL</title>
+  <title>Health Check — Sentinel Command Center</title>
   <style>
     body { 
       font-family: monospace; 
@@ -20082,7 +20145,7 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
   </style>
 </head>
 <body>
-  <h1>BLACKHAWK SENTINEL - Health Check</h1>
+  <h1>Sentinel Command Center — Health Check</h1>
   <div class="box">
     <div class="ok">SERVER: OK</div>
     <div class="ok">HTML SERVING: OK</div>
@@ -23406,9 +23469,12 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
   app.get("/api/projects/:id/cockpit", async (req: Request, res: Response) => {
     try {
       const tenantId = DEFAULT_TENANT_ID;
-      const projectId = req.params.id;
+      const projectId = String(req.params.id);
 
-      const [projectRows, rfiRows, submittalRows, coRows, logRows, taskRows, reportRows] = await Promise.all([
+      const { listForProject: listCoisForProject } = await import("./services/coi.service");
+      const { partitionByTier: partitionCoisByTier } = await import("./services/coi.service");
+
+      const [projectRows, rfiRows, submittalRows, coRows, logRows, taskRows, reportRows, coiRows] = await Promise.all([
         db.select().from(projects).where(and(eq(projects.tenantId, tenantId), eq(projects.id, projectId))).limit(1),
         db.select({ id: rfis.id, status: rfis.status }).from(rfis).where(and(eq(rfis.tenantId, tenantId), eq(rfis.projectId, projectId))),
         db.select({ id: submittals.id, status: submittals.status }).from(submittals).where(and(eq(submittals.tenantId, tenantId), eq(submittals.projectId, projectId))),
@@ -23420,11 +23486,14 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
           eq(agentActivities.actionType, "report"),
           eq(agentActivities.entityId, projectId),
         )),
+        listCoisForProject(tenantId, projectId),
       ]);
 
       if (projectRows.length === 0) {
         return res.status(404).json({ error: "Project not found" });
       }
+
+      const coiBuckets = partitionCoisByTier(coiRows);
 
       const recentReports = await db.select().from(agentActivities)
         .where(and(
@@ -23448,6 +23517,19 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
           tasks: taskRows.length,
           openTasks: taskRows.filter(t => t.status !== "completed" && t.status !== "closed").length,
           agentReports: reportRows.length,
+          cois: coiRows.length,
+          coisExpired: coiBuckets.expired.length,
+          coisCritical: coiBuckets.critical_1d.length + coiBuckets.critical_7d.length,
+          coisWarning: coiBuckets.warning_14d.length + coiBuckets.warning_30d.length,
+        },
+        coiRollup: {
+          total: coiRows.length,
+          expired: coiBuckets.expired.length,
+          critical_1d: coiBuckets.critical_1d.length,
+          critical_7d: coiBuckets.critical_7d.length,
+          warning_14d: coiBuckets.warning_14d.length,
+          warning_30d: coiBuckets.warning_30d.length,
+          ok: coiBuckets.ok.length,
         },
         recentAgentReports: recentReports.map(r => ({
           id: r.id,
@@ -23467,7 +23549,7 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
   app.get("/api/projects/:id/agent-reports", async (req: Request, res: Response) => {
     try {
       const tenantId = DEFAULT_TENANT_ID;
-      const projectId = req.params.id;
+      const projectId = String(req.params.id);
 
       const reports = await db.select().from(agentActivities)
         .where(and(

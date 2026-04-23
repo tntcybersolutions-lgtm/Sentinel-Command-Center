@@ -417,7 +417,7 @@ function App() {
                   <div className="flex items-center gap-2">
                     <SidebarTrigger data-testid="button-sidebar-toggle" />
                     <span className="text-sm font-medium text-muted-foreground hidden sm:inline">
-                      BLACKHAWK SENTINEL
+                      Sentinel Command Center
                     </span>
                   </div>
                   <Button 

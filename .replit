@@ -11,6 +11,14 @@ localPort = 5000
 externalPort = 80
 
 [[ports]]
+localPort = 5050
+externalPort = 3001
+
+[[ports]]
+localPort = 5100
+externalPort = 3002
+
+[[ports]]
 localPort = 24678
 externalPort = 3000
 
@@ -49,8 +57,9 @@ integrations = ["javascript_database:1.0.0", "javascript_openai_ai_integrations:
 [userenv]
 
 [userenv.shared]
-EGNYTE_CLIENT_ID = "bMd5EZxATtg7VgPL4dHE3ztswURQRaNg5ZUgXoGrqdNfFYZP"
-EGNYTE_CLIENT_SECRET = "yIeQAM8ovBGKlokp4ioiHFQjHYEIDxpSYRxDBXUoBF6lgxCDs5hXPktCofKguB9t"
+# EGNYTE_CLIENT_ID and EGNYTE_CLIENT_SECRET moved to Replit Secrets.
+# Rotate the secret at the Egnyte provider first — the previously
+# committed value must be treated as compromised.
 EGNYTE_DOMAIN = "tntcyber"
 FORCE_VITE_DEV = "true"
 HIGHERGOV_BASE_URL = "https://www.highergov.com"

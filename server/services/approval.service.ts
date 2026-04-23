@@ -3,7 +3,7 @@ import { approvalRequests, approvalActions, policyViolations, approvalPolicies }
 import { eq, and, desc, or } from "drizzle-orm";
 import { auditService } from "./audit.service";
 
-export type ApprovalActionType = 
+export type ApprovalActionType =
   | "bid_decision"
   | "email_send"
   | "calendar_publish"
@@ -30,9 +30,53 @@ export type ApprovalActionType =
   | "invoice_send"
   | "payment_record"
   | "bill_create"
-  | "expense_create";
+  | "expense_create"
+  // Herbie-drafted external messages (email / SMS / portal note). Phase 1
+  // never sends without approval — this action type routes approved
+  // drafts through a dispatcher registry below.
+  | "draft_external_message"
+  | "draft_rfi"
+  | "draft_submittal"
+  | "draft_coi_renewal";
 
 export type ApprovalStatus = "pending" | "approved" | "denied" | "expired";
+
+// Dispatcher hook — registered once per action type at boot. Fires when
+// processDecision approves a request of that type. Keep the hook
+// synchronous-friendly (a Promise is fine); errors are logged but do
+// not throw out of processDecision (the decision itself has landed).
+//
+// Phase 1 dispatchers should never send externally on their own — they
+// either commit a persistent state (e.g. RFI status → sent) or hand off
+// to a user-initiated send path. Actual outbound send remains
+// human-gated per HERBIE.md.
+export type ApprovalDispatcher = (ctx: {
+  tenantId: string;
+  requestId: string;
+  actor: string;
+  notes?: string;
+}) => Promise<void> | void;
+
+const dispatcherRegistry = new Map<ApprovalActionType, ApprovalDispatcher>();
+
+export function registerApprovalDispatcher(
+  actionType: ApprovalActionType,
+  dispatcher: ApprovalDispatcher,
+): void {
+  dispatcherRegistry.set(actionType, dispatcher);
+}
+
+export function getApprovalDispatcher(
+  actionType: ApprovalActionType,
+): ApprovalDispatcher | undefined {
+  return dispatcherRegistry.get(actionType);
+}
+
+// Test-only: clear the registry between tests. Not exposed via a
+// module-level named export to discourage production use.
+export function __clearApprovalDispatchers(): void {
+  dispatcherRegistry.clear();
+}
 
 export interface ApprovalRequestInput {
   tenantId: string;
@@ -78,7 +122,27 @@ export class ApprovalService {
   }
 
   async processDecision(decision: ApprovalDecision, tenantId: string): Promise<boolean> {
-    const [action] = await db.insert(approvalActions).values({
+    // Idempotent: if an action already exists for this request, return
+    // that prior outcome without writing a second row. Without this
+    // guard, double-submit of a decision (network retry, rapid clicks,
+    // dispatcher replays) would duplicate approval_actions rows and
+    // re-fire the audit event.
+    const prior = await db.select({
+      id: approvalActions.id,
+      decision: approvalActions.decision,
+    })
+      .from(approvalActions)
+      .where(and(
+        eq(approvalActions.tenantId, tenantId),
+        eq(approvalActions.approvalRequestId, decision.requestId),
+      ))
+      .limit(1);
+
+    if (prior.length > 0) {
+      return prior[0].decision === "approved";
+    }
+
+    await db.insert(approvalActions).values({
       tenantId,
       approvalRequestId: decision.requestId,
       actor: decision.actor,
@@ -99,6 +163,34 @@ export class ApprovalService {
       entityId: decision.requestId,
       afterJson: decision as unknown as Record<string, unknown>,
     });
+
+    // If approved, hand off to the registered dispatcher (if any) for
+    // this action type. Dispatcher errors are logged but don't bubble —
+    // the decision itself is already persisted and auditable.
+    if (decision.decision === "approved") {
+      const [reqRow] = await db.select({ actionType: approvalRequests.actionType })
+        .from(approvalRequests)
+        .where(eq(approvalRequests.id, decision.requestId))
+        .limit(1);
+      const dispatcher = reqRow
+        ? getApprovalDispatcher(reqRow.actionType as ApprovalActionType)
+        : undefined;
+      if (dispatcher) {
+        try {
+          await dispatcher({
+            tenantId,
+            requestId: decision.requestId,
+            actor: decision.actor,
+            notes: decision.notes,
+          });
+        } catch (err) {
+          console.error(
+            `approval dispatcher for ${reqRow?.actionType} threw:`,
+            err,
+          );
+        }
+      }
+    }
 
     return decision.decision === "approved";
   }

@@ -342,7 +342,7 @@ function ArtifactEditDialog({
       setError("Cannot approve without a source URL or linked document.");
       return;
     }
-    const PLACEHOLDER_REGEX = /\b(placeholder|tbd|lorem|ipsum|fake|test|sample|xxx|todo)\b/i;
+    const PLACEHOLDER_REGEX = /\b(placeholder|tbd|lorem|ipsum|fake|test|sample|xxx|todo)\b/i; // no-placeholder-gate: allow-line
     if (notes && PLACEHOLDER_REGEX.test(notes)) {
       setError("Notes contain placeholder content. Please provide real data.");
       return;

@@ -158,7 +158,7 @@ export async function runPreconAnalysis(
     };
   }
 
-  const estimatedValue = parseFloat(opp.estimatedValue || "0");
+  const estimatedValue = parseFloat(opp.contractValue || "0");
 
   const scoreRows = await db
     .select()
@@ -166,7 +166,7 @@ export async function runPreconAnalysis(
     .where(eq(opportunityScores.opportunityId, opp.id))
     .orderBy(desc(opportunityScores.createdAt))
     .limit(1);
-  const fitScore = scoreRows[0]?.overallScore ?? null;
+  const fitScore = scoreRows[0]?.score ?? null;
 
   let subBids: Array<{ vendor: string; amount: number; scope: string }> = [];
   if (bidProject) {
@@ -214,8 +214,8 @@ export async function runPreconAnalysis(
 
   const riskFlags: PreconRiskFlag[] = [];
 
-  if (opp.responseDeadline) {
-    const deadline = new Date(opp.responseDeadline);
+  if (opp.dueAt) {
+    const deadline = new Date(opp.dueAt);
     const daysUntil = Math.ceil((deadline.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
     if (daysUntil < 0) {
       riskFlags.push({ severity: "critical", category: "deadline", message: `Response deadline passed ${Math.abs(daysUntil)} days ago`, action: "Confirm if late submissions accepted" });

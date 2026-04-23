@@ -1477,6 +1477,14 @@ export const dailyLogs = pgTable("daily_logs", {
   submittedAt: timestamp("submitted_at"),
   approvedByUserId: varchar("approved_by_user_id", { length: 36 }).references(() => users.id),
   approvedAt: timestamp("approved_at"),
+  // Phase 1 Feature 4 — voice daily log capture.
+  // audioDocumentId links to the uploaded audio blob (in object storage
+  // or server/data). transcript holds the raw Whisper output. source
+  // tracks how this log was created so UI can show a "voice" badge
+  // and we can analyze voice adoption over time.
+  audioDocumentId: varchar("audio_document_id", { length: 36 }),
+  transcript: text("transcript"),
+  source: text("source").notNull().default("manual"), // "voice" | "manual" | "photo"
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => ({
@@ -6315,6 +6323,151 @@ export const artifactIngestionJobs = pgTable(
 export const insertArtifactIngestionJobSchema = createInsertSchema(artifactIngestionJobs).omit({ id: true, createdAt: true, updatedAt: true });
 export type InsertArtifactIngestionJob = z.infer<typeof insertArtifactIngestionJobSchema>;
 export type ArtifactIngestionJob = typeof artifactIngestionJobs.$inferSelect;
+
+// ============================================================================
+// HERBIE THREE-LAYER MEMORY (Phase 1, Roadmap Feature 8)
+// ----------------------------------------------------------------------------
+// HERBIE.md prescribes three long-term memory layers: facts, decisions, and
+// relationships. These are the structured "project memory" layer that sits
+// between the identity prompt (HERBIE.md) and the vector recall backed by
+// `conversation_memory`. See HERBIE.md for read/write rules. `recordFact`
+// with confidence < 0.7 routes to `herbie_review_queue` instead of persisting
+// here.
+// ============================================================================
+
+export const herbieFacts = pgTable("herbie_facts", {
+  id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id", { length: 36 }).notNull(),
+  projectId: varchar("project_id", { length: 36 }),
+  // Subject of the fact — what entity this is about.
+  subjectType: text("subject_type").notNull(), // e.g. "vendor", "project", "coi", "submittal"
+  subjectId: varchar("subject_id", { length: 36 }),
+  // Predicate-object form: "X has Y = Z".
+  predicate: text("predicate").notNull(), // e.g. "coi_expires_at", "gc_name", "concrete_spec"
+  object: text("object"),                   // plain scalar value
+  objectJson: jsonb("object_json"),         // structured value
+  // Provenance.
+  sourceType: text("source_type").notNull(), // "document" | "message" | "user" | "herbie_extraction"
+  sourceId: varchar("source_id", { length: 36 }),
+  confidence: decimal("confidence", { precision: 4, scale: 2 }).notNull(),
+  extractedAt: timestamp("extracted_at").defaultNow().notNull(),
+  // Supersession chain — a new fact with a conflicting object sets
+  // the prior fact's supersededById; the prior fact is never deleted.
+  supersededById: varchar("superseded_by_id", { length: 36 }),
+  supersededAt: timestamp("superseded_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  hfSubjectIdx: index("hf_subject_idx").on(t.tenantId, t.subjectType, t.subjectId),
+  hfProjectIdx: index("hf_project_idx").on(t.tenantId, t.projectId),
+  hfCurrentIdx: index("hf_current_idx").on(t.tenantId, t.supersededById),
+  hfPredicateIdx: index("hf_predicate_idx").on(t.tenantId, t.subjectType, t.subjectId, t.predicate),
+}));
+
+export const insertHerbieFactSchema = createInsertSchema(herbieFacts).omit({
+  id: true,
+  createdAt: true,
+  supersededAt: true,
+  supersededById: true,
+});
+export type InsertHerbieFact = z.infer<typeof insertHerbieFactSchema>;
+export type HerbieFact = typeof herbieFacts.$inferSelect;
+
+export const herbieDecisions = pgTable("herbie_decisions", {
+  id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id", { length: 36 }).notNull(),
+  projectId: varchar("project_id", { length: 36 }),
+  summary: text("summary").notNull(),    // "approved CO-07 for $4,200"
+  rationale: text("rationale"),          // why
+  decidedBy: text("decided_by").notNull(), // user_id or literal "herbie"
+  decidedAt: timestamp("decided_at").defaultNow().notNull(),
+  relatedEntityType: text("related_entity_type"),
+  relatedEntityId: varchar("related_entity_id", { length: 36 }),
+  metadataJson: jsonb("metadata_json"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  hdProjectIdx: index("hd_project_idx").on(t.tenantId, t.projectId, t.decidedAt),
+  hdEntityIdx: index("hd_entity_idx").on(t.tenantId, t.relatedEntityType, t.relatedEntityId),
+}));
+
+export const insertHerbieDecisionSchema = createInsertSchema(herbieDecisions).omit({
+  id: true,
+  createdAt: true,
+});
+export type InsertHerbieDecision = z.infer<typeof insertHerbieDecisionSchema>;
+export type HerbieDecision = typeof herbieDecisions.$inferSelect;
+
+export const herbieRelationships = pgTable("herbie_relationships", {
+  id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id", { length: 36 }).notNull(),
+  projectId: varchar("project_id", { length: 36 }), // nullable for cross-project people
+  // One of the target ids is populated per row — we keep them separate
+  // rather than polymorphic so FKs and the upsert uniqueness below
+  // stay legible.
+  contactId: varchar("contact_id", { length: 36 }),
+  vendorId: varchar("vendor_id", { length: 36 }),
+  companyId: varchar("company_id", { length: 36 }),
+  role: text("role").notNull(), // "pm" | "super" | "foreman" | "sub" | "client" | "architect" | "ahj" | ...
+  status: text("status").notNull().default("active"), // "active" | "inactive"
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => ({
+  hrProjectIdx: index("hr_project_idx").on(t.tenantId, t.projectId),
+  hrRoleIdx: index("hr_role_idx").on(t.tenantId, t.role, t.status),
+}));
+
+export const insertHerbieRelationshipSchema = createInsertSchema(herbieRelationships).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export type InsertHerbieRelationship = z.infer<typeof insertHerbieRelationshipSchema>;
+export type HerbieRelationship = typeof herbieRelationships.$inferSelect;
+
+// ============================================================================
+// COI TRACKER (Phase 1, Roadmap Feature 3)
+// ----------------------------------------------------------------------------
+// Certificates of Insurance for vendors/subs and the GC itself. Expiry is
+// the primary signal the proactive monitor (Feature 9) uses to prompt
+// Herbie to draft a renewal email (Feature 10 approval queue).
+// ============================================================================
+
+export const coiCertificates = pgTable("coi_certificates", {
+  id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id", { length: 36 }).notNull(),
+  // project_id nullable — company-level COIs (the GC's own master policy)
+  // are tenant-scoped but not project-scoped.
+  projectId: varchar("project_id", { length: 36 }),
+  // vendor_id nullable — GC-owned COIs (e.g. the GC's own GL) aren't
+  // attributable to a vendor row.
+  vendorId: varchar("vendor_id", { length: 36 }),
+  policyType: text("policy_type").notNull(), // "gl" | "wc" | "auto" | "umbrella" | "professional" | "pollution" | "builders_risk"
+  carrier: text("carrier"),
+  policyNumber: text("policy_number"),
+  // limits_json: flexible per policy type — e.g. { each_occurrence: 1000000,
+  // aggregate: 2000000, waiver_of_subrogation: true }.
+  limitsJson: jsonb("limits_json"),
+  effectiveDate: timestamp("effective_date"),
+  expiryDate: timestamp("expiry_date").notNull(),
+  documentId: varchar("document_id", { length: 36 }), // link to the actual uploaded cert
+  status: text("status").notNull().default("active"), // "active" | "expired" | "pending_renewal" | "cancelled"
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => ({
+  coiTenantVendorIdx: index("coi_tenant_vendor_idx").on(t.tenantId, t.vendorId),
+  coiTenantProjectIdx: index("coi_tenant_project_idx").on(t.tenantId, t.projectId),
+  coiTenantExpiryIdx: index("coi_tenant_expiry_idx").on(t.tenantId, t.expiryDate),
+  coiUpsertKey: unique("coi_upsert_key").on(t.tenantId, t.projectId, t.vendorId, t.policyType),
+}));
+
+export const insertCoiCertificateSchema = createInsertSchema(coiCertificates).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export type InsertCoiCertificate = z.infer<typeof insertCoiCertificateSchema>;
+export type CoiCertificate = typeof coiCertificates.$inferSelect;
 
 export type HomeBucketKey = "urgent" | "needsAttention" | "highValue" | "approvals";
 export type HomePriority = "critical" | "high" | "medium" | "low";

@@ -69,6 +69,141 @@ function CountBadge({ label, count, accent }: { label: string; count: number; ac
   );
 }
 
+// Feature 9 polish — Herbie proactive digest card.
+// Consumes /api/herbie/digest/:projectId and renders the top items
+// Herbie would surface to the PM. Collapsed by default to save
+// vertical space; tapping the count expands the full list.
+interface DigestItem {
+  severity: "critical" | "high" | "medium" | "low";
+  category: "coi" | "approval" | "rfi" | "submittal";
+  headline: string;
+  detail?: string;
+  suggestedAction?: string;
+}
+interface DigestPayload {
+  generatedAt: string;
+  totals: { critical: number; high: number; medium: number; low: number };
+  items: DigestItem[];
+}
+function HerbieDigestCard({ projectId }: { projectId: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const { data } = useQuery<DigestPayload>({
+    queryKey: ["/api/herbie/digest", projectId],
+    queryFn: () => fetch(`/api/herbie/digest/${projectId}`).then((r) => r.json()),
+  });
+  if (!data) return null;
+  const { totals, items } = data;
+  const total = items.length;
+  if (total === 0) {
+    return (
+      <div className="mx-6 my-3 border border-emerald-500/20 bg-emerald-500/5 px-4 py-2 flex items-center gap-2">
+        <Bot className="w-4 h-4 text-emerald-400" />
+        <span className="text-xs font-mono text-emerald-400">
+          Herbie: Nothing on fire right now. Carry on.
+        </span>
+      </div>
+    );
+  }
+  const sevColor: Record<DigestItem["severity"], string> = {
+    critical: "text-red-400 border-red-500/30 bg-red-500/5",
+    high: "text-orange-400 border-orange-500/30 bg-orange-500/5",
+    medium: "text-amber-400 border-amber-500/30 bg-amber-500/5",
+    low: "text-zinc-400 border-zinc-500/30 bg-zinc-500/5",
+  };
+  const leadSev = items[0].severity;
+  const headerColor = sevColor[leadSev];
+  return (
+    <div className={`mx-6 my-3 border ${headerColor} px-4 py-3`} data-testid="herbie-digest">
+      <button
+        onClick={() => setExpanded((e) => !e)}
+        className="w-full flex items-center gap-3 text-left"
+        data-testid="herbie-digest-toggle"
+      >
+        <Bot className="w-4 h-4 shrink-0" />
+        <span className="text-xs font-mono truncate flex-1">
+          Herbie: {items[0].headline}
+        </span>
+        <span className="text-[10px] font-mono text-zinc-400 shrink-0">
+          {totals.critical > 0 && <span className="text-red-400 mr-2">{totals.critical} crit</span>}
+          {totals.high > 0 && <span className="text-orange-400 mr-2">{totals.high} high</span>}
+          {totals.medium > 0 && <span className="text-amber-400 mr-2">{totals.medium} med</span>}
+          {totals.low > 0 && <span className="text-zinc-400">{totals.low} low</span>}
+        </span>
+        {expanded ? <ChevronDown className="w-3.5 h-3.5 shrink-0" /> : <ChevronRight className="w-3.5 h-3.5 shrink-0" />}
+      </button>
+      {expanded && (
+        <ul className="mt-3 space-y-2" data-testid="herbie-digest-items">
+          {items.map((item, i) => (
+            <li key={i} className={`border ${sevColor[item.severity]} px-3 py-2`}>
+              <div className="text-xs font-mono">{item.headline}</div>
+              {item.detail && <div className="text-[10px] font-mono text-zinc-500 mt-0.5">{item.detail}</div>}
+              {item.suggestedAction && (
+                <div className="text-[10px] font-mono text-zinc-400 mt-1">
+                  → {item.suggestedAction}
+                </div>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+// Feature 3 / 9 — COI rollup card. Green when everything's OK, amber
+// when something's in the 30-day warning window, red when anything
+// is inside 7 days or already expired. The individual-tier counts
+// render as small pills below the total so a PM can see the shape
+// at a glance.
+interface CoiRollup {
+  total?: number;
+  expired?: number;
+  critical_1d?: number;
+  critical_7d?: number;
+  warning_14d?: number;
+  warning_30d?: number;
+  ok?: number;
+}
+function CoiRollupBadge({ rollup }: { rollup?: CoiRollup }) {
+  const r = rollup ?? {};
+  const total = r.total ?? 0;
+  const expired = r.expired ?? 0;
+  const crit = (r.critical_1d ?? 0) + (r.critical_7d ?? 0);
+  const warn = (r.warning_14d ?? 0) + (r.warning_30d ?? 0);
+  const ok = r.ok ?? 0;
+  const severity =
+    expired > 0 || r.critical_1d ? "red" :
+    crit > 0 ? "red" :
+    warn > 0 ? "amber" :
+    "green";
+  const accentByBand: Record<string, string> = {
+    red: "text-red-400",
+    amber: "text-amber-400",
+    green: "text-emerald-400",
+  };
+  const accent = accentByBand[severity];
+  return (
+    <div
+      data-testid="count-coi"
+      className="border border-white/10 bg-black/30 px-4 py-2 flex flex-col"
+      title={`Expired ${expired} · Critical ${crit} · Warning ${warn} · OK ${ok}`}
+    >
+      <span className="text-[10px] uppercase tracking-wider text-zinc-500 font-mono">
+        COIs
+      </span>
+      <div className="flex items-baseline gap-2">
+        <span className={`text-xl font-mono font-bold ${accent}`}>{total}</span>
+        <span className="text-[10px] font-mono text-zinc-500">
+          {expired > 0 && <span className="text-red-400">{expired}exp </span>}
+          {crit > 0 && <span className="text-red-400">{crit}crit </span>}
+          {warn > 0 && <span className="text-amber-400">{warn}warn</span>}
+          {total === 0 && <span>no policies</span>}
+        </span>
+      </div>
+    </div>
+  );
+}
+
 function RFIsTab({ projectId }: { projectId: string }) {
   const { data, isLoading } = useQuery<any[]>({ queryKey: ["/api/projects", projectId, "rfis"], queryFn: () => fetch(`/api/projects/${projectId}/rfis`).then(r => r.json()) });
   if (isLoading) return <LoadingState />;
@@ -430,6 +565,8 @@ export default function ProjectCockpit() {
         </div>
       </div>
 
+      <HerbieDigestCard projectId={projectId} />
+
       <div className="px-6 py-3 flex gap-2 flex-wrap border-b border-white/5">
         <CountBadge label="RFIs" count={counts.rfis || 0} accent={counts.openRfis > 0 ? "text-amber-400" : undefined} />
         <CountBadge label="Open RFIs" count={counts.openRfis || 0} accent="text-amber-400" />
@@ -440,6 +577,7 @@ export default function ProjectCockpit() {
         <CountBadge label="Tasks" count={counts.tasks || 0} />
         <CountBadge label="Open Tasks" count={counts.openTasks || 0} accent={counts.openTasks > 0 ? "text-amber-400" : undefined} />
         <CountBadge label="Agent Reports" count={counts.agentReports || 0} accent="text-cyan-400" />
+        <CoiRollupBadge rollup={cockpit?.coiRollup} />
       </div>
 
       <div className="border-b border-white/10 px-6 flex gap-0">

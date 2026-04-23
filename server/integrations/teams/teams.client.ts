@@ -357,7 +357,7 @@ export class TeamsWebhookClient {
             body: [
               {
                 type: "TextBlock",
-                text: `BLACKHAWK SENTINEL Daily Briefing - ${date}`,
+                text: `Sentinel Command Center — Daily Briefing — ${date}`,
                 weight: "bolder",
                 size: "large",
               },

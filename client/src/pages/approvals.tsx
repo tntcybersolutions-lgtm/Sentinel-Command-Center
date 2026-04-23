@@ -171,6 +171,11 @@ function toActionLabel(actionType: string): string {
     case "bid_submission": return "Bid Submission Review";
     case "send_email": return "Client Communication";
     case "vendor_create": return "Vendor Approval";
+    // Phase 1 Feature 10 — Herbie-drafted items awaiting PM review.
+    case "draft_rfi": return "RFI Draft — Review & Send";
+    case "draft_submittal": return "Submittal Draft — Review & Send";
+    case "draft_external_message": return "Outbound Message — Review & Send";
+    case "draft_coi_renewal": return "COI Renewal Draft — Review & Send";
     default: return "Review Item";
   }
 }
@@ -181,6 +186,10 @@ function toActionVerb(actionType: string): string {
     case "bid_submission": return "Review Submission Package";
     case "send_email": return "Approve Message";
     case "vendor_create": return "Approve Vendor Profile";
+    case "draft_rfi": return "Approve & Submit RFI";
+    case "draft_submittal": return "Approve & Submit Submittal";
+    case "draft_external_message": return "Approve & Send Message";
+    case "draft_coi_renewal": return "Approve & Send Renewal Request";
     default: return "Review";
   }
 }
@@ -189,9 +198,19 @@ function actionGlyph(actionType: string) {
   switch ((actionType || "").toLowerCase()) {
     case "jacket_build": return <FolderTree className="h-4 w-4" />;
     case "bid_submission": return <ClipboardCheck className="h-4 w-4" />;
-    case "send_email": return <Send className="h-4 w-4" />;
+    case "send_email":
+    case "draft_external_message":
+    case "draft_coi_renewal":
+      return <Send className="h-4 w-4" />;
+    case "draft_rfi":
+    case "draft_submittal":
+      return <FileText className="h-4 w-4" />;
     default: return <ShieldAlert className="h-4 w-4" />;
   }
+}
+
+function isDraftActionType(actionType: string): boolean {
+  return (actionType || "").toLowerCase().startsWith("draft_");
 }
 
 function proBadgePriority(priority: ApprovalRequest["priority"]) {
@@ -231,7 +250,27 @@ function professionalSummary(a: ApprovalRequest): string {
   const reason = (a.herbieReason || "").trim();
   const name = cleanProjectName(a);
   if (reason) return reason;
-  switch ((a.actionType || "").toLowerCase()) {
+  const ctx = (a.context || {}) as Record<string, any>;
+  const act = (a.actionType || "").toLowerCase();
+  if (act === "draft_rfi") {
+    const num = ctx.rfiNumber ? `${ctx.rfiNumber} ` : "";
+    const subj = ctx.subject ? ` — ${ctx.subject}` : "";
+    return `Herbie drafted RFI ${num}for this project${subj}. Review the draft and approve to submit, or deny with notes to revise.`;
+  }
+  if (act === "draft_submittal") {
+    const num = ctx.submittalNumber ? `${ctx.submittalNumber} ` : "";
+    const nm = ctx.name ? ` — ${ctx.name}` : "";
+    return `Herbie drafted submittal ${num}for this project${nm}. Review and approve to submit, or deny with notes.`;
+  }
+  if (act === "draft_external_message") {
+    const to = ctx.recipient || ctx.to || "the recipient";
+    return `Herbie drafted an outbound message to ${to}. Review the body, edit if needed, and approve to send.`;
+  }
+  if (act === "draft_coi_renewal") {
+    const vendor = ctx.vendorName || ctx.vendorId || "the vendor";
+    return `Herbie drafted a COI renewal request for ${vendor}. Review and approve to send, or deny if the policy is already renewed.`;
+  }
+  switch (act) {
     case "jacket_build":
       return `Prepare the bid workspace for \u201c${name}\u201d by creating the required folder structure and initializing baseline artifacts.`;
     case "bid_submission":

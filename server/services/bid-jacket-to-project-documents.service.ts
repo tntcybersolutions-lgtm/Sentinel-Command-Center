@@ -394,7 +394,7 @@ export async function classifyArtifactAsync(
     folders: [...ALL_CANON_FOLDERS],
   });
 
-  if (ai && ALL_CANON_FOLDERS.includes(ai.folder) && ai.confidence >= 0.7) {
+  if (ai && (ALL_CANON_FOLDERS as readonly string[]).includes(ai.folder) && ai.confidence >= 0.7) {
     return {
       folder: ai.folder,
       method: "ai",

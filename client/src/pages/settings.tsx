@@ -104,7 +104,7 @@ export default function SettingsPage() {
       <div className="flex items-center justify-between flex-wrap gap-4">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Settings</h1>
-          <p className="text-muted-foreground">Configure BLACKHAWK SENTINEL preferences</p>
+          <p className="text-muted-foreground">Configure Sentinel Command Center preferences</p>
         </div>
         <Button onClick={handleSaveSettings} disabled={saveSettingsMutation.isPending} data-testid="button-save-settings">
           <Save className="mr-2 h-4 w-4" />
