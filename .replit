@@ -66,3 +66,6 @@ HIGHERGOV_BASE_URL = "https://www.highergov.com"
 
 [userenv.development]
 VITE_HMR_OVERLAY = "false"
+
+[objectStorage]
+defaultBucketID = "replit-objstore-c6fe9ea2-c700-4765-b89e-6724876a539d"
