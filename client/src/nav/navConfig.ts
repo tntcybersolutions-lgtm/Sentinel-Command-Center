@@ -38,6 +38,7 @@ import {
   ArrowDownToLine,
   Mic,
   TrendingUp,
+  ClipboardCheck,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -158,7 +159,8 @@ export const navConfig: NavGroupConfig[] = [
     icon: Bot,
     order: 70,
     items: [
-      { id: "vendor.confidence", label: "Vendor Confidence", icon: Building2, route: "/vendor-confidence" },
+      { id: "co.approvals", label: "CO Approvals", icon: ClipboardCheck, route: "/change-order-approvals" },
+    { id: "vendor.confidence", label: "Vendor Confidence", icon: Building2, route: "/vendor-confidence" },
     { id: "herbie.digest", label: "Digest", icon: TrendingUp, route: "/herbie-digest" },
         { id: "herbie.chat", label: "Chat Assistant", icon: Bot, route: "/automation/herbie" },
         { id: "herbie.autonomous", label: "Autonomous", icon: Zap, route: "/herbie-autonomous" },
