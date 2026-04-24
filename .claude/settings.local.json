@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm audit *)",
+      "Bash(node -e \"let d='';process.stdin.on\\('data',c=>d+=c\\);process.stdin.on\\('end',\\(\\)=>{const j=JSON.parse\\(d\\);const list=[];for\\(const [name,v] of Object.entries\\(j.vulnerabilities||{}\\)\\){if\\(['critical','high'].includes\\(v.severity\\)\\)list.push\\(name+' \\('+v.severity+'\\)'\\);}console.log\\(list.sort\\(\\).join\\('\\\\n'\\)\\);}\\)\")",
+      "Skill(claude-api)",
+      "Bash(node *)",
+      "Bash(npm test *)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)",
+      "Bash(gh auth *)"
+    ]
+  }
+}
