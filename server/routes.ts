@@ -23627,6 +23627,237 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
     }
   });
 
+
+  // ========================================================================
+  // MISSING ENDPOINT ADDITIONS - Phase 2 Backend Completion
+  // ========================================================================
+
+  // --- COMPLIANCE: evidence, incidents, stats ---
+  app.get("/api/compliance/evidence", async (req, res) => {
+    try {
+      const { complianceService } = await import("./services/compliance.service");
+      const controlId = req.query.controlId as string;
+      if (!controlId) {
+        return res.status(400).json({ error: "controlId query parameter required" });
+      }
+      const evidence = await complianceService.getControlEvidence(DEFAULT_TENANT_ID, controlId);
+      res.json(evidence);
+    } catch (error) {
+      console.error("Error fetching compliance evidence:", error);
+      res.status(500).json({ error: (error as Error)?.message ?? "Failed to fetch compliance evidence" });
+    }
+  });
+
+  app.get("/api/compliance/incidents", async (req, res) => {
+    try {
+      const { complianceService } = await import("./services/compliance.service");
+      const incidents = await complianceService.listSecurityIncidents(DEFAULT_TENANT_ID, req.query);
+      res.json(incidents);
+    } catch (error) {
+      console.error("Error fetching compliance incidents:", error);
+      res.status(500).json({ error: (error as Error)?.message ?? "Failed to fetch compliance incidents" });
+    }
+  });
+
+  app.get("/api/compliance/stats", async (req, res) => {
+    try {
+      const { complianceService } = await import("./services/compliance.service");
+      const scores = await complianceService.calculateComplianceScore(DEFAULT_TENANT_ID);
+      const dashboard = await complianceService.getComplianceDashboard(DEFAULT_TENANT_ID);
+      res.json({ scores, dashboard });
+    } catch (error) {
+      console.error("Error fetching compliance stats:", error);
+      res.status(500).json({ error: (error as Error)?.message ?? "Failed to fetch compliance stats" });
+    }
+  });
+
+  // --- INTEGRATIONS: HigherGov search ---
+  app.get("/api/integrations/highergov/search", async (req, res) => {
+    try {
+      const { discoverHigherGovAttachments } = await import("./services/highergov-discovery.service");
+      const opportunityId = (req.query.opportunityId as string) ?? "";
+        const runId = req.query.runId as string | undefined;
+        const results = await discoverHigherGovAttachments({ tenantId: DEFAULT_TENANT_ID, opportunityId, runId });
+      res.json(results);
+    } catch (error) {
+      console.error("Error searching HigherGov:", error);
+      res.status(500).json({ error: (error as Error)?.message ?? "Failed to search HigherGov" });
+    }
+  });
+
+  // --- INVENTORY: stats, warehouses ---
+  app.get("/api/inventory/stats", async (req, res) => {
+    try {
+      const { inventoryService } = await import("./services/inventory.service");
+      const levels = await inventoryService.getInventoryLevels(DEFAULT_TENANT_ID);
+      const shortages = await inventoryService.detectShortages(DEFAULT_TENANT_ID);
+      res.json({ levels, shortages });
+    } catch (error) {
+      console.error("Error fetching inventory stats:", error);
+      res.status(500).json({ error: (error as Error)?.message ?? "Failed to fetch inventory stats" });
+    }
+  });
+
+  app.get("/api/inventory/warehouses", async (req, res) => {
+    try {
+      const { inventoryService } = await import("./services/inventory.service");
+      const warehouses = await inventoryService.listWarehouses(DEFAULT_TENANT_ID);
+      res.json(warehouses);
+    } catch (error) {
+      console.error("Error fetching warehouses:", error);
+      res.status(500).json({ error: (error as Error)?.message ?? "Failed to fetch warehouses" });
+    }
+  });
+
+  // --- MARKETING: analytics, contacts, stats ---
+  app.get("/api/marketing/analytics", async (req, res) => {
+    try {
+      const { marketingService } = await import("./services/marketing.service");
+      const dashboard = await marketingService.getMarketingDashboard(DEFAULT_TENANT_ID);
+      res.json(dashboard);
+    } catch (error) {
+      console.error("Error fetching marketing analytics:", error);
+      res.status(500).json({ error: (error as Error)?.message ?? "Failed to fetch marketing analytics" });
+    }
+  });
+
+  app.get("/api/marketing/contacts", async (req, res) => {
+    try {
+      const { marketingService } = await import("./services/marketing.service");
+      const campaigns = await marketingService.listCampaigns(DEFAULT_TENANT_ID, req.query);
+      const contactsList = [];
+      for (const campaign of campaigns) {
+        const recipients = await marketingService.getRecipients(DEFAULT_TENANT_ID, campaign.id);
+        contactsList.push(...recipients);
+      }
+      res.json(contactsList);
+    } catch (error) {
+      console.error("Error fetching marketing contacts:", error);
+      res.status(500).json({ error: (error as Error)?.message ?? "Failed to fetch marketing contacts" });
+    }
+  });
+
+  app.get("/api/marketing/stats", async (req, res) => {
+    try {
+      const { marketingService } = await import("./services/marketing.service");
+      const campaigns = await marketingService.listCampaigns(DEFAULT_TENANT_ID);
+      const stats = {
+        total: campaigns.length,
+        active: campaigns.filter((c) => c.status === "active").length,
+        draft: campaigns.filter((c) => c.status === "draft").length,
+        completed: campaigns.filter((c) => c.status === "completed").length,
+      };
+      res.json(stats);
+    } catch (error) {
+      console.error("Error fetching marketing stats:", error);
+      res.status(500).json({ error: (error as Error)?.message ?? "Failed to fetch marketing stats" });
+    }
+  });
+
+  // --- PROJECTS: stats ---
+  app.get("/api/projects/stats", async (req, res) => {
+    try {
+      const { projectsService } = await import("./services/projects.service");
+      const projects = await projectsService.listProjects(DEFAULT_TENANT_ID);
+      const stats = {
+        total: projects.length,
+        active: projects.filter((p) => p.status === "active").length,
+        completed: projects.filter((p) => p.status === "completed").length,
+        onHold: projects.filter((p) => p.status === "on_hold").length,
+      };
+      res.json(stats);
+    } catch (error) {
+      console.error("Error fetching project stats:", error);
+      res.status(500).json({ error: (error as Error)?.message ?? "Failed to fetch project stats" });
+    }
+  });
+
+  // --- SAFETY INCIDENTS ---
+  app.get("/api/safety-incidents", async (req, res) => {
+    try {
+      const { hrService } = await import("./services/hr.service");
+      const incidents = await hrService.listSafetyIncidents(DEFAULT_TENANT_ID, req.query);
+      res.json(incidents);
+    } catch (error) {
+      console.error("Error fetching safety incidents:", error);
+      res.status(500).json({ error: (error as Error)?.message ?? "Failed to fetch safety incidents" });
+    }
+  });
+
+  app.post("/api/safety-incidents", async (req, res) => {
+    try {
+      const { hrService } = await import("./services/hr.service");
+      const incident = await hrService.createSafetyIncident(DEFAULT_TENANT_ID, req.body);
+      res.status(201).json(incident);
+    } catch (error) {
+      console.error("Error creating safety incident:", error);
+      res.status(500).json({ error: (error as Error)?.message ?? "Failed to create safety incident" });
+    }
+  });
+
+  // --- TICKETS: stats ---
+  app.get("/api/tickets/stats", async (req, res) => {
+    try {
+      const { ticketingService } = await import("./services/ticketing.service");
+      const tickets = await ticketingService.listTickets(DEFAULT_TENANT_ID, req.query);
+      const slaMetrics = await ticketingService.getSLAMetrics(DEFAULT_TENANT_ID);
+      const stats = {
+        total: tickets.length,
+        open: tickets.filter((t) => t.status === "open").length,
+        inProgress: tickets.filter((t) => t.status === "in_progress").length,
+        resolved: tickets.filter((t) => t.status === "resolved").length,
+        sla: slaMetrics,
+      };
+      res.json(stats);
+    } catch (error) {
+      console.error("Error fetching ticket stats:", error);
+      res.status(500).json({ error: (error as Error)?.message ?? "Failed to fetch ticket stats" });
+    }
+  });
+
+  // --- TIME ENTRIES ---
+  app.get("/api/time-entries", async (req, res) => {
+    try {
+      const { workforceService } = await import("./services/workforce.service");
+      const { employeeId, projectId, status } = req.query as { employeeId?: string; projectId?: string; status?: string };
+        const now = new Date();
+        const startDate = req.query.startDate ? new Date(req.query.startDate as string) : new Date(now.getFullYear(), now.getMonth(), 1);
+        const endDate = req.query.endDate ? new Date(req.query.endDate as string) : now;
+        const entries = await workforceService.getTimeEntries(DEFAULT_TENANT_ID, { employeeId, projectId, startDate, endDate, status });
+      res.json(entries);
+    } catch (error) {
+      console.error("Error fetching time entries:", error);
+      res.status(500).json({ error: (error as Error)?.message ?? "Failed to fetch time entries" });
+    }
+  });
+
+  app.post("/api/time-entries", async (req, res) => {
+    try {
+      const { workforceService } = await import("./services/workforce.service");
+      const entry = await workforceService.clockIn(DEFAULT_TENANT_ID, req.body);
+      res.status(201).json(entry);
+    } catch (error) {
+      console.error("Error creating time entry:", error);
+      res.status(500).json({ error: (error as Error)?.message ?? "Failed to create time entry" });
+    }
+  });
+
+  // --- WORKFORCE: stats ---
+  app.get("/api/workforce/stats", async (req, res) => {
+    try {
+      const { workforceService } = await import("./services/workforce.service");
+        const { projectId: wPid, employeeId: wEid, startDate: wSd, endDate: wEd } = req.query as { projectId?: string; employeeId?: string; startDate?: string; endDate?: string };
+        const wNow = new Date();
+        const wStartDate = wSd ? new Date(wSd) : new Date(wNow.getFullYear(), wNow.getMonth(), 1);
+        const wEndDate = wEd ? new Date(wEd) : wNow;
+        const laborSummary = await workforceService.getLaborCostSummary(DEFAULT_TENANT_ID, { projectId: wPid, startDate: wStartDate, endDate: wEndDate });
+        const crewAssignments = await workforceService.getCrewAssignments(DEFAULT_TENANT_ID, { projectId: wPid, employeeId: wEid });
+    } catch (error) {
+      console.error("Error fetching workforce stats:", error);
+      res.status(500).json({ error: (error as Error)?.message ?? "Failed to fetch workforce stats" });
+    }
+  });
+
   app.use((err: Error, _req: Request, res: Response, next: Function) => {
     if (err instanceof ParamError) {
       return res.status(400).json({ error: err.message });

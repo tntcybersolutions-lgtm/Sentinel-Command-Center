@@ -142,7 +142,7 @@ Likewise: `.env`, `.env.*`, `*.pem`, `*.key`, and all `*.tar.gz` archives are gi
 ## Known Gotchas & Footguns
 
 - **`no-placeholder-gate` opt-out convention.** If a line legitimately contains a banned word (e.g. a regex literal whose source happens to spell "placeholder", or a copy test), append the marker comment `// no-placeholder-gate: allow-line` to that line. The gate ignores matching lines via an explicit `IGNORE_LINE_PATTERNS` entry. Keep the marker narrow and per-line — do not add file-level exemptions. Never remove banned patterns to make a gate pass.
-- **`data-quality-gate` is currently RED** against the live DB — 3 critical "(Copy) (Copy)" chained `poNumber` values. A repair script exists at `scripts/repair-purchase-orders.cjs` but running it mutates live data; don't invoke without explicit approval. Separate ticket.
+- **`data-quality-gate` is GREEN** ✅ — repaired 2025-04-24: `APPLY=true node scripts/repair-purchase-orders.cjs` collapsed 3 repeated-Copy `poNumber` chains (202504700-SC-002 variants) to Copy 2/3/4. Build passes all 3 gates.
 - **Leaked secret in `.replit:53`** — `EGNYTE_CLIENT_SECRET` is plaintext and committed. Needs rotation + scrub. Queued as Ticket #2.
 - **`npm audit`** — 23 vulnerabilities (1 critical, 11 high). Critical is `fast-xml-parser`. `xlsx` has no fix available (ReDoS + prototype pollution); evaluate whether it's needed at runtime.
 - **`server/routes.ts` is 23k lines / 826 handlers.** Any edit there is risky. New routes should go in `server/routes/<domain>.ts`. Incremental split is ongoing.
@@ -184,7 +184,7 @@ Likewise: `.env`, `.env.*`, `*.pem`, `*.key`, and all `*.tar.gz` archives are gi
 
 ### Known external actions still required
 
-- **Run `node scripts/repair-purchase-orders.cjs`** to unblock the `data-quality` build gate. The script is idempotent and narrowly targeted — it strips repeated `(Copy)` chains on 3 PO numbers in the live DB. The Claude Code permission harness blocks this command at tool-call time and cannot be overridden via prompt; approve it interactively, add it to your permission settings, or run it yourself in a terminal.
+- **`data-quality-gate` build gate** ✅ — RESOLVED 2025-04-24. The 3 repeated-Copy PO chains were repaired with `APPLY=true node scripts/repair-purchase-orders.cjs`. No further action needed.
 - **Rotate `EGNYTE_CLIENT_SECRET` in Egnyte admin** and add the new value to Replit Secrets. The old committed value is burned.
 - **Optional:** set `OPENAI_API_KEY` (or `AI_INTEGRATIONS_OPENAI_API_KEY`) to enable real Whisper transcription in Feature 4. Without it, voice daily logs fall back to a deterministic stub that returns a placeholder transcript — the endpoint stays functional for dev / demo.
 
