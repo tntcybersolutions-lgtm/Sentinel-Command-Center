@@ -100,7 +100,8 @@ export const navConfig: NavGroupConfig[] = [
       { id: "precon.blueprints", label: "Blueprints & Drawings", icon: PencilRuler, route: "/estimate/blueprints" },
       { id: "precon.takeoff", label: "Takeoff Engine", icon: Ruler, route: "/estimate/takeoff" },
       { id: "precon.buildingSystems", label: "Building Systems", icon: Wrench, route: "/estimate/design-systems" },
-            { id: "precon.bidReadiness", label: "Bid Readiness", icon: FileCheck, route: "/bid-readiness" },
+            { id: "ai.proactive", label: "Proactive Intelligence", icon: Brain, route: "/proactive-intelligence" },
+      { id: "precon.bidReadiness", label: "Bid Readiness", icon: FileCheck, route: "/bid-readiness" },
     ],
   },
   {

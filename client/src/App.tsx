@@ -240,6 +240,7 @@ import ExecutionRFIs from "@/pages/execution-rfis";
 import ExecutionPurchaseOrders from "@/pages/execution-purchase-orders";
 import DataHygiene from "@/pages/data-hygiene";
 import ProjectCockpit from "@/pages/project-cockpit";
+const ProactiveIntelligence = lazy(() => import("@/pages/proactive-intelligence"));
 const CoiTracker = lazy(() => import("@/pages/coi-tracker"));
 const BidReadiness = lazy(() => import("@/pages/bid-readiness"));
 const VoiceDailyLog = lazy(() => import("./pages/voice-daily-log"));
