@@ -23636,7 +23636,7 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
   app.get("/api/compliance/evidence", async (req, res) => {
     try {
       const { complianceService } = await import("./services/compliance.service");
-      const controlId = req.query.controlId;
+      const controlId = req.query.controlId as string;
       if (!controlId) {
         return res.status(400).json({ error: "controlId query parameter required" });
       }
@@ -23644,7 +23644,7 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
       res.json(evidence);
     } catch (error) {
       console.error("Error fetching compliance evidence:", error);
-      res.status(500).json({ error: error?.message ?? "Failed to fetch compliance evidence" });
+      res.status(500).json({ error: (error as Error)?.message ?? "Failed to fetch compliance evidence" });
     }
   });
 
@@ -23655,7 +23655,7 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
       res.json(incidents);
     } catch (error) {
       console.error("Error fetching compliance incidents:", error);
-      res.status(500).json({ error: error?.message ?? "Failed to fetch compliance incidents" });
+      res.status(500).json({ error: (error as Error)?.message ?? "Failed to fetch compliance incidents" });
     }
   });
 
@@ -23667,7 +23667,7 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
       res.json({ scores, dashboard });
     } catch (error) {
       console.error("Error fetching compliance stats:", error);
-      res.status(500).json({ error: error?.message ?? "Failed to fetch compliance stats" });
+      res.status(500).json({ error: (error as Error)?.message ?? "Failed to fetch compliance stats" });
     }
   });
 
@@ -23675,14 +23675,13 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
   app.get("/api/integrations/highergov/search", async (req, res) => {
     try {
       const { discoverHigherGovAttachments } = await import("./services/highergov-discovery.service");
-      const query = req.query.q ?? "";
-      const naicsCode = req.query.naicsCode;
-      const setAside = req.query.setAside;
-      const results = await discoverHigherGovAttachments({ query, naicsCode, setAside });
+      const opportunityId = (req.query.opportunityId as string) ?? "";
+        const runId = req.query.runId as string | undefined;
+        const results = await discoverHigherGovAttachments({ tenantId: DEFAULT_TENANT_ID, opportunityId, runId });
       res.json(results);
     } catch (error) {
       console.error("Error searching HigherGov:", error);
-      res.status(500).json({ error: error?.message ?? "Failed to search HigherGov" });
+      res.status(500).json({ error: (error as Error)?.message ?? "Failed to search HigherGov" });
     }
   });
 
@@ -23695,7 +23694,7 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
       res.json({ levels, shortages });
     } catch (error) {
       console.error("Error fetching inventory stats:", error);
-      res.status(500).json({ error: error?.message ?? "Failed to fetch inventory stats" });
+      res.status(500).json({ error: (error as Error)?.message ?? "Failed to fetch inventory stats" });
     }
   });
 
@@ -23706,7 +23705,7 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
       res.json(warehouses);
     } catch (error) {
       console.error("Error fetching warehouses:", error);
-      res.status(500).json({ error: error?.message ?? "Failed to fetch warehouses" });
+      res.status(500).json({ error: (error as Error)?.message ?? "Failed to fetch warehouses" });
     }
   });
 
@@ -23718,7 +23717,7 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
       res.json(dashboard);
     } catch (error) {
       console.error("Error fetching marketing analytics:", error);
-      res.status(500).json({ error: error?.message ?? "Failed to fetch marketing analytics" });
+      res.status(500).json({ error: (error as Error)?.message ?? "Failed to fetch marketing analytics" });
     }
   });
 
@@ -23734,7 +23733,7 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
       res.json(contactsList);
     } catch (error) {
       console.error("Error fetching marketing contacts:", error);
-      res.status(500).json({ error: error?.message ?? "Failed to fetch marketing contacts" });
+      res.status(500).json({ error: (error as Error)?.message ?? "Failed to fetch marketing contacts" });
     }
   });
 
@@ -23751,7 +23750,7 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
       res.json(stats);
     } catch (error) {
       console.error("Error fetching marketing stats:", error);
-      res.status(500).json({ error: error?.message ?? "Failed to fetch marketing stats" });
+      res.status(500).json({ error: (error as Error)?.message ?? "Failed to fetch marketing stats" });
     }
   });
 
@@ -23769,7 +23768,7 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
       res.json(stats);
     } catch (error) {
       console.error("Error fetching project stats:", error);
-      res.status(500).json({ error: error?.message ?? "Failed to fetch project stats" });
+      res.status(500).json({ error: (error as Error)?.message ?? "Failed to fetch project stats" });
     }
   });
 
@@ -23781,7 +23780,7 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
       res.json(incidents);
     } catch (error) {
       console.error("Error fetching safety incidents:", error);
-      res.status(500).json({ error: error?.message ?? "Failed to fetch safety incidents" });
+      res.status(500).json({ error: (error as Error)?.message ?? "Failed to fetch safety incidents" });
     }
   });
 
@@ -23792,7 +23791,7 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
       res.status(201).json(incident);
     } catch (error) {
       console.error("Error creating safety incident:", error);
-      res.status(500).json({ error: error?.message ?? "Failed to create safety incident" });
+      res.status(500).json({ error: (error as Error)?.message ?? "Failed to create safety incident" });
     }
   });
 
@@ -23812,7 +23811,7 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
       res.json(stats);
     } catch (error) {
       console.error("Error fetching ticket stats:", error);
-      res.status(500).json({ error: error?.message ?? "Failed to fetch ticket stats" });
+      res.status(500).json({ error: (error as Error)?.message ?? "Failed to fetch ticket stats" });
     }
   });
 
@@ -23820,11 +23819,15 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
   app.get("/api/time-entries", async (req, res) => {
     try {
       const { workforceService } = await import("./services/workforce.service");
-      const entries = await workforceService.getTimeEntries(DEFAULT_TENANT_ID, req.query);
+      const { employeeId, projectId, status } = req.query as { employeeId?: string; projectId?: string; status?: string };
+        const now = new Date();
+        const startDate = req.query.startDate ? new Date(req.query.startDate as string) : new Date(now.getFullYear(), now.getMonth(), 1);
+        const endDate = req.query.endDate ? new Date(req.query.endDate as string) : now;
+        const entries = await workforceService.getTimeEntries(DEFAULT_TENANT_ID, { employeeId, projectId, startDate, endDate, status });
       res.json(entries);
     } catch (error) {
       console.error("Error fetching time entries:", error);
-      res.status(500).json({ error: error?.message ?? "Failed to fetch time entries" });
+      res.status(500).json({ error: (error as Error)?.message ?? "Failed to fetch time entries" });
     }
   });
 
@@ -23835,7 +23838,7 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
       res.status(201).json(entry);
     } catch (error) {
       console.error("Error creating time entry:", error);
-      res.status(500).json({ error: error?.message ?? "Failed to create time entry" });
+      res.status(500).json({ error: (error as Error)?.message ?? "Failed to create time entry" });
     }
   });
 
@@ -23843,12 +23846,15 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
   app.get("/api/workforce/stats", async (req, res) => {
     try {
       const { workforceService } = await import("./services/workforce.service");
-      const laborSummary = await workforceService.getLaborCostSummary(DEFAULT_TENANT_ID, req.query);
-      const crewAssignments = await workforceService.getCrewAssignments(DEFAULT_TENANT_ID, req.query);
-      res.json({ laborSummary, crewCount: crewAssignments.length });
+        const { projectId: wPid, employeeId: wEid, startDate: wSd, endDate: wEd } = req.query as { projectId?: string; employeeId?: string; startDate?: string; endDate?: string };
+        const wNow = new Date();
+        const wStartDate = wSd ? new Date(wSd) : new Date(wNow.getFullYear(), wNow.getMonth(), 1);
+        const wEndDate = wEd ? new Date(wEd) : wNow;
+        const laborSummary = await workforceService.getLaborCostSummary(DEFAULT_TENANT_ID, { projectId: wPid, startDate: wStartDate, endDate: wEndDate });
+        const crewAssignments = await workforceService.getCrewAssignments(DEFAULT_TENANT_ID, { projectId: wPid, employeeId: wEid });
     } catch (error) {
       console.error("Error fetching workforce stats:", error);
-      res.status(500).json({ error: error?.message ?? "Failed to fetch workforce stats" });
+      res.status(500).json({ error: (error as Error)?.message ?? "Failed to fetch workforce stats" });
     }
   });
 
