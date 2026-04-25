@@ -11,6 +11,7 @@ import {
   auditEvents,
   approvalRequests,
   agentActivities,
+  herbieFacts,
 } from "@shared/schema";
 import { eq, and, sql } from "drizzle-orm";
 
@@ -491,6 +492,102 @@ export async function seedDemo() {
   }
   console.log("[seed-demo] Audit events reseeded:", auditSeeds.length);
 
+  // Herbie facts: things Herbie has "extracted" from the contract + COIs.
+  // These let the demo's "Ask Herbie: what's the notice-to-cure window in
+  // the contract?" beat at 3:30 return a grounded answer without needing
+  // a real document parse mid-demo. Wipe-and-reseed scoped to the project.
+  const factSeeds: Array<{
+    subjectType: string;
+    subjectId: string | null;
+    predicate: string;
+    object: string | null;
+    objectJson: Record<string, unknown> | null;
+    sourceType: string;
+    confidence: string;
+    ageMin: number;
+  }> = [
+    {
+      subjectType: "project",
+      subjectId: projectId,
+      predicate: "notice_to_cure_days",
+      object: "10",
+      objectJson: { value: 10, unit: "calendar_days", clause_ref: "Article 14.2" },
+      sourceType: "document",
+      confidence: "0.95",
+      ageMin: 28,
+    },
+    {
+      subjectType: "project",
+      subjectId: projectId,
+      predicate: "liquidated_damages_per_day",
+      object: "1500",
+      objectJson: { amount_usd: 1500, clause_ref: "Article 8.4" },
+      sourceType: "document",
+      confidence: "0.92",
+      ageMin: 28,
+    },
+    {
+      subjectType: "project",
+      subjectId: projectId,
+      predicate: "substantial_completion_date",
+      object: daysFromNow(120).toISOString().slice(0, 10),
+      objectJson: null,
+      sourceType: "document",
+      confidence: "0.97",
+      ageMin: 28,
+    },
+    {
+      subjectType: "project",
+      subjectId: projectId,
+      predicate: "retainage_pct",
+      object: "10",
+      objectJson: { pct: 10, released_at: "substantial_completion" },
+      sourceType: "document",
+      confidence: "0.90",
+      ageMin: 28,
+    },
+    {
+      subjectType: "vendor",
+      subjectId: vendorIdByNumber["V-ACME-001"],
+      predicate: "coi_gl_expires_at",
+      object: coiExpiry.toISOString().slice(0, 10),
+      objectJson: { carrier: "Hartford", policy_number: "HTF-2026-44128" },
+      sourceType: "document",
+      confidence: "0.94",
+      ageMin: 6,
+    },
+    {
+      subjectType: "vendor",
+      subjectId: vendorIdByNumber["V-SUMMIT-001"],
+      predicate: "coi_gl_status",
+      object: "expired",
+      objectJson: { expired_on: daysFromNow(-5).toISOString().slice(0, 10) },
+      sourceType: "document",
+      confidence: "0.96",
+      ageMin: 6,
+    },
+  ];
+
+  await db
+    .delete(herbieFacts)
+    .where(and(eq(herbieFacts.tenantId, TENANT_ID), eq(herbieFacts.projectId, projectId)));
+
+  for (const f of factSeeds) {
+    await db.insert(herbieFacts).values({
+      tenantId: TENANT_ID,
+      projectId,
+      subjectType: f.subjectType,
+      subjectId: f.subjectId,
+      predicate: f.predicate,
+      object: f.object,
+      objectJson: f.objectJson,
+      sourceType: f.sourceType,
+      confidence: f.confidence,
+      extractedAt: new Date(Date.now() - f.ageMin * 60_000),
+    });
+  }
+  console.log("[seed-demo] Herbie facts reseeded:", factSeeds.length);
+
   return {
     projectId,
     projectNumber: PROJECT_NUMBER,
@@ -507,6 +604,7 @@ export async function seedDemo() {
       approvals: 1,
       agentActivities: agentActivitySeeds.length,
       auditEvents: auditSeeds.length,
+      herbieFacts: factSeeds.length,
     },
   };
 }
