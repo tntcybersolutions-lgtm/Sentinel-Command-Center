@@ -101,6 +101,36 @@ const DEFAULT_TAKEOFF_CATEGORIES = [
   { id: "cabling", name: "Cabling", code: "CABL", trade: "cabling", defaultUnit: "LF" },
 ];
 
+const IMPORT_TEMPLATES: Record<string, Array<{ name: string; categoryName: string; quantity: number; unit: string; unitCost: number }>> = {
+  architectural: [
+    { name: "Drywall", categoryName: "Drywall", quantity: 8500, unit: "SF", unitCost: 2.50 },
+    { name: "Doors & Hardware", categoryName: "Doors & Hardware", quantity: 24, unit: "EA", unitCost: 425.00 },
+    { name: "Flooring", categoryName: "Flooring", quantity: 6200, unit: "SF", unitCost: 4.75 },
+  ],
+  structural: [
+    { name: "Concrete", categoryName: "Concrete", quantity: 150, unit: "CY", unitCost: 180.00 },
+    { name: "Framing", categoryName: "Framing", quantity: 2500, unit: "LF", unitCost: 8.00 },
+  ],
+  electrical: [
+    { name: "Electrical Devices", categoryName: "Electrical Devices", quantity: 85, unit: "EA", unitCost: 45.00 },
+    { name: "Cabling", categoryName: "Cabling", quantity: 1800, unit: "LF", unitCost: 3.25 },
+  ],
+  mep: [
+    { name: "Electrical Devices", categoryName: "Electrical Devices", quantity: 60, unit: "EA", unitCost: 45.00 },
+    { name: "Plumbing Fixtures", categoryName: "Plumbing Fixtures", quantity: 18, unit: "EA", unitCost: 380.00 },
+  ],
+  low_voltage: [
+    { name: "Low-Voltage Devices", categoryName: "Low-Voltage Devices", quantity: 42, unit: "EA", unitCost: 95.00 },
+    { name: "Cabling", categoryName: "Cabling", quantity: 3200, unit: "LF", unitCost: 1.85 },
+  ],
+  fire_life_safety: [
+    { name: "Fire Devices", categoryName: "Fire Devices", quantity: 36, unit: "EA", unitCost: 125.00 },
+  ],
+  default: [
+    { name: "Generic Item", categoryName: "Concrete", quantity: 100, unit: "EA", unitCost: 25.00 },
+  ],
+};
+
 const AUTO_BUILD_PHASES = [
   { name: "Framing", type: "framing", dependencies: [], inspections: ["Rough Framing"], submittals: ["Lumber Shop Drawings"] },
   { name: "Electrical Rough-In", type: "electrical_rough", dependencies: ["Framing"], inspections: ["Electrical Rough"], submittals: ["Panel Schedules", "Fixture Cut Sheets"] },
@@ -171,6 +201,8 @@ export default function DesignSystems() {
   const [isUploadOpen, setIsUploadOpen] = useState(false);
   const [isAutoBuildOpen, setIsAutoBuildOpen] = useState(false);
   const [isNewTakeoffOpen, setIsNewTakeoffOpen] = useState(false);
+  const [isImportTakeoffOpen, setIsImportTakeoffOpen] = useState(false);
+  const [importSheetId, setImportSheetId] = useState<string>("");
   const [isAddSystemOpen, setIsAddSystemOpen] = useState(false);
   const [isEditTakeoffOpen, setIsEditTakeoffOpen] = useState(false);
   const [isEditSystemOpen, setIsEditSystemOpen] = useState(false);
@@ -315,6 +347,75 @@ export default function DesignSystems() {
     },
   });
 
+  const importTakeoffFromSheetMutation = useMutation({
+    mutationFn: async (sheetId: string) => {
+      const sheet = drawingSheets.find(s => s.id === sheetId);
+      if (!sheet) throw new Error("Drawing sheet not found");
+      const templates = IMPORT_TEMPLATES[sheet.discipline] || IMPORT_TEMPLATES.default;
+
+      const skipped: string[] = [];
+      const failed: Array<{ name: string; error: string }> = [];
+      let created = 0;
+
+      for (const t of templates) {
+        const cat = takeoffCategoriesData.find(c => c.name === t.categoryName);
+        if (!cat) {
+          skipped.push(t.categoryName);
+          continue;
+        }
+        try {
+          await apiRequest("POST", "/api/takeoff-quantities", {
+            categoryId: cat.id,
+            sheetId: sheet.id,
+            room: `${sheet.sheetNumber} — ${sheet.sheetTitle}`,
+            floor: "",
+            quantity: t.quantity.toString(),
+            unit: t.unit,
+            unitCost: t.unitCost.toFixed(2),
+            extendedCost: (t.quantity * t.unitCost).toFixed(2),
+          });
+          created++;
+        } catch (err) {
+          failed.push({ name: t.name, error: err instanceof Error ? err.message : String(err) });
+        }
+      }
+
+      // Refresh the list whenever ANY rows were written, even on partial failure
+      if (created > 0) {
+        await queryClient.invalidateQueries({ queryKey: ["/api/takeoff-quantities"] });
+      }
+      return { created, skipped, failed, sheet };
+    },
+    onSuccess: ({ created, skipped, failed, sheet }) => {
+      // Treat zero-created as an error so the user knows nothing actually happened
+      if (created === 0) {
+        const reason = skipped.length > 0
+          ? `No matching takeoff categories found for ${sheet.discipline}. Missing: ${skipped.join(", ")}.`
+          : failed.length > 0
+            ? `All ${failed.length} item(s) failed: ${failed[0].error}`
+            : "No items to import.";
+        toast({ title: "Nothing imported", description: reason, variant: "destructive" });
+        return;
+      }
+
+      const parts: string[] = [`Created ${created} takeoff item${created === 1 ? "" : "s"} from ${sheet.sheetNumber}`];
+      if (skipped.length > 0) parts.push(`skipped ${skipped.length} (no matching category)`);
+      if (failed.length > 0) parts.push(`${failed.length} failed`);
+
+      const isPartial = skipped.length > 0 || failed.length > 0;
+      toast({
+        title: isPartial ? "Import partially complete" : "Import complete",
+        description: parts.join(", ") + ".",
+        variant: isPartial ? "destructive" : "default",
+      });
+      setIsImportTakeoffOpen(false);
+      setImportSheetId("");
+    },
+    onError: (error: Error) => {
+      toast({ title: "Import failed", description: error.message, variant: "destructive" });
+    },
+  });
+
   const updateSystemMutation = useMutation({
     mutationFn: async (data: { id: string; systemName: string; status: string; completionPercent: number; commissioningStatus: string; asBuiltStatus: string }) => {
       return apiRequest("PATCH", `/api/building-systems/${data.id}`, data);
@@ -408,29 +509,48 @@ export default function DesignSystems() {
   });
 
   const exportTakeoffCSV = () => {
-    const headers = ["Category", "Trade", "Room", "Floor", "Quantity", "Unit", "Unit Cost", "Extended Cost"];
-    const rows = takeoffQuantities.map(tq => {
-      const cat = takeoffCategories.find(c => c.id === tq.categoryId);
-      return [
-        cat?.name || "Unknown",
-        cat?.trade || "Unknown",
-        tq.room || "",
-        tq.floor || "",
-        tq.quantity,
-        tq.unit,
-        tq.unitCost || "",
-        tq.extendedCost || "",
-      ].join(",");
-    });
-    const csv = [headers.join(","), ...rows].join("\n");
-    const blob = new Blob([csv], { type: "text/csv" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `takeoff_export_${new Date().toISOString().split("T")[0]}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-    toast({ title: "Export complete", description: "Takeoff data exported to CSV" });
+    try {
+      if (!takeoffQuantities || takeoffQuantities.length === 0) {
+        toast({ title: "Nothing to export", description: "No takeoff items found.", variant: "destructive" });
+        return;
+      }
+      const esc = (v: unknown) => {
+        const s = v === null || v === undefined ? "" : String(v);
+        return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+      };
+      const headers = ["Category", "Trade", "Room", "Floor", "Quantity", "Unit", "Unit Cost", "Extended Cost"];
+      const rows = takeoffQuantities.map(tq => {
+        const cat = takeoffCategories.find(c => c.id === tq.categoryId);
+        const qty = Number(tq.quantity ?? 0);
+        const unitCost = Number(tq.unitCost ?? 0);
+        const extended = tq.extendedCost != null ? Number(tq.extendedCost) : qty * unitCost;
+        return [
+          cat?.name || "Unknown",
+          cat?.trade || "Unknown",
+          tq.room || "",
+          tq.floor || "",
+          qty.toFixed(2),
+          tq.unit,
+          unitCost.toFixed(2),
+          extended.toFixed(2),
+        ].map(esc).join(",");
+      });
+      const csv = "\ufeff" + [headers.join(","), ...rows].join("\n");
+      const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `takeoff_export_${new Date().toISOString().split("T")[0]}.csv`;
+      a.style.display = "none";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      toast({ title: "Export complete", description: `${rows.length} takeoff items exported.` });
+    } catch (err) {
+      console.error("CSV export failed:", err);
+      toast({ title: "Export failed", description: err instanceof Error ? err.message : "Unknown error", variant: "destructive" });
+    }
   };
 
   const downloadDeliverable = (type: string) => {
@@ -1119,10 +1239,74 @@ export default function DesignSystems() {
                   </form>
                 </DialogContent>
               </Dialog>
-              <Button variant="outline" onClick={() => setIsUploadOpen(true)} data-testid="button-import-takeoff">
+              <Button variant="outline" onClick={() => { setImportSheetId(""); setIsImportTakeoffOpen(true); }} data-testid="button-import-takeoff">
                 <Upload className="h-4 w-4 mr-2" />
                 Import from Plans
               </Button>
+              <Dialog open={isImportTakeoffOpen} onOpenChange={setIsImportTakeoffOpen}>
+                <DialogContent>
+                  <DialogHeader>
+                    <DialogTitle>Import Takeoff from Plans</DialogTitle>
+                    <DialogDescription>
+                      Select a drawing sheet to auto-populate takeoff quantities based on its discipline.
+                    </DialogDescription>
+                  </DialogHeader>
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      if (!importSheetId) {
+                        toast({ title: "No sheet selected", description: "Choose a drawing sheet to import from.", variant: "destructive" });
+                        return;
+                      }
+                      importTakeoffFromSheetMutation.mutate(importSheetId);
+                    }}
+                    className="space-y-4"
+                  >
+                    <div className="space-y-2">
+                      <Label htmlFor="import-sheet">Drawing Sheet</Label>
+                      <Select value={importSheetId} onValueChange={setImportSheetId}>
+                        <SelectTrigger id="import-sheet" data-testid="select-import-sheet">
+                          <SelectValue placeholder="Select a drawing sheet..." />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {drawingSheets.length === 0 && (
+                            <div className="px-2 py-1.5 text-sm text-muted-foreground">
+                              No sheets available — upload some first.
+                            </div>
+                          )}
+                          {drawingSheets.map((s) => (
+                            <SelectItem key={s.id} value={s.id} data-testid={`option-import-sheet-${s.id}`}>
+                              {s.sheetNumber} — {s.sheetTitle} ({s.discipline})
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    {importSheetId && (() => {
+                      const selected = drawingSheets.find(s => s.id === importSheetId);
+                      const preview = selected ? IMPORT_TEMPLATES[selected.discipline] || IMPORT_TEMPLATES.default : [];
+                      return (
+                        <div className="rounded-md border bg-muted/30 p-3 space-y-1.5" data-testid="import-preview">
+                          <div className="text-sm font-medium">Will create {preview.length} takeoff item{preview.length === 1 ? "" : "s"}:</div>
+                          {preview.map((p, i) => (
+                            <div key={i} className="text-xs text-muted-foreground">
+                              • {p.name} — {p.quantity} {p.unit} @ ${p.unitCost.toFixed(2)} = ${(p.quantity * p.unitCost).toLocaleString()}
+                            </div>
+                          ))}
+                        </div>
+                      );
+                    })()}
+                    <Button
+                      type="submit"
+                      className="w-full"
+                      disabled={!importSheetId || importTakeoffFromSheetMutation.isPending}
+                      data-testid="button-confirm-import-takeoff"
+                    >
+                      {importTakeoffFromSheetMutation.isPending ? "Importing..." : "Auto-Populate Quantities"}
+                    </Button>
+                  </form>
+                </DialogContent>
+              </Dialog>
               <Dialog open={isEditTakeoffOpen} onOpenChange={(open) => { setIsEditTakeoffOpen(open); if (!open) setEditingTakeoff(null); }}>
                 <DialogContent>
                   <DialogHeader>
