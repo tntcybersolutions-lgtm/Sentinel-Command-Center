@@ -353,6 +353,7 @@ function Router() {
       <Route path="/companies" component={() => <LegacyRedirect to="/capture/agencies" />} />
       <Route path="/company-jackets" component={() => <LegacyRedirect to="/capture/agencies" />} />
       <Route path="/bids" component={() => <LegacyRedirect to="/capture/pipeline" />} />
+      <Route path="/bid" component={() => <LegacyRedirect to="/capture/pipeline" />} />
       <Route path="/bid-jacket/:id" component={() => <SafeRoute component={BidJacket} name="BidJacket" />} />
       <Route path="/projects" component={() => <LegacyRedirect to="/projects/active" />} />
       <Route path="/compliance" component={() => <LegacyRedirect to="/financial/compliance" />} />
@@ -378,8 +379,10 @@ function Router() {
       <Route path="/design-systems" component={() => <LegacyRedirect to="/estimate/design-systems" />} />
       <Route path="/blueprint-hub" component={() => <LegacyRedirect to="/estimate/blueprints" />} />
       <Route path="/takeoff-engine" component={() => <LegacyRedirect to="/estimate/takeoff" />} />
-      <Route path="/systems-matrix" component={() => <LegacyRedirect to="/estimate/design-systems" />} />
-      <Route path="/auto-build" component={() => <LegacyRedirect to="/estimate/design-systems" />} />
+      <Route path="/systems-matrix" component={() => <LegacyRedirect to="/estimate/design-systems?tab=systems" />} />
+      <Route path="/building-systems" component={() => <LegacyRedirect to="/estimate/design-systems?tab=systems" />} />
+      <Route path="/estimate/systems" component={() => <LegacyRedirect to="/estimate/design-systems?tab=systems" />} />
+      <Route path="/auto-build" component={() => <LegacyRedirect to="/estimate/design-systems?tab=overview" />} />
       <Route path="/herbie" component={() => <LegacyRedirect to="/automation/herbie" />} />
       <Route path="/inventory" component={() => <LegacyRedirect to="/execution/inventory" />} />
       <Route path="/tickets" component={() => <LegacyRedirect to="/execution/tickets" />} />
