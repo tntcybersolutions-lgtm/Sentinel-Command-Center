@@ -636,13 +636,11 @@ export default function DesignSystems() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <Button onClick={() => setIsUploadOpen(true)} data-testid="button-upload-plans">
+            <Upload className="h-4 w-4 mr-2" />
+            Upload Plans
+          </Button>
           <Dialog open={isUploadOpen} onOpenChange={setIsUploadOpen}>
-            <DialogTrigger asChild>
-              <Button data-testid="button-upload-plans">
-                <Upload className="h-4 w-4 mr-2" />
-                Upload Plans
-              </Button>
-            </DialogTrigger>
             <DialogContent>
               <DialogHeader>
                 <DialogTitle>Upload Drawing Sheets</DialogTitle>
