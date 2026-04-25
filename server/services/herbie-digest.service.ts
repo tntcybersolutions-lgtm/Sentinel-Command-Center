@@ -131,7 +131,7 @@ async function gatherCoiItems(
       projectId: coi.projectId ?? undefined,
       projectName: coi.projectId ? projectNameMap.get(coi.projectId) : undefined,
       actionType: "renew_coi",
-      createdAt: coi.createdAt.toISOString(),
+      createdAt: (coi.createdAt ?? now).toISOString(),
     };
   });
 }
