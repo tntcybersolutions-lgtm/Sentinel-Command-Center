@@ -19025,7 +19025,14 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
         }
       }
 
-      const [overdueTaskRows, openRfiRows, pendingSubmittalRows, orphanPoRows, unpaidInvoiceRows, missingArtifactRows, checklistTodoRows] = await Promise.all([
+      // Pending approvals — counted from approval_requests so the
+      // Approvals nav badge reflects real "needs your attention" totals.
+      const pendingApprovalConditions: any[] = [
+        eq(schema.approvalRequests.tenantId, DEFAULT_TENANT_ID),
+        eq(schema.approvalRequests.status, "pending"),
+      ];
+
+      const [overdueTaskRows, openRfiRows, pendingSubmittalRows, orphanPoRows, unpaidInvoiceRows, missingArtifactRows, checklistTodoRows, pendingApprovalRows] = await Promise.all([
         db.select({ count: sql<number>`count(*)::int` }).from(schema.projectTasks).where(and(...taskConditions)),
         db.select({ count: sql<number>`count(*)::int` }).from(schema.rfis).where(and(...rfiConditions)),
         db.select({ count: sql<number>`count(*)::int` }).from(schema.submittals).where(and(...submittalConditions)),
@@ -19033,15 +19040,21 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
         db.select({ count: sql<number>`count(*)::int` }).from(schema.invoices).where(and(...invoiceConditions)),
         db.select({ count: sql<number>`count(*)::int` }).from(bidJacketArtifacts).where(and(...missingArtifactConditions)),
         db.select({ count: sql<number>`count(*)::int` }).from(bidJacketChecklistItems).where(and(...checklistTodoConditions)),
+        db.select({ count: sql<number>`count(*)::int` }).from(schema.approvalRequests).where(and(...pendingApprovalConditions)),
       ]);
 
+      const overdueTaskCount = overdueTaskRows[0]?.count ?? 0;
+      const pendingApprovalCount = pendingApprovalRows[0]?.count ?? 0;
+
       res.json({
-        overdueTaskCount: overdueTaskRows[0]?.count ?? 0,
+        overdueTaskCount,
         openRfiCount: openRfiRows[0]?.count ?? 0,
         pendingSubmittalCount: pendingSubmittalRows[0]?.count ?? 0,
         orphanPurchaseOrderCount: orphanPoRows[0]?.count ?? 0,
         unpaidInvoiceCount: unpaidInvoiceRows[0]?.count ?? 0,
-        approvalsNeededCount: 0,
+        // Approvals badge = pending approval requests + overdue items needing attention.
+        approvalsNeededCount: pendingApprovalCount + overdueTaskCount,
+        pendingApprovalCount,
         missingArtifactsCount: missingArtifactRows[0]?.count ?? 0,
         checklistTodoCount: checklistTodoRows[0]?.count ?? 0,
       });
