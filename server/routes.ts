@@ -1355,6 +1355,105 @@ export async function registerRoutes(
     }
   });
 
+  // Phase C — Proactive Intelligence page consumes a semantically-named
+  // surface. These are thin aliases over the dashboard_tasks endpoints
+  // above so we don't fork persistence or analysis logic.
+  app.get("/api/proactive-intelligence/tasks", async (req: Request, res: Response) => {
+    try {
+      const tenantId = DEFAULT_TENANT_ID;
+      const statusFilter = pOpt(req.query.status as string);
+      const priorityFilter = pOpt(req.query.priority as string);
+      const rows = await db
+        .select()
+        .from(dashboardTasks)
+        .where(eq(dashboardTasks.tenantId, tenantId))
+        .orderBy(asc(dashboardTasks.position), desc(dashboardTasks.createdAt))
+        .limit(200);
+      const now = new Date();
+      const filtered = rows.filter((t) => {
+        if (statusFilter && t.status !== statusFilter) return false;
+        if (priorityFilter && t.priority !== priorityFilter) return false;
+        if (t.status === "snoozed" && t.snoozeUntil && new Date(t.snoozeUntil) > now) return false;
+        // Page only shows actionable items, not items already done.
+        if (t.status === "done") return false;
+        return true;
+      });
+      res.json(filtered);
+    } catch (error) {
+      handleRouteError(res, error, "Failed to fetch proactive intelligence tasks");
+    }
+  });
+
+  app.post("/api/proactive-intelligence/run", async (_req: Request, res: Response) => {
+    try {
+      const { runProactiveAnalysis } = await import("./services/proactive-intelligence.service");
+      const result = await runProactiveAnalysis(DEFAULT_TENANT_ID);
+      res.json(result);
+    } catch (error) {
+      handleRouteError(res, error, "Failed to run proactive analysis");
+    }
+  });
+
+  app.post(
+    "/api/proactive-intelligence/tasks/:id/execute",
+    async (req: Request, res: Response) => {
+      // Forward to the shared execute handler by re-invoking the same path
+      // logic. Cleanest is to reuse via internal HTTP redirect of intent —
+      // we just call the same service directly to avoid an extra hop.
+      try {
+        const tenantId = DEFAULT_TENANT_ID;
+        const taskId = p(req.params.id, "id");
+        const [task] = await db
+          .select()
+          .from(dashboardTasks)
+          .where(and(eq(dashboardTasks.id, taskId), eq(dashboardTasks.tenantId, tenantId)));
+        if (!task) return res.status(404).json({ error: "Task not found" });
+
+        const payload = (task.actionPayload || {}) as Record<string, any>;
+        let result: any = { executed: false, reason: "Unknown action type" };
+
+        switch (task.actionType) {
+          case "run_ingestion": {
+            const bpId = payload.bidProjectId;
+            if (bpId) {
+              const { runFullIngestion } = await import(
+                "./services/ingestion-pipeline.service"
+              );
+              const ingResult = await runFullIngestion(tenantId, bpId);
+              result = { executed: true, ingestion: ingResult };
+            }
+            break;
+          }
+          case "seed_checklist": {
+            const bpId = payload.bidProjectId;
+            if (bpId) {
+              const { seedChecklistForBidProject } = await import(
+                "./services/bid-jacket-artifacts.service"
+              );
+              await seedChecklistForBidProject(tenantId, bpId);
+              result = { executed: true };
+            }
+            break;
+          }
+          default:
+            // For task types without a wired-up automation we still let the
+            // user mark the item "done" so the page stays clean.
+            result = { executed: true, note: "Marked complete (no automation wired)" };
+        }
+
+        await db
+          .update(dashboardTasks)
+          .set({ status: "done", completedAt: new Date(), completedBy: "user", updatedAt: new Date() })
+          .where(and(eq(dashboardTasks.id, taskId), eq(dashboardTasks.tenantId, tenantId)));
+        eventStreamService.emit("TASK_UPDATED", tenantId, { taskId, action: "executed" });
+
+        res.json(result);
+      } catch (error) {
+        handleRouteError(res, error, "Failed to execute proactive intelligence task");
+      }
+    },
+  );
+
   app.get("/api/dashboard/activity", async (_req: Request, res: Response) => {
     try {
       const tenantId = DEFAULT_TENANT_ID;
