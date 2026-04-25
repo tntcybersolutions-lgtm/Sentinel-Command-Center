@@ -6469,6 +6469,25 @@ export const insertCoiCertificateSchema = createInsertSchema(coiCertificates).om
 export type InsertCoiCertificate = z.infer<typeof insertCoiCertificateSchema>;
 export type CoiCertificate = typeof coiCertificates.$inferSelect;
 
+// Phase D — Per-user "Mark Resolved" dismissals for Herbie digest items.
+// Items are computed live from underlying entities (COIs, approvals, RFIs)
+// so we record a dismissal that hides the item until either the underlying
+// entity changes or the dismissal TTL elapses.
+export const herbieDigestDismissals = pgTable("herbie_digest_dismissals", {
+  id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id", { length: 36 }).notNull(),
+  entityType: text("entity_type").notNull(),
+  entityId: varchar("entity_id", { length: 36 }).notNull(),
+  dismissedUntil: timestamp("dismissed_until").notNull(),
+  dismissedBy: varchar("dismissed_by", { length: 36 }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  hddTenantEntityIdx: index("hdd_tenant_entity_idx").on(t.tenantId, t.entityType, t.entityId),
+  hddTenantUntilIdx: index("hdd_tenant_until_idx").on(t.tenantId, t.dismissedUntil),
+}));
+
+export type HerbieDigestDismissal = typeof herbieDigestDismissals.$inferSelect;
+
 export type HomeBucketKey = "urgent" | "needsAttention" | "highValue" | "approvals";
 export type HomePriority = "critical" | "high" | "medium" | "low";
 
