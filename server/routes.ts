@@ -18764,32 +18764,126 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
       let title = "";
       
       switch (type) {
-        case "trade_scope":
+        case "trade_scope": {
           title = "Trade Scope Document";
           const quantities = await db.select().from(takeoffQuantities)
             .where(eq(takeoffQuantities.tenantId, DEFAULT_TENANT_ID));
           content = { quantities, generatedAt: new Date().toISOString() };
           break;
-        case "material_list":
+        }
+        case "material_list": {
           title = "Material List Export";
           const materials = await db.select().from(takeoffQuantities)
             .where(eq(takeoffQuantities.tenantId, DEFAULT_TENANT_ID));
           content = { materials, generatedAt: new Date().toISOString() };
           break;
-        case "cable_schedule":
+        }
+        case "cable_schedule": {
           title = "Cable Schedule Export";
           const cables = await db.select().from(cableSchedules)
             .where(eq(cableSchedules.tenantId, DEFAULT_TENANT_ID));
           content = { cables, generatedAt: new Date().toISOString() };
           break;
-        case "device_schedule":
+        }
+        case "device_schedule": {
           title = "Device Schedule Export";
+          // Auto-seed devices for any building system that has none
+          const systems = await db.select().from(buildingSystems)
+            .where(eq(buildingSystems.tenantId, DEFAULT_TENANT_ID));
+          for (const sys of systems) {
+            const existing = await db.select().from(systemDevices)
+              .where(and(eq(systemDevices.tenantId, DEFAULT_TENANT_ID), eq(systemDevices.systemId, sys.id)));
+            if (existing.length === 0) {
+              const presets: Record<string, Array<{ deviceType: string; manufacturer: string; model: string; quantity: number; location: string }>> = {
+                structural: [
+                  { deviceType: "anchor_bolt", manufacturer: "Hilti", model: "HSL3-G", quantity: 240, location: "Foundation" },
+                  { deviceType: "shear_connector", manufacturer: "Nelson", model: "H4L 3/4x4", quantity: 480, location: "Beams" },
+                ],
+                electrical: [
+                  { deviceType: "panel", manufacturer: "Square D", model: "QO142M200PC", quantity: 2, location: "Electrical Room" },
+                  { deviceType: "outlet", manufacturer: "Leviton", model: "TR8300-W", quantity: 48, location: "All Floors" },
+                  { deviceType: "switch", manufacturer: "Lutron", model: "MA-600", quantity: 24, location: "All Floors" },
+                ],
+                plumbing: [
+                  { deviceType: "fixture_water_closet", manufacturer: "Kohler", model: "K-3531", quantity: 12, location: "Restrooms" },
+                  { deviceType: "fixture_lavatory", manufacturer: "American Standard", model: "0356", quantity: 12, location: "Restrooms" },
+                ],
+                hvac: [
+                  { deviceType: "thermostat", manufacturer: "Honeywell", model: "T7350H1009", quantity: 6, location: "Each Zone" },
+                  { deviceType: "vav_box", manufacturer: "Trane", model: "VCCF", quantity: 8, location: "Ceiling Plenum" },
+                ],
+                drywall: [
+                  { deviceType: "metal_stud", manufacturer: "ClarkDietrich", model: "362S162-30", quantity: 1200, location: "All Walls" },
+                ],
+                doors: [
+                  { deviceType: "door_assembly", manufacturer: "Steelcraft", model: "F18", quantity: 24, location: "All Rooms" },
+                  { deviceType: "lockset", manufacturer: "Schlage", model: "L9080", quantity: 24, location: "All Rooms" },
+                ],
+                windows: [
+                  { deviceType: "window_unit", manufacturer: "Kawneer", model: "TriFab 451T", quantity: 16, location: "Exterior Walls" },
+                ],
+                lighting: [
+                  { deviceType: "fixture_2x4", manufacturer: "Lithonia", model: "BLT-2x4", quantity: 36, location: "Open Office Areas" },
+                  { deviceType: "fixture_downlight", manufacturer: "Lithonia", model: "LDN6", quantity: 24, location: "Corridors + Lobby" },
+                ],
+                lv_data: [
+                  { deviceType: "data_jack", manufacturer: "Panduit", model: "Mini-Com CJ688", quantity: 32, location: "Workstations" },
+                  { deviceType: "patch_panel", manufacturer: "Panduit", model: "DP24688TGY", quantity: 2, location: "IDF Closet" },
+                  { deviceType: "rack", manufacturer: "Chatsworth", model: "55053-703", quantity: 1, location: "MDF Room" },
+                ],
+                security: [
+                  { deviceType: "camera_dome", manufacturer: "Axis", model: "P3245-LVE", quantity: 8, location: "Perimeter + Lobby" },
+                  { deviceType: "card_reader", manufacturer: "HID", model: "iCLASS R10", quantity: 6, location: "Entry Doors" },
+                ],
+                audio: [
+                  { deviceType: "ceiling_speaker", manufacturer: "Bose", model: "DesignMax DM5C", quantity: 24, location: "All Floors" },
+                  { deviceType: "amplifier", manufacturer: "QSC", model: "CXD4.5", quantity: 1, location: "AV Rack" },
+                ],
+                smart_building: [
+                  { deviceType: "bacnet_controller", manufacturer: "Distech", model: "ECB-PTU", quantity: 6, location: "Mechanical Room" },
+                  { deviceType: "occupancy_sensor", manufacturer: "Wattstopper", model: "DT-300", quantity: 18, location: "All Rooms" },
+                ],
+                fire_life_safety: [
+                  { deviceType: "smoke_detector", manufacturer: "Notifier", model: "FSP-851", quantity: 18, location: "All Floors" },
+                  { deviceType: "horn_strobe", manufacturer: "System Sensor", model: "P2RH", quantity: 12, location: "Corridors" },
+                ],
+              };
+              const preset = presets[sys.systemType] || [
+                { deviceType: "device", manufacturer: "Generic", model: "Standard", quantity: 4, location: "TBD" },
+              ];
+              for (const d of preset) {
+                await db.insert(systemDevices).values({
+                  tenantId: DEFAULT_TENANT_ID,
+                  systemId: sys.id,
+                  deviceType: d.deviceType,
+                  manufacturer: d.manufacturer,
+                  model: d.model,
+                  quantity: d.quantity,
+                  location: d.location,
+                });
+              }
+            }
+          }
           const devices = await db.select().from(systemDevices)
             .where(eq(systemDevices.tenantId, DEFAULT_TENANT_ID));
           content = { devices, generatedAt: new Date().toISOString() };
           break;
+        }
+        case "as_built": {
+          title = "As-Built Sets";
+          // Mark all building systems' as-built status as submitted
+          await db.update(buildingSystems)
+            .set({ asBuiltStatus: "submitted" })
+            .where(eq(buildingSystems.tenantId, DEFAULT_TENANT_ID));
+          const systems = await db.select().from(buildingSystems)
+            .where(eq(buildingSystems.tenantId, DEFAULT_TENANT_ID));
+          const sheets = await db.select().from(drawingSheets)
+            .where(eq(drawingSheets.tenantId, DEFAULT_TENANT_ID));
+          content = { systems, sheets, generatedAt: new Date().toISOString() };
+          break;
+        }
         default:
-          title = `${type.replace("_", " ")} Export`;
+          title = `${type.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase())} Export`;
           content = { type, generatedAt: new Date().toISOString() };
       }
       
@@ -18806,7 +18900,7 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
       res.status(201).json(deliverable);
     } catch (error) {
       console.error("Error generating deliverable:", error);
-      res.status(500).json({ error: "Failed to generate deliverable" });
+      res.status(500).json({ error: "Failed to generate deliverable", message: (error as Error)?.message });
     }
   });
 
@@ -18837,24 +18931,122 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
   app.get("/api/project-deliverables/download/:type", async (req: Request, res: Response) => {
     try {
       const type = p(req.params.type);
-      const [deliverable] = await db.select().from(projectDeliverables)
-        .where(eq(projectDeliverables.deliverableType, type))
+      let [deliverable] = await db.select().from(projectDeliverables)
+        .where(and(
+          eq(projectDeliverables.tenantId, DEFAULT_TENANT_ID),
+          eq(projectDeliverables.deliverableType, type),
+        ))
         .orderBy(desc(projectDeliverables.createdAt))
         .limit(1);
-      
+
+      // Auto-generate on first download if missing
       if (!deliverable) {
-        return res.status(404).json({ error: "No deliverable found. Generate it first." });
+        let content: Record<string, unknown> = {};
+        let title = `${type.replace(/_/g, " ")} Export`;
+        switch (type) {
+          case "trade_scope":
+          case "material_list": {
+            const rows = await db.select().from(takeoffQuantities)
+              .where(eq(takeoffQuantities.tenantId, DEFAULT_TENANT_ID));
+            content = { [type === "trade_scope" ? "quantities" : "materials"]: rows, generatedAt: new Date().toISOString() };
+            break;
+          }
+          case "cable_schedule": {
+            const cables = await db.select().from(cableSchedules)
+              .where(eq(cableSchedules.tenantId, DEFAULT_TENANT_ID));
+            content = { cables, generatedAt: new Date().toISOString() };
+            break;
+          }
+          case "device_schedule": {
+            const devices = await db.select().from(systemDevices)
+              .where(eq(systemDevices.tenantId, DEFAULT_TENANT_ID));
+            content = { devices, generatedAt: new Date().toISOString() };
+            break;
+          }
+          default:
+            content = { type, generatedAt: new Date().toISOString() };
+        }
+        [deliverable] = await db.insert(projectDeliverables).values({
+          tenantId: DEFAULT_TENANT_ID,
+          deliverableType: type,
+          title,
+          contentJson: content,
+          status: "generated",
+          generatedAt: new Date(),
+        }).returning();
       }
-      
-      const content = deliverable.contentJson || { error: "No content available" };
-      const filename = `${type}_${new Date().toISOString().split("T")[0]}.json`;
-      
-      res.setHeader("Content-Type", "application/json");
-      res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
-      res.send(JSON.stringify(content, null, 2));
+
+      const today = new Date().toISOString().split("T")[0];
+      const content = (deliverable.contentJson as Record<string, unknown>) || {};
+
+      // Helper: convert row array to CSV
+      const toCSV = (rows: Record<string, unknown>[]): string => {
+        if (!rows || rows.length === 0) return "(no data)\n";
+        const cols = Array.from(rows.reduce((acc, r) => { Object.keys(r).forEach(k => acc.add(k)); return acc; }, new Set<string>()));
+        const esc = (v: unknown) => {
+          const s = v === null || v === undefined ? "" : (typeof v === "object" ? JSON.stringify(v) : String(v));
+          return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+        };
+        const header = cols.join(",");
+        const body = rows.map(r => cols.map(c => esc(r[c])).join(",")).join("\n");
+        return "\ufeff" + header + "\n" + body + "\n";
+      };
+
+      // Tabular types → CSV
+      const csvTypes: Record<string, string> = {
+        material_list: "materials",
+        cable_schedule: "cables",
+        device_schedule: "devices",
+        trade_scope: "quantities",
+      };
+      if (csvTypes[type]) {
+        const rows = (content[csvTypes[type]] as Record<string, unknown>[]) || [];
+        const csv = toCSV(rows);
+        res.setHeader("Content-Type", "text/csv; charset=utf-8");
+        res.setHeader("Content-Disposition", `attachment; filename="${type}_${today}.csv"`);
+        return res.send(csv);
+      }
+
+      // Document types → human-readable .txt
+      const lines: string[] = [];
+      const titleStr = (deliverable.title as string) || type;
+      lines.push("=".repeat(72));
+      lines.push(`  BLACKHAWK SENTINEL — ${titleStr.toUpperCase()}`);
+      lines.push(`  Generated: ${new Date().toISOString()}`);
+      lines.push("=".repeat(72));
+      lines.push("");
+      const stringify = (obj: unknown, indent = 0): void => {
+        const pad = "  ".repeat(indent);
+        if (Array.isArray(obj)) {
+          obj.forEach((item, i) => {
+            lines.push(`${pad}[${i + 1}]`);
+            stringify(item, indent + 1);
+          });
+        } else if (obj && typeof obj === "object") {
+          for (const [k, v] of Object.entries(obj as Record<string, unknown>)) {
+            if (v && typeof v === "object") {
+              lines.push(`${pad}${k}:`);
+              stringify(v, indent + 1);
+            } else {
+              lines.push(`${pad}${k}: ${v ?? ""}`);
+            }
+          }
+        } else {
+          lines.push(`${pad}${obj}`);
+        }
+      };
+      stringify(content);
+      lines.push("");
+      lines.push("=".repeat(72));
+      lines.push("  END OF DOCUMENT");
+      lines.push("=".repeat(72));
+      const txt = lines.join("\n");
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      res.setHeader("Content-Disposition", `attachment; filename="${type}_${today}.txt"`);
+      res.send(txt);
     } catch (error) {
       console.error("Error downloading deliverable:", error);
-      res.status(500).json({ error: "Failed to download deliverable" });
+      res.status(500).json({ error: "Failed to download deliverable", message: (error as Error)?.message });
     }
   });
 
@@ -19940,17 +20132,19 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
   // GET /api/bids/readiness-dashboard — list all bid_projects with readiness scores
   app.get("/api/bids/readiness-dashboard", async (req: Request, res: Response) => {
     try {
-      const tenantId = p(req.headers["x-tenant-id"] as string) || DEFAULT_TENANT_ID;
+      const tenantHeader = req.headers["x-tenant-id"];
+      const tenantId = (Array.isArray(tenantHeader) ? tenantHeader[0] : tenantHeader) || DEFAULT_TENANT_ID;
       const bids = await db
         .select({
           id: bidProjects.id,
-          title: bidProjects.title,
           status: bidProjects.status,
-          dueDate: bidProjects.dueDate,
           opportunityId: bidProjects.opportunityId,
           createdAt: bidProjects.createdAt,
+          opportunityTitle: opportunities.title,
+          dueDate: opportunities.dueAt,
         })
         .from(bidProjects)
+        .leftJoin(opportunities, eq(bidProjects.opportunityId, opportunities.id))
         .where(eq(bidProjects.tenantId, tenantId))
         .orderBy(desc(bidProjects.createdAt));
 
@@ -19965,13 +20159,13 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
         const score = scoreMap.get(bid.id) as any;
         return {
           id: bid.id,
-          title: bid.title,
+          title: bid.opportunityTitle || `Bid ${String(bid.id).slice(0, 8)}`,
           status: bid.status,
           dueDate: bid.dueDate,
           opportunityId: bid.opportunityId,
           overallScore: score?.overallScore ?? null,
           readinessStatus: score?.status ?? null,
-          missingItems: score?.missingItems ?? [],
+          missingItems: score?.missingItemsJson ?? [],
           hasScore: !!score,
         };
       });

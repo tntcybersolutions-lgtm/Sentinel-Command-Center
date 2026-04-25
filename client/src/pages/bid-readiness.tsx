@@ -103,9 +103,9 @@ export default function BidReadinessDashboard() {
       </div>
 
       <div className="grid grid-cols-4 gap-4">
-        <Card>
+        <Card className="border-blue-200">
           <CardContent className="pt-4">
-            <div className="text-3xl font-bold text-gray-900">{isLoading ? "—" : bids.length}</div>
+            <div className="text-3xl font-bold text-blue-600" data-testid="text-total-bids">{isLoading ? "—" : bids.length}</div>
             <div className="text-sm text-gray-500 mt-1">Total Bids</div>
           </CardContent>
         </Card>

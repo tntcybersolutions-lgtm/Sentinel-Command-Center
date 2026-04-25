@@ -184,10 +184,16 @@ export default function DesignSystems() {
   const [location] = useLocation();
   
   const getTabFromPath = (path: string): string => {
-    if (path === "/blueprint-hub") return "blueprint-hub";
-    if (path === "/takeoff-engine") return "takeoff";
-    if (path === "/systems-matrix") return "systems";
-    if (path === "/auto-build") return "overview";
+    // Support explicit ?tab= query string
+    if (typeof window !== "undefined") {
+      const tab = new URLSearchParams(window.location.search).get("tab");
+      if (tab && ["overview", "blueprint-hub", "takeoff", "systems", "deliverables"].includes(tab)) return tab;
+    }
+    if (path === "/blueprint-hub" || path === "/estimate/blueprint-hub") return "blueprint-hub";
+    if (path === "/takeoff-engine" || path === "/estimate/takeoff") return "takeoff";
+    if (path === "/systems-matrix" || path === "/estimate/systems") return "systems";
+    if (path === "/auto-build" || path === "/estimate/auto-build") return "overview";
+    if (path === "/deliverables" || path === "/estimate/deliverables") return "deliverables";
     return "overview";
   };
   
@@ -230,6 +236,10 @@ export default function DesignSystems() {
 
   const { data: takeoffCategoriesData = [] } = useQuery<TakeoffCategory[]>({
     queryKey: ["/api/takeoff-categories"],
+  });
+
+  const { data: systemDevicesAll = [] } = useQuery<Array<{ id: string; systemId: string; deviceType: string; manufacturer?: string; model?: string; quantity: number; location?: string; installedCount?: number }>>({
+    queryKey: ["/api/system-devices"],
   });
 
   const takeoffCategories = takeoffCategoriesData.map(c => ({ id: c.id, name: c.name, trade: c.trade, unit: c.defaultUnit }));
@@ -314,7 +324,11 @@ export default function DesignSystems() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/building-systems"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/system-devices"] });
       toast({ title: "Systems synced", description: "All system statuses refreshed" });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Sync failed", description: error.message || "Could not refresh systems", variant: "destructive" });
     },
   });
 
@@ -471,6 +485,13 @@ export default function DesignSystems() {
     },
     onSuccess: (_, type) => {
       queryClient.invalidateQueries({ queryKey: ["/api/project-deliverables"] });
+      // device_schedule seeds devices; as_built updates building system status
+      if (type === "device_schedule") {
+        queryClient.invalidateQueries({ queryKey: ["/api/system-devices"] });
+      }
+      if (type === "as_built") {
+        queryClient.invalidateQueries({ queryKey: ["/api/building-systems"] });
+      }
       const titles: Record<string, string> = {
         trade_scope: "Trade Scopes",
         bid_package: "Bid Packages",
@@ -651,12 +672,20 @@ export default function DesignSystems() {
               <form onSubmit={(e) => {
                 e.preventDefault();
                 const formData = new FormData(e.currentTarget);
+                if (!uploadedStorageKey) {
+                  toast({
+                    title: "File required",
+                    description: "Please upload a drawing file before creating the sheet record.",
+                    variant: "destructive",
+                  });
+                  return;
+                }
                 uploadSheetMutation.mutate({
                   sheetNumber: formData.get("sheetNumber") as string,
                   sheetTitle: formData.get("sheetTitle") as string,
                   discipline: formData.get("discipline") as string,
                   fileType: formData.get("fileType") as string,
-                  storageKey: uploadedStorageKey || undefined,
+                  storageKey: uploadedStorageKey,
                 });
               }} className="space-y-4">
                 <div className="grid grid-cols-2 gap-4">
@@ -963,7 +992,7 @@ export default function DesignSystems() {
                   <Upload className="h-4 w-4 mr-2" />
                   Upload New Drawings
                 </Button>
-                <Button variant="outline" className="w-full justify-start" onClick={() => navigate("/takeoff-engine")} data-testid="button-quick-takeoff">
+                <Button variant="outline" className="w-full justify-start" onClick={() => setActiveTab("takeoff")} data-testid="button-quick-takeoff">
                   <Calculator className="h-4 w-4 mr-2" />
                   Start Takeoff
                 </Button>
@@ -1481,13 +1510,11 @@ export default function DesignSystems() {
         <TabsContent value="systems" className="space-y-6">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
+              <Button variant="outline" onClick={() => setIsAddSystemOpen(true)} data-testid="button-add-system">
+                <Plus className="h-4 w-4 mr-2" />
+                Add System
+              </Button>
               <Dialog open={isAddSystemOpen} onOpenChange={setIsAddSystemOpen}>
-                <DialogTrigger asChild>
-                  <Button variant="outline" data-testid="button-add-system">
-                    <Plus className="h-4 w-4 mr-2" />
-                    Add System
-                  </Button>
-                </DialogTrigger>
                 <DialogContent>
                   <DialogHeader>
                     <DialogTitle>Add Building System</DialogTitle>
@@ -1762,12 +1789,20 @@ export default function DesignSystems() {
                                 <tbody>
                                   {systemTakeoffs.map(item => {
                                     const cat = takeoffCategories.find(c => c.id === item.categoryId);
+                                    const qty = parseFloat(String(item.quantity ?? "0")) || 0;
+                                    const unitCost = parseFloat(String(item.unitCost ?? "0")) || 0;
+                                    const extendedNum = item.extendedCost != null && item.extendedCost !== ""
+                                      ? parseFloat(String(item.extendedCost))
+                                      : qty * unitCost;
+                                    const display = isFinite(extendedNum) && extendedNum > 0
+                                      ? `$${extendedNum.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                                      : "—";
                                     return (
                                       <tr key={item.id} className="border-t">
                                         <td className="p-2">{cat?.name || "Unknown"}</td>
                                         <td className="p-2 text-right">{item.quantity}</td>
                                         <td className="p-2">{item.unit}</td>
-                                        <td className="p-2 text-right">{item.extendedCost ? `$${item.extendedCost}` : "-"}</td>
+                                        <td className="p-2 text-right" data-testid={`text-material-cost-${item.id}`}>{display}</td>
                                       </tr>
                                     );
                                   })}
@@ -1783,15 +1818,54 @@ export default function DesignSystems() {
                       )}
                     </TabsContent>
                     <TabsContent value="devices" className="p-4">
-                      {selectedSystem ? (
-                        <div className="space-y-3">
-                          <h4 className="font-medium">Devices for {selectedSystem.label}</h4>
-                          <p className="text-muted-foreground text-sm">Device inventory and installation tracking for {selectedSystem.label} system</p>
-                          <Button variant="outline" size="sm" onClick={() => { generateDeliverableMutation.mutate("device_schedule"); }} disabled={generatingDeliverable === "device_schedule"} data-testid="button-generate-device-schedule">
-                            {generatingDeliverable === "device_schedule" ? "Generating..." : "Generate Device Schedule"}
-                          </Button>
-                        </div>
-                      ) : (
+                      {selectedSystem ? (() => {
+                        const sysRecord = buildingSystems.find(s => s.systemType === selectedSystem.id);
+                        const devices = sysRecord
+                          ? systemDevicesAll.filter(d => d.systemId === sysRecord.id)
+                          : [];
+                        return (
+                          <div className="space-y-3">
+                            <div className="flex items-center justify-between">
+                              <h4 className="font-medium">Devices for {selectedSystem.label}</h4>
+                              <Button variant="outline" size="sm" onClick={() => { generateDeliverableMutation.mutate("device_schedule"); }} disabled={generatingDeliverable === "device_schedule"} data-testid="button-generate-device-schedule">
+                                {generatingDeliverable === "device_schedule" ? "Generating..." : "Generate Device Schedule"}
+                              </Button>
+                            </div>
+                            {devices.length === 0 ? (
+                              <p className="text-muted-foreground text-sm" data-testid="text-no-devices">
+                                No devices yet. Click "Generate Device Schedule" to seed standard devices for {selectedSystem.label}.
+                              </p>
+                            ) : (
+                              <div className="border rounded-lg overflow-hidden">
+                                <table className="w-full text-sm">
+                                  <thead className="bg-muted/50">
+                                    <tr>
+                                      <th className="text-left p-2">Type</th>
+                                      <th className="text-left p-2">Manufacturer</th>
+                                      <th className="text-left p-2">Model</th>
+                                      <th className="text-left p-2">Location</th>
+                                      <th className="text-right p-2">Qty</th>
+                                      <th className="text-right p-2">Installed</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {devices.map(d => (
+                                      <tr key={d.id} className="border-t" data-testid={`row-device-${d.id}`}>
+                                        <td className="p-2 capitalize">{d.deviceType.replace(/_/g, " ")}</td>
+                                        <td className="p-2">{d.manufacturer || "—"}</td>
+                                        <td className="p-2">{d.model || "—"}</td>
+                                        <td className="p-2">{d.location || "—"}</td>
+                                        <td className="p-2 text-right">{d.quantity}</td>
+                                        <td className="p-2 text-right">{d.installedCount ?? 0}</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })() : (
                         <p className="text-muted-foreground">Select a system to view devices</p>
                       )}
                     </TabsContent>
