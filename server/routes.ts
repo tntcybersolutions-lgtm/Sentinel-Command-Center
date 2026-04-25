@@ -9476,6 +9476,48 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
     }
   });
 
+  // Manual daily-log creation. Maps the 5 quick-entry fields from the
+  // Voice Daily Log page into the dailyLogs JSONB columns. We register
+  // this BEFORE registerSimpleProjectModuleRoutes so this concrete handler
+  // wins for the dailyLogs table (the generic loop targets a different
+  // table called projectDailyLogs).
+  app.post("/api/projects/:id/daily-logs", async (req: Request, res: Response) => {
+    try {
+      const projectId = p(req.params.id);
+      const b = req.body ?? {};
+      const toLines = (v: unknown): string[] => {
+        if (Array.isArray(v)) return v.map(String).map((s) => s.trim()).filter(Boolean);
+        if (typeof v === "string") return v.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+        return [];
+      };
+      const tasksCompleted = toLines(b.tasks_completed ?? b.tasksCompleted);
+      const issues = toLines(b.issues);
+      const safetyNotes = toLines(b.safety_notes ?? b.safetyNotes);
+      const crewCount = b.crew_count ?? b.crewCount;
+      const crewNum = crewCount !== undefined && crewCount !== null && crewCount !== ""
+        ? Number(crewCount)
+        : undefined;
+      const weather = typeof b.weather === "string" ? b.weather.trim() : "";
+      const logDate = b.logDate ? new Date(b.logDate) : new Date();
+      const log = await projectsService.createDailyLog(DEFAULT_TENANT_ID, {
+        projectId,
+        logDate,
+        weatherJson: weather ? { summary: weather } : undefined,
+        workPerformedJson: tasksCompleted.length ? tasksCompleted : undefined,
+        laborJson: crewNum !== undefined && Number.isFinite(crewNum) && crewNum >= 0
+          ? [{ count: crewNum }]
+          : undefined,
+        issuesJson: issues.length ? issues : undefined,
+        safetyNotesJson: safetyNotes.length ? safetyNotes : undefined,
+        notes: typeof b.notes === "string" ? b.notes : undefined,
+      });
+      res.json(log);
+    } catch (error: any) {
+      console.error("Error creating daily log:", error);
+      res.status(500).json({ error: error?.message ?? "Failed to create daily log" });
+    }
+  });
+
   // ============================================================================
   // PROJECT IMPORT ROUTES
   // ============================================================================
