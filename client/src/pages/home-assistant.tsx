@@ -105,7 +105,7 @@ export default function HomeAssistant() {
 
   const countsQuery = useQuery<NavCounts>({ queryKey: ["/api/nav-counts"] });
   const projectsQuery = useQuery<any[]>({ queryKey: ["/api/projects"] });
-  const activityQuery = useQuery<any[]>({ queryKey: ["/api/audit-events", { limit: 10 }] });
+  const activityQuery = useQuery<any[]>({ queryKey: ["/api/audit-events?limit=10"] });
 
   const counts = countsQuery.data;
   const projects = (projectsQuery.data ?? []).slice(0, 10);

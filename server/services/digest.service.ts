@@ -1,6 +1,6 @@
 import { db } from "../db";
 import { opportunities, bidProjects, approvalRequests, calendarEvents, sourceRuns, integrationHealth } from "@shared/schema";
-import { eq, and, gte, lte, desc, count, sql } from "drizzle-orm";
+import { eq, and, gte, lte, desc, count, sql, notInArray } from "drizzle-orm";
 import { auditService } from "./audit.service";
 import { queueService } from "../queue/queue.service";
 
@@ -99,7 +99,7 @@ export class DigestService {
       .from(bidProjects)
       .where(and(
         eq(bidProjects.tenantId, tenantId),
-        eq(bidProjects.status, "in_progress")
+        notInArray(bidProjects.status, ["won", "lost", "cancelled", "no_bid"])
       ));
 
     const healthRecords = await db.select()

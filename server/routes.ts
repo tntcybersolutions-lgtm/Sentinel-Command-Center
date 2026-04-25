@@ -69,6 +69,7 @@ import {
   opportunityDecisions,
   v4Bids,
   bidReadinessSnapshots,
+  bidReadinessScores,
   v4BidDocuments,
   v4BidTasks,
   bidPartners,
@@ -19514,6 +19515,100 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
     } catch (error) {
       console.error("SAM daily ingest error:", error);
       res.status(500).json({ error: "SAM daily ingest failed" });
+    }
+  });
+
+  // GET /api/proactive-tasks — real action items derived from DB state
+  app.get("/api/proactive-tasks", async (req: Request, res: Response) => {
+    try {
+      const tenantId = p(req.headers["x-tenant-id"] as string) || DEFAULT_TENANT_ID;
+      const now = new Date();
+      const items: any[] = [];
+
+      // 1. Overdue tasks
+      const overdueTasks = await db.select({ id: projectTasks.id, title: projectTasks.title, dueDate: projectTasks.dueDate, status: projectTasks.status })
+        .from(projectTasks)
+        .where(and(eq(projectTasks.tenantId, tenantId), sql`${projectTasks.dueDate} < NOW() AND ${projectTasks.status} != 'completed'`))
+        .limit(5);
+      overdueTasks.forEach((t: any) => {
+        items.push({ id: `task-${t.id}`, title: `Overdue task: ${t.title}`, description: `This task was due ${t.dueDate ? new Date(t.dueDate).toLocaleDateString() : "in the past"} and is still open.`, priority: "high", source: "system", actionType: "follow_up", dueAt: t.dueDate, sourceEntityType: "task", createdAt: now.toISOString() });
+      });
+
+      // 2. Open RFIs
+      const openRfis = await db.select({ id: rfis.id, title: rfis.title, status: rfis.status, dueDate: rfis.dueDate })
+        .from(rfis)
+        .where(and(eq(rfis.tenantId, tenantId), sql`${rfis.status} = 'open'`))
+        .limit(5);
+      openRfis.forEach((r: any) => {
+        items.push({ id: `rfi-${r.id}`, title: `Open RFI: ${r.title}`, description: `RFI is open and awaiting response.`, priority: r.dueDate && new Date(r.dueDate) < now ? "critical" : "medium", source: "system", actionType: "compliance_review", dueAt: r.dueDate, sourceEntityType: "rfi", createdAt: now.toISOString() });
+      });
+
+      // 3. Bids without readiness scores (need attention)
+      const bidsWithoutScores = await db.select({ id: bidProjects.id, title: bidProjects.title })
+        .from(bidProjects)
+        .where(and(
+          eq(bidProjects.tenantId, tenantId),
+          sql`NOT EXISTS (SELECT 1 FROM bid_readiness_scores brs WHERE brs.bid_project_id = ${bidProjects.id})`
+        ))
+        .limit(3);
+      bidsWithoutScores.forEach((b: any) => {
+        items.push({ id: `bid-score-${b.id}`, title: `Score bid: ${b.title}`, description: `This bid project has no readiness score. Run Herbie analysis to score it.`, priority: "medium", source: "ai", actionType: "run_ingestion", sourceEntityType: "bid_project", createdAt: now.toISOString() });
+      });
+
+      // Sort by priority: critical > high > medium > low
+      const ORDER = { critical: 0, high: 1, medium: 2, low: 3 };
+      items.sort((a, b) => (ORDER[a.priority as keyof typeof ORDER] ?? 4) - (ORDER[b.priority as keyof typeof ORDER] ?? 4));
+
+      res.json(items.slice(0, 20));
+    } catch (error: any) {
+      console.error("Error fetching proactive tasks:", error);
+      res.status(500).json({ error: "Failed to fetch proactive tasks", message: error?.message });
+    }
+  });
+
+  // GET /api/bids/readiness-dashboard — list all bid_projects with readiness scores
+  app.get("/api/bids/readiness-dashboard", async (req: Request, res: Response) => {
+    try {
+      const tenantId = p(req.headers["x-tenant-id"] as string) || DEFAULT_TENANT_ID;
+      const bids = await db
+        .select({
+          id: bidProjects.id,
+          title: bidProjects.title,
+          status: bidProjects.status,
+          dueDate: bidProjects.dueDate,
+          opportunityId: bidProjects.opportunityId,
+          createdAt: bidProjects.createdAt,
+        })
+        .from(bidProjects)
+        .where(eq(bidProjects.tenantId, tenantId))
+        .orderBy(desc(bidProjects.createdAt));
+
+      const scores = await db
+        .select()
+        .from(bidReadinessScores)
+        .where(eq(bidReadinessScores.tenantId, tenantId));
+
+      const scoreMap = new Map(scores.map((s: any) => [s.bidProjectId, s]));
+
+      const result = bids.map((bid: any) => {
+        const score = scoreMap.get(bid.id) as any;
+        return {
+          id: bid.id,
+          title: bid.title,
+          status: bid.status,
+          dueDate: bid.dueDate,
+          opportunityId: bid.opportunityId,
+          overallScore: score?.overallScore ?? null,
+          readinessStatus: score?.status ?? null,
+          missingItems: score?.missingItems ?? [],
+          hasScore: !!score,
+        };
+      });
+
+      res.json(result);
+    } catch (error: any) {
+      console.error("Error fetching bid readiness dashboard:", error);
+      res.status(500).json({ error: "Failed to fetch bid readiness dashboard", message: error?.message });
     }
   });
 
