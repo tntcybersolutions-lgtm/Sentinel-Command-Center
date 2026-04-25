@@ -229,6 +229,8 @@ export async function seedDemo() {
   const vendorId = vendorIdByNumber["V-ACME-001"]; // alias used below for the renewal approval/notification
   const coiExpiry = acmeExpiry;
 
+  // RFIs / submittals / tasks: wipe-and-reseed scoped to the demo project so
+  // the seed defines exact dataset shape and reruns can shrink as well as grow.
   const rfiSeeds = [
     {
       number: "RFI-001",
@@ -247,37 +249,23 @@ export async function seedDemo() {
       status: "open",
       ageDays: 7,
     },
-    {
-      number: "RFI-003",
-      subject: "Door hardware — suite 210",
-      question: "Hardware set H-3 references electric strike; access control package not awarded. Hold or proceed?",
-      priority: "normal",
-      status: "open",
-      ageDays: 2,
-    },
   ];
 
+  await db.delete(rfis).where(and(eq(rfis.tenantId, TENANT_ID), eq(rfis.projectId, projectId)));
   for (const r of rfiSeeds) {
-    const exists = await db
-      .select()
-      .from(rfis)
-      .where(and(eq(rfis.projectId, projectId), eq(rfis.rfiNumber, r.number)))
-      .limit(1);
-    if (exists.length === 0) {
-      await db.insert(rfis).values({
-        tenantId: TENANT_ID,
-        projectId,
-        rfiNumber: r.number,
-        subject: r.subject,
-        question: r.question,
-        status: r.status,
-        priority: r.priority,
-        submittedAt: daysAgo(r.ageDays),
-        dueDate: daysFromNow(7 - r.ageDays),
-      });
-    }
+    await db.insert(rfis).values({
+      tenantId: TENANT_ID,
+      projectId,
+      rfiNumber: r.number,
+      subject: r.subject,
+      question: r.question,
+      status: r.status,
+      priority: r.priority,
+      submittedAt: daysAgo(r.ageDays),
+      dueDate: daysFromNow(7 - r.ageDays),
+    });
   }
-  console.log("[seed-demo] RFIs ensured:", rfiSeeds.length);
+  console.log("[seed-demo] RFIs reseeded:", rfiSeeds.length);
 
   const submittalSeeds = [
     {
@@ -287,63 +275,46 @@ export async function seedDemo() {
       contractor: "Cornhusker Glass",
       ageDays: 5,
     },
-    {
-      number: "SUB-002",
-      name: "VAV Boxes — shop drawings",
-      type: "shop_drawing",
-      contractor: "Midwest Mechanical",
-      ageDays: 3,
-    },
   ];
 
+  await db.delete(submittals).where(and(eq(submittals.tenantId, TENANT_ID), eq(submittals.projectId, projectId)));
   for (const s of submittalSeeds) {
-    const exists = await db
-      .select()
-      .from(submittals)
-      .where(and(eq(submittals.projectId, projectId), eq(submittals.submittalNumber, s.number)))
-      .limit(1);
-    if (exists.length === 0) {
-      await db.insert(submittals).values({
-        tenantId: TENANT_ID,
-        projectId,
-        submittalNumber: s.number,
-        name: s.name,
-        status: "pending",
-        priority: "medium",
-        submittalType: s.type,
-        contractorName: s.contractor,
-        submittedAt: daysAgo(s.ageDays),
-      });
-    }
+    await db.insert(submittals).values({
+      tenantId: TENANT_ID,
+      projectId,
+      submittalNumber: s.number,
+      name: s.name,
+      status: "pending",
+      priority: "medium",
+      submittalType: s.type,
+      contractorName: s.contractor,
+      submittedAt: daysAgo(s.ageDays),
+    });
   }
-  console.log("[seed-demo] Submittals ensured:", submittalSeeds.length);
+  console.log("[seed-demo] Submittals reseeded:", submittalSeeds.length);
 
+  // All 3 tasks intentionally overdue per demo spec.
   const taskSeeds = [
     { name: "Confirm structural steel delivery date", dueOffset: -3, priority: "high" },
     { name: "Submit pay app #2 to owner", dueOffset: -1, priority: "high" },
-    { name: "Schedule fire-stopping inspection (3rd floor)", dueOffset: 2, priority: "medium" },
-    { name: "Walk site with electrical foreman re: panel relocation", dueOffset: 5, priority: "medium" },
+    { name: "Schedule fire-stopping inspection (3rd floor)", dueOffset: -2, priority: "medium" },
   ];
 
+  await db
+    .delete(projectTasks)
+    .where(and(eq(projectTasks.tenantId, TENANT_ID), eq(projectTasks.projectId, projectId)));
   for (const t of taskSeeds) {
-    const exists = await db
-      .select()
-      .from(projectTasks)
-      .where(and(eq(projectTasks.projectId, projectId), eq(projectTasks.name, t.name)))
-      .limit(1);
-    if (exists.length === 0) {
-      await db.insert(projectTasks).values({
-        tenantId: TENANT_ID,
-        projectId,
-        name: t.name,
-        status: t.dueOffset < 0 ? "in_progress" : "not_started",
-        priority: t.priority,
-        dueDate: daysFromNow(t.dueOffset),
-        source: "manual",
-      });
-    }
+    await db.insert(projectTasks).values({
+      tenantId: TENANT_ID,
+      projectId,
+      name: t.name,
+      status: "in_progress",
+      priority: t.priority,
+      dueDate: daysFromNow(t.dueOffset),
+      source: "manual",
+    });
   }
-  console.log("[seed-demo] Tasks ensured:", taskSeeds.length);
+  console.log("[seed-demo] Tasks reseeded:", taskSeeds.length, "(all overdue)");
 
   // Daily logs: delete prior demo logs (tagged via notes prefix) so reruns
   // on later days slide the window forward and the dataset stays fixed-size.
