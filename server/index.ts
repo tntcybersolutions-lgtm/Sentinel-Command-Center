@@ -128,12 +128,18 @@ app.use((req, res, next) => {
     }
   });
 
-  const forceViteDev = process.env.FORCE_VITE_DEV === "true";
   const isProd = process.env.NODE_ENV === "production";
+  // FORCE_VITE_DEV is honored ONLY when NODE_ENV !== "production".
+  // Production must always serve the built bundle from dist/public —
+  // never the vite dev middleware. This guards against env leakage
+  // (e.g. .replit [userenv.shared]) accidentally re-enabling dev mode
+  // in the deployed app.
+  const forceViteDev =
+    !isProd && process.env.FORCE_VITE_DEV === "true";
 
   const isReplit = Boolean(process.env.REPL_ID);
 
-  if (isProd && !forceViteDev) {
+  if (isProd) {
     app.get("/__mode", (_req, res) => res.json({ mode: "static" }));
     serveStatic(app);
     log("STATIC mode: serving dist/public", "ui");
