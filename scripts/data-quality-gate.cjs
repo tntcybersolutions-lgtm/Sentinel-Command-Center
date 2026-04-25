@@ -2,6 +2,11 @@
 const { Client } = require("pg");
 
 async function main() {
+  if (!process.env.DATABASE_URL) {
+    console.log("[DATA QUALITY GATE] SKIPPED (no DATABASE_URL at build time)");
+    process.exit(0);
+  }
+
   const client = new Client({ connectionString: process.env.DATABASE_URL });
   await client.connect();
 
