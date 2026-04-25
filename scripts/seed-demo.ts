@@ -115,40 +115,50 @@ function daysAgo(n: number): Date {
 export async function seedDemo() {
   console.log("[seed-demo] Starting demo seed for", PROJECT_NAME);
 
+  // Idempotency: prefer projectNumber (canonical business key) but fall back
+  // to name so a project manually created with the same name (and no/other
+  // number) is reused instead of duplicated. Whichever row we find, we
+  // overwrite the demo-defining fields so reseeds always restore the
+  // expected demo state.
+  const projectFields = {
+    tenantId: TENANT_ID,
+    projectNumber: PROJECT_NUMBER,
+    name: PROJECT_NAME,
+    description:
+      "Tenant build-out of 14,200 sf office space on the second floor. Demolition complete; framing and MEP rough-in in progress.",
+    status: "active",
+    contractType: "lump_sum",
+    contractValue: "2400000.00",
+    actualCosts: "768000.00",
+    client: "Maple Holdings LLC",
+    projectManager: "Pat Dorsey",
+    projectType: "commercial",
+    startDate: daysAgo(45),
+    expectedEndDate: daysFromNow(120),
+    completionPercentage: 32,
+    addressJson: { line1: "412 Maple Street", city: "Omaha", state: "NE", zip: "68102" },
+  } as const;
+
   let projectId: string;
   const existingProject = await db
     .select()
     .from(projects)
-    .where(and(eq(projects.tenantId, TENANT_ID), eq(projects.projectNumber, PROJECT_NUMBER)))
+    .where(
+      and(
+        eq(projects.tenantId, TENANT_ID),
+        sql`(${projects.projectNumber} = ${PROJECT_NUMBER} OR ${projects.name} = ${PROJECT_NAME})`,
+      ),
+    )
     .limit(1);
 
   if (existingProject.length > 0) {
     projectId = existingProject[0].id;
-    console.log("[seed-demo] Project already exists:", projectId);
+    await db.update(projects).set(projectFields).where(eq(projects.id, projectId));
+    console.log("[seed-demo] Project upserted (existing):", projectId);
   } else {
-    const [created] = await db
-      .insert(projects)
-      .values({
-        tenantId: TENANT_ID,
-        projectNumber: PROJECT_NUMBER,
-        name: PROJECT_NAME,
-        description:
-          "Tenant build-out of 14,200 sf office space on the second floor. Demolition complete; framing and MEP rough-in in progress.",
-        status: "active",
-        contractType: "lump_sum",
-        contractValue: "2400000.00",
-        actualCosts: "768000.00",
-        client: "Maple Holdings LLC",
-        projectManager: "Pat Dorsey",
-        projectType: "commercial",
-        startDate: daysAgo(45),
-        expectedEndDate: daysFromNow(120),
-        completionPercentage: 32,
-        addressJson: { line1: "412 Maple Street", city: "Omaha", state: "NE", zip: "68102" },
-      })
-      .returning();
+    const [created] = await db.insert(projects).values(projectFields).returning();
     projectId = created.id;
-    console.log("[seed-demo] Created project:", projectId);
+    console.log("[seed-demo] Project created:", projectId);
   }
 
   // Vendors: ensure all demo vendors exist; remember their ids for COI linking.
