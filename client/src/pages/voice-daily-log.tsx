@@ -445,7 +445,7 @@ export default function VoiceDailyLogPage() {
                   ? "bg-red-500 text-white"
                   : "bg-primary text-primary-foreground hover-elevate active-elevate-2"
               }`}
-              data-testid="button-mock-mic"
+              data-testid="button-mic-toggle"
             >
               {voiceRecording ? (
                 <>
@@ -477,7 +477,7 @@ export default function VoiceDailyLogPage() {
               size="sm"
               onClick={useMockTranscript}
               className="gap-2"
-              data-testid="button-use-mock-transcript"
+              data-testid="button-use-sample-transcript"
             >
               <Sparkles className="h-4 w-4" />
               Use Sample Transcript
