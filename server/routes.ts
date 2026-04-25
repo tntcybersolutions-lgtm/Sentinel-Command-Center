@@ -4713,12 +4713,35 @@ export async function registerRoutes(
 
   app.get("/api/approvals", async (req: Request, res: Response) => {
     try {
-      const { status } = req.query;
+      const { status, type } = req.query;
       
       const validStatuses = ['pending', 'approved', 'denied'];
       const safeStatus = (status && status !== 'all' && validStatuses.includes(String(status))) ? String(status) : null;
       
       const statusClause = safeStatus ? sql`AND ar.status = ${safeStatus}` : sql``;
+
+      // ?type= filters by actionType and/or entityType. Aliases supported:
+      //   change_order  → action_type LIKE %change_order% OR entity_type='change_order'
+      //   coi           → action_type LIKE %coi% OR entity_type='coi_certificate'
+      //   bid           → action_type LIKE %bid%
+      //   vendor        → entity_type='vendor'
+      //   <other>       → exact action_type match
+      const rawType = typeof type === "string" ? type.trim() : "";
+      let typeClause = sql``;
+      if (rawType) {
+        const t = rawType.toLowerCase();
+        if (t === "change_order") {
+          typeClause = sql`AND (ar.action_type ILIKE ${"%change_order%"} OR ar.entity_type = ${"change_order"})`;
+        } else if (t === "coi") {
+          typeClause = sql`AND (ar.action_type ILIKE ${"%coi%"} OR ar.entity_type = ${"coi_certificate"})`;
+        } else if (t === "bid") {
+          typeClause = sql`AND ar.action_type ILIKE ${"%bid%"}`;
+        } else if (t === "vendor") {
+          typeClause = sql`AND ar.entity_type = ${"vendor"}`;
+        } else {
+          typeClause = sql`AND ar.action_type = ${rawType}`;
+        }
+      }
       
       const result = await db.execute(sql`
         SELECT 
@@ -4751,6 +4774,7 @@ export async function registerRoutes(
         LEFT JOIN vendors v ON (ar.entity_id = v.id AND ar.entity_type = 'vendor')
         WHERE ar.tenant_id = ${DEFAULT_TENANT_ID}
         ${statusClause}
+        ${typeClause}
         ORDER BY 
           CASE ar.priority WHEN 'urgent' THEN 1 WHEN 'high' THEN 2 WHEN 'normal' THEN 3 ELSE 4 END,
           ar.created_at DESC
@@ -4911,6 +4935,47 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Error fetching approvals:", error);
       res.status(500).json({ error: "Failed to fetch approvals" });
+    }
+  });
+
+  // PATCH /api/approvals/:id — unified status update endpoint.
+  // Body: { status: "approved" | "rejected" | "denied", notes?: string }
+  app.patch("/api/approvals/:id", async (req: Request, res: Response) => {
+    try {
+      const id = p(req.params.id);
+      const { status, notes } = req.body || {};
+      const raw = String(status || "").toLowerCase().trim();
+      const normalized = raw === "rejected" ? "denied" : raw;
+      if (normalized !== "approved" && normalized !== "denied") {
+        return res.status(400).json({ error: "status must be 'approved' or 'rejected'" });
+      }
+      const existing = await storage.getApprovalRequest(id);
+      if (!existing) {
+        return res.status(404).json({ error: "Approval request not found" });
+      }
+      if ((existing.status || "").toLowerCase() !== "pending") {
+        return res.status(409).json({
+          error: `Approval already ${existing.status}; only pending approvals can be decided.`,
+          current: existing.status,
+        });
+      }
+      const approval = await storage.updateApprovalRequest(id, { status: normalized });
+      if (!approval) {
+        return res.status(404).json({ error: "Approval request not found" });
+      }
+      await storage.createAuditEvent({
+        tenantId: DEFAULT_TENANT_ID,
+        eventType: normalized === "approved" ? "approval_granted" : "approval_denied",
+        actorType: "user",
+        entityType: "approval_request",
+        entityId: approval.id,
+        action: normalized === "approved" ? "approve" : "deny",
+        afterJson: { ...approval, notes },
+      });
+      res.json(approval);
+    } catch (error) {
+      console.error("Error patching approval:", error);
+      res.status(500).json({ error: "Failed to update approval" });
     }
   });
 

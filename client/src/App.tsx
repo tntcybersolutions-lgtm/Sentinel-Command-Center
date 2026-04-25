@@ -248,7 +248,7 @@ const VendorConfidence = lazy(() => import('@/pages/vendor-confidence-dashboard'
 const HerbieDigest = lazy(() => import('@/pages/herbie-digest-page'));
 const HerbieAutonomous = lazy(() => import('@/pages/herbie-autonomous-dashboard'));
 const HerbieMemory = lazy(() => import('@/pages/herbie-memory-inspector'));
-const ChangeOrderApprovals = lazy(() => import('@/pages/approvals'));
+const ChangeOrderApprovals = lazy(() => import('@/pages/change-order-approval'));
 import NotFound from "@/pages/not-found";
 
 function LegacyRedirect({ to }: { to: string }) {
