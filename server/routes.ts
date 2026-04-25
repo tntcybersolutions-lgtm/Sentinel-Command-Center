@@ -9821,6 +9821,129 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
 
   const { vendorService } = await import("./services/vendor.service");
 
+  // ============================================================================
+  // VENDOR CONFIDENCE — derived AI-style score for the Vendor Confidence
+  // dashboard. Confidence is computed from existing rating columns plus signals
+  // (insurance/license freshness, prequalification status, vendor status).
+  // ============================================================================
+  function computeVendorConfidence(v: any) {
+    const ratings: number[] = [];
+    const perf = v.performanceRating ? parseFloat(v.performanceRating) : NaN;
+    const safety = v.safetyRating ? parseFloat(v.safetyRating) : NaN;
+    const quality = v.qualityRating ? parseFloat(v.qualityRating) : NaN;
+    if (Number.isFinite(perf)) ratings.push(perf);
+    if (Number.isFinite(safety)) ratings.push(safety);
+    if (Number.isFinite(quality)) ratings.push(quality);
+    // Ratings are 0–5; convert to a 0–100 base.
+    const ratedAvg = ratings.length ? (ratings.reduce((a, b) => a + b, 0) / ratings.length) : 3;
+    let score = ratedAvg * 20;
+    // Insurance freshness: fresh > 30d → +5, expired → -15
+    const now = Date.now();
+    const ins = v.insuranceExpiresAt ? new Date(v.insuranceExpiresAt).getTime() : null;
+    if (ins) {
+      const daysLeft = Math.round((ins - now) / 86400000);
+      if (daysLeft >= 30) score += 5;
+      else if (daysLeft < 0) score -= 15;
+      else score -= 5;
+    }
+    // License freshness mirrors insurance with smaller weight.
+    const lic = v.licenseExpiresAt ? new Date(v.licenseExpiresAt).getTime() : null;
+    if (lic) {
+      const daysLeft = Math.round((lic - now) / 86400000);
+      if (daysLeft >= 30) score += 3;
+      else if (daysLeft < 0) score -= 10;
+    }
+    const prequal = (v.prequalificationStatus || "").toLowerCase();
+    if (prequal === "approved") score += 8;
+    else if (prequal === "pending") score -= 2;
+    else if (prequal === "rejected" || prequal === "blacklisted") score -= 25;
+    const status = (v.status || "").toLowerCase();
+    if (status === "inactive" || status === "suspended" || status === "blacklisted") score -= 30;
+    score = Math.max(0, Math.min(100, Math.round(score)));
+    let tier: "Preferred" | "Approved" | "Watch" | "At-Risk";
+    if (score >= 85) tier = "Preferred";
+    else if (score >= 70) tier = "Approved";
+    else if (score >= 50) tier = "Watch";
+    else tier = "At-Risk";
+    return { score, tier };
+  }
+
+  app.get("/api/vendor-confidence/vendors", async (_req: Request, res: Response) => {
+    try {
+      const all = await vendorService.listVendors(DEFAULT_TENANT_ID);
+      if (!Array.isArray(all)) {
+        return res.status(500).json({ error: "Vendor service returned no data" });
+      }
+      const enriched = all.map((v: any) => {
+        const { score, tier } = computeVendorConfidence(v);
+        return {
+          id: v.id,
+          vendorNumber: v.vendorNumber,
+          companyName: v.companyName,
+          vendorType: v.vendorType,
+          status: v.status,
+          trade: v.vendorType === "subcontractor" ? "Subcontractor" : v.vendorType,
+          confidenceScore: score,
+          tier,
+          performanceRating: v.performanceRating ? parseFloat(v.performanceRating) : null,
+          safetyRating: v.safetyRating ? parseFloat(v.safetyRating) : null,
+          qualityRating: v.qualityRating ? parseFloat(v.qualityRating) : null,
+          prequalificationStatus: v.prequalificationStatus,
+          insuranceExpiresAt: v.insuranceExpiresAt,
+          licenseExpiresAt: v.licenseExpiresAt,
+          updatedAt: v.updatedAt,
+        };
+      });
+      enriched.sort((a: any, b: any) => b.confidenceScore - a.confidenceScore);
+      res.json(enriched);
+    } catch (error) {
+      console.error("Error fetching vendor-confidence vendors:", error);
+      res.status(500).json({ error: "Failed to fetch vendor confidence list" });
+    }
+  });
+
+  app.get("/api/vendor-confidence/stats", async (_req: Request, res: Response) => {
+    try {
+      const all = await vendorService.listVendors(DEFAULT_TENANT_ID);
+      if (!Array.isArray(all)) {
+        return res.status(500).json({ error: "Vendor service returned no data" });
+      }
+      const tiers = { Preferred: 0, Approved: 0, Watch: 0, "At-Risk": 0 };
+      let scoreSum = 0;
+      let scoreCount = 0;
+      let expiredInsurance = 0;
+      let expiringInsurance = 0;
+      const now = Date.now();
+      for (const v of all) {
+        const { score, tier } = computeVendorConfidence(v);
+        tiers[tier]++;
+        scoreSum += score;
+        scoreCount++;
+        if (v.insuranceExpiresAt) {
+          const t = new Date(v.insuranceExpiresAt).getTime();
+          const daysLeft = Math.round((t - now) / 86400000);
+          if (daysLeft < 0) expiredInsurance++;
+          else if (daysLeft < 30) expiringInsurance++;
+        }
+      }
+      const avgConfidence = scoreCount ? Math.round(scoreSum / scoreCount) : 0;
+      res.json({
+        total: scoreCount,
+        avgConfidence,
+        tiers,
+        preferred: tiers.Preferred,
+        approved: tiers.Approved,
+        watch: tiers.Watch,
+        atRisk: tiers["At-Risk"],
+        expiredInsurance,
+        expiringInsurance,
+      });
+    } catch (error) {
+      console.error("Error fetching vendor-confidence stats:", error);
+      res.status(500).json({ error: "Failed to fetch vendor confidence stats" });
+    }
+  });
+
   app.get("/api/vendors/stats", async (req: Request, res: Response) => {
     try {
       const allVendors = await vendorService.listVendors(DEFAULT_TENANT_ID);
