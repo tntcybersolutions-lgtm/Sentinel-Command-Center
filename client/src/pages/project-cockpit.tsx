@@ -1,7 +1,7 @@
 import { useState } from "react";
 import React from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useRoute } from "wouter";
+import { useRoute, Link } from "wouter";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import {
   FileQuestion, FileCheck, ArrowLeftRight, ClipboardList, ListChecks, Bot,
@@ -203,6 +203,85 @@ function CoiRollupBadge({ rollup }: { rollup?: CoiRollup }) {
         </span>
       </div>
     </div>
+  );
+}
+
+// Phase B — COI Status card. Calls GET /api/coi/expiring/365 (the broadest
+// window the endpoint allows), filters to the current project client-side
+// (the endpoint is tenant-scoped), and bins each row into Red/Yellow/Green
+// using the row.tier the server already computed:
+//   Red    = expired
+//   Yellow = expiring within 30 days (critical_1d/7d, warning_14d/30d)
+//   Green  = current (tier === "ok")
+// Whole card links to the COI Tracker filtered to this project.
+interface ExpiringCoiRow {
+  id: string;
+  projectId: string | null;
+  vendorId: string | null;
+  policyType: string;
+  expiryDate: string;
+  tier: "expired" | "critical_1d" | "critical_7d" | "warning_14d" | "warning_30d" | "ok";
+  severity?: string;
+}
+interface ExpiringCoiPayload {
+  windowDays: number;
+  rows: ExpiringCoiRow[];
+}
+function CoiStatusCard({ projectId }: { projectId: string }) {
+  const { data, isLoading } = useQuery<ExpiringCoiPayload>({
+    queryKey: ["/api/coi/expiring", 365],
+    queryFn: () => fetch("/api/coi/expiring/365").then((r) => r.json()),
+  });
+  const rows = (data?.rows ?? []).filter((r) => r.projectId === projectId);
+  const expired = rows.filter((r) => r.tier === "expired").length;
+  const expiringSoon = rows.filter((r) =>
+    ["critical_1d", "critical_7d", "warning_14d", "warning_30d"].includes(r.tier),
+  ).length;
+  const current = rows.filter((r) => r.tier === "ok").length;
+  const total = rows.length;
+
+  // Outer band color follows the worst bucket so the PM can read the card
+  // from across the room.
+  const band =
+    expired > 0
+      ? "border-red-500/30 bg-red-500/5"
+      : expiringSoon > 0
+        ? "border-amber-500/30 bg-amber-500/5"
+        : "border-emerald-500/20 bg-emerald-500/5";
+
+  return (
+    <Link
+      href={`/coi?projectId=${projectId}`}
+      data-testid="card-coi-status"
+      className={`mx-6 my-3 border ${band} px-4 py-3 flex items-center gap-4 hover:bg-white/5 transition-colors cursor-pointer`}
+    >
+        <div className="flex flex-col">
+          <span className="text-[10px] uppercase tracking-wider text-zinc-500 font-mono">
+            COI Status
+          </span>
+          <span className="text-xs font-mono text-zinc-300">
+            {isLoading ? "Loading…" : total === 0 ? "No policies on file" : `${total} ${total === 1 ? "policy" : "policies"}`}
+          </span>
+        </div>
+        <div className="flex items-center gap-4 ml-auto">
+          <div data-testid="coi-bucket-expired" className="flex items-center gap-2">
+            <span className="w-2.5 h-2.5 rounded-full bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.6)]" />
+            <span className="text-[10px] font-mono uppercase tracking-wider text-zinc-500">Expired</span>
+            <span className={`text-sm font-mono font-bold ${expired > 0 ? "text-red-400" : "text-zinc-600"}`}>{expired}</span>
+          </div>
+          <div data-testid="coi-bucket-expiring" className="flex items-center gap-2">
+            <span className="w-2.5 h-2.5 rounded-full bg-amber-400 shadow-[0_0_6px_rgba(251,191,36,0.6)]" />
+            <span className="text-[10px] font-mono uppercase tracking-wider text-zinc-500">&lt;30d</span>
+            <span className={`text-sm font-mono font-bold ${expiringSoon > 0 ? "text-amber-400" : "text-zinc-600"}`}>{expiringSoon}</span>
+          </div>
+          <div data-testid="coi-bucket-current" className="flex items-center gap-2">
+            <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.6)]" />
+            <span className="text-[10px] font-mono uppercase tracking-wider text-zinc-500">Current</span>
+            <span className={`text-sm font-mono font-bold ${current > 0 ? "text-emerald-400" : "text-zinc-600"}`}>{current}</span>
+          </div>
+        <ChevronRight className="w-3.5 h-3.5 text-zinc-500" />
+      </div>
+    </Link>
   );
 }
 
@@ -692,6 +771,7 @@ export default function ProjectCockpit() {
       </div>
 
       <HerbieDigestCard projectId={projectId} />
+      <CoiStatusCard projectId={projectId} />
 
       <div className="px-6 py-3 flex gap-2 flex-wrap border-b border-white/5">
         <CountBadge label="RFIs" count={counts.rfis || 0} accent={counts.openRfis > 0 ? "text-amber-400" : undefined} />
