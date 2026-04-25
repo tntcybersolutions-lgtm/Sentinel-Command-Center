@@ -370,13 +370,17 @@ export async function seedDemo() {
     actionUrl: "/approvals",
   });
 
+  // Approval request: Herbie has drafted the renewal email. The shared
+  // approval queue uses generic "draft_external_message" so any outbound
+  // message (email, SMS, Teams) routes through the same UI; the specific
+  // intent is captured in contextJson.kind.
   await db
     .delete(approvalRequests)
     .where(
       and(
         eq(approvalRequests.tenantId, TENANT_ID),
         eq(approvalRequests.entityId, vendorId),
-        eq(approvalRequests.actionType, "draft_coi_renewal"),
+        sql`${approvalRequests.actionType} IN ('draft_external_message', 'draft_coi_renewal')`,
       ),
     );
 
@@ -384,11 +388,13 @@ export async function seedDemo() {
     tenantId: TENANT_ID,
     entityType: "vendor",
     entityId: vendorId,
-    actionType: "draft_coi_renewal",
+    actionType: "draft_external_message",
     status: "pending",
     priority: "high",
     contextJson: {
       ref: DEMO_TAG,
+      kind: "coi_renewal",
+      channel: "email",
       recipient: "mike@acmeplumbing.example",
       subject: `COI Renewal — Acme Plumbing (expires ${coiExpiry.toDateString()})`,
       bodyDraft: `Hi Mike,\n\nYour General Liability policy on file (Hartford HTF-2026-44128) expires on ${coiExpiry.toDateString()} (10 days). Please send an updated COI naming Maple Holdings LLC and BlackHawk Construction as additional insureds before the expiration date.\n\nThanks,\nPat Dorsey\nMaple Street Office Build-Out`,
