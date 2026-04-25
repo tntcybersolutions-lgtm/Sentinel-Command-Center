@@ -23561,6 +23561,20 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
     }
   });
 
+  app.post("/api/admin/seed-demo", async (_req: Request, res: Response) => {
+    if (process.env.NODE_ENV === "production" && process.env.ALLOW_DEMO_SEED !== "true") {
+      return res.status(403).json({ error: "Demo seed disabled in production. Set ALLOW_DEMO_SEED=true to enable." });
+    }
+    try {
+      const { seedDemo } = await import("../scripts/seed-demo");
+      const result = await seedDemo();
+      res.json({ success: true, seeded: result });
+    } catch (error: any) {
+      console.error("Demo seed error:", error);
+      res.status(500).json({ error: error?.message ?? "Demo seed failed" });
+    }
+  });
+
   app.get("/api/projects/:id/cockpit", async (req: Request, res: Response) => {
     try {
       const tenantId = DEFAULT_TENANT_ID;
