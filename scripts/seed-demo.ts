@@ -17,9 +17,88 @@ import { eq, and, sql } from "drizzle-orm";
 const TENANT_ID = "blackhawk-default";
 const PROJECT_NUMBER = "MAPLE-001";
 const PROJECT_NAME = "Maple Street Office Build-Out";
-const VENDOR_NUMBER = "V-ACME-001";
-const VENDOR_NAME = "Acme Plumbing";
 const DEMO_TAG = "demo-seed:maple-001";
+
+type VendorSeed = {
+  vendorNumber: string;
+  companyName: string;
+  contactName: string;
+  email: string;
+  phone: string;
+  categories: string[];
+};
+
+const VENDOR_SEEDS: VendorSeed[] = [
+  {
+    vendorNumber: "V-ACME-001",
+    companyName: "Acme Plumbing",
+    contactName: "Mike Acme",
+    email: "mike@acmeplumbing.example",
+    phone: "402-555-0102",
+    categories: ["plumbing", "medical_gas"],
+  },
+  {
+    vendorNumber: "V-RIVER-001",
+    companyName: "Riverside Electric",
+    contactName: "Dana Rivers",
+    email: "dana@riversideelectric.example",
+    phone: "402-555-0188",
+    categories: ["electrical", "low_voltage"],
+  },
+  {
+    vendorNumber: "V-SUMMIT-001",
+    companyName: "Summit HVAC",
+    contactName: "Jordan Summit",
+    email: "jordan@summithvac.example",
+    phone: "402-555-0231",
+    categories: ["mechanical", "hvac"],
+  },
+];
+
+type CoiSeed = {
+  vendorNumber: string;
+  policyType: "gl" | "wc";
+  carrier: string;
+  policyNumber: string;
+  limitsJson: Record<string, unknown>;
+  // Days from "now" the COI expires. Negative = already expired.
+  expiryOffsetDays: number;
+  status: "active" | "expired";
+  notes: string;
+};
+
+const COI_SEEDS: CoiSeed[] = [
+  {
+    vendorNumber: "V-ACME-001",
+    policyType: "gl",
+    carrier: "Hartford",
+    policyNumber: "HTF-2026-44128",
+    limitsJson: { each_occurrence: 1000000, aggregate: 2000000, waiver_of_subrogation: true },
+    expiryOffsetDays: 10,
+    status: "active",
+    notes: "GL policy nearing expiry — Herbie flagged for renewal.",
+  },
+  {
+    vendorNumber: "V-RIVER-001",
+    policyType: "wc",
+    carrier: "Travelers",
+    policyNumber: "TRV-WC-2026-78812",
+    limitsJson: { employer_liability: 1000000, statutory: true },
+    expiryOffsetDays: 45,
+    status: "active",
+    notes: "Workers comp — well within renewal window.",
+  },
+  {
+    vendorNumber: "V-SUMMIT-001",
+    policyType: "gl",
+    carrier: "Liberty Mutual",
+    policyNumber: "LM-GL-2025-90034",
+    limitsJson: { each_occurrence: 1000000, aggregate: 2000000 },
+    expiryOffsetDays: -5,
+    status: "expired",
+    notes: "GL EXPIRED — vendor blocked from project until renewal.",
+  },
+];
 
 function daysFromNow(n: number): Date {
   const d = new Date();
@@ -71,72 +150,84 @@ export async function seedDemo() {
     console.log("[seed-demo] Created project:", projectId);
   }
 
-  let vendorId: string;
-  const existingVendor = await db
-    .select()
-    .from(vendors)
-    .where(and(eq(vendors.tenantId, TENANT_ID), eq(vendors.vendorNumber, VENDOR_NUMBER)))
-    .limit(1);
+  // Vendors: ensure all demo vendors exist; remember their ids for COI linking.
+  const vendorIdByNumber: Record<string, string> = {};
+  for (const v of VENDOR_SEEDS) {
+    const existing = await db
+      .select()
+      .from(vendors)
+      .where(and(eq(vendors.tenantId, TENANT_ID), eq(vendors.vendorNumber, v.vendorNumber)))
+      .limit(1);
+    if (existing.length > 0) {
+      vendorIdByNumber[v.vendorNumber] = existing[0].id;
+    } else {
+      const [created] = await db
+        .insert(vendors)
+        .values({
+          tenantId: TENANT_ID,
+          vendorNumber: v.vendorNumber,
+          companyName: v.companyName,
+          vendorType: "subcontractor",
+          status: "active",
+          contactName: v.contactName,
+          email: v.email,
+          phone: v.phone,
+          categoriesJson: v.categories,
+        })
+        .returning();
+      vendorIdByNumber[v.vendorNumber] = created.id;
+    }
+  }
+  console.log("[seed-demo] Vendors ensured:", VENDOR_SEEDS.length);
 
-  if (existingVendor.length > 0) {
-    vendorId = existingVendor[0].id;
-  } else {
-    const [vendor] = await db
-      .insert(vendors)
+  // The COI demo'd at the 7:30 mark of the demo script — Acme Plumbing's GL
+  // expiring in 10 days — anchors the renewal-email beat. Other COIs give a
+  // realistic rollup (1 expired, 1 mid-window, 1 healthy). All upserted on
+  // (tenantId, projectId, vendorId, policyType) so reruns refresh the rolling
+  // expiry dates and the demo invariants hold no matter when the seed runs.
+  let acmeExpiry = daysFromNow(10);
+  for (const c of COI_SEEDS) {
+    const vendorId = vendorIdByNumber[c.vendorNumber];
+    const expiry = daysFromNow(c.expiryOffsetDays);
+    if (c.vendorNumber === "V-ACME-001") acmeExpiry = expiry;
+    const effective = daysAgo(365 - c.expiryOffsetDays); // 1 year policy term
+    await db
+      .insert(coiCertificates)
       .values({
         tenantId: TENANT_ID,
-        vendorNumber: VENDOR_NUMBER,
-        companyName: VENDOR_NAME,
-        vendorType: "subcontractor",
-        status: "active",
-        contactName: "Mike Acme",
-        email: "mike@acmeplumbing.example",
-        phone: "402-555-0102",
-        categoriesJson: ["plumbing", "medical_gas"],
+        projectId,
+        vendorId,
+        policyType: c.policyType,
+        carrier: c.carrier,
+        policyNumber: c.policyNumber,
+        limitsJson: c.limitsJson,
+        effectiveDate: effective,
+        expiryDate: expiry,
+        status: c.status,
+        notes: c.notes,
       })
-      .returning();
-    vendorId = vendor.id;
+      .onConflictDoUpdate({
+        target: [
+          coiCertificates.tenantId,
+          coiCertificates.projectId,
+          coiCertificates.vendorId,
+          coiCertificates.policyType,
+        ],
+        set: {
+          carrier: c.carrier,
+          policyNumber: c.policyNumber,
+          limitsJson: c.limitsJson,
+          effectiveDate: effective,
+          expiryDate: expiry,
+          status: c.status,
+          notes: c.notes,
+          updatedAt: new Date(),
+        },
+      });
   }
-  console.log("[seed-demo] Vendor:", vendorId);
-
-  // COI: upsert keyed on (tenantId, projectId, vendorId, policyType) so reruns
-  // refresh expiry to keep it ~10 days out (demo invariant).
-  const coiExpiry = daysFromNow(10);
-  const coiValues = {
-    tenantId: TENANT_ID,
-    projectId,
-    vendorId,
-    policyType: "gl",
-    carrier: "Hartford",
-    policyNumber: "HTF-2026-44128",
-    limitsJson: { each_occurrence: 1000000, aggregate: 2000000, waiver_of_subrogation: true },
-    effectiveDate: daysAgo(355),
-    expiryDate: coiExpiry,
-    status: "active" as const,
-    notes: "GL policy nearing expiry — Herbie flagged for renewal.",
-  };
-  await db
-    .insert(coiCertificates)
-    .values(coiValues)
-    .onConflictDoUpdate({
-      target: [
-        coiCertificates.tenantId,
-        coiCertificates.projectId,
-        coiCertificates.vendorId,
-        coiCertificates.policyType,
-      ],
-      set: {
-        carrier: coiValues.carrier,
-        policyNumber: coiValues.policyNumber,
-        limitsJson: coiValues.limitsJson,
-        effectiveDate: coiValues.effectiveDate,
-        expiryDate: coiValues.expiryDate,
-        status: coiValues.status,
-        notes: coiValues.notes,
-        updatedAt: new Date(),
-      },
-    });
-  console.log("[seed-demo] COI upserted for", VENDOR_NAME, "(expires", coiExpiry.toDateString() + ")");
+  console.log("[seed-demo] COIs upserted:", COI_SEEDS.length, "(Acme GL expires", acmeExpiry.toDateString() + ")");
+  const vendorId = vendorIdByNumber["V-ACME-001"]; // alias used below for the renewal approval/notification
+  const coiExpiry = acmeExpiry;
 
   const rfiSeeds = [
     {
@@ -327,7 +418,7 @@ export async function seedDemo() {
     contextJson: {
       ref: DEMO_TAG,
       recipient: "mike@acmeplumbing.example",
-      subject: `COI Renewal — ${VENDOR_NAME} (expires ${coiExpiry.toDateString()})`,
+      subject: `COI Renewal — Acme Plumbing (expires ${coiExpiry.toDateString()})`,
       bodyDraft: `Hi Mike,\n\nYour General Liability policy on file (Hartford HTF-2026-44128) expires on ${coiExpiry.toDateString()} (10 days). Please send an updated COI naming Maple Holdings LLC and BlackHawk Construction as additional insureds before the expiration date.\n\nThanks,\nPat Dorsey\nMaple Street Office Build-Out`,
       projectId,
     },
@@ -440,7 +531,7 @@ export async function seedDemo() {
       submittals: submittalSeeds.length,
       tasks: taskSeeds.length,
       dailyLogs: logSeeds.length,
-      coiCertificates: 1,
+      coiCertificates: COI_SEEDS.length,
       notifications: 1,
       approvals: 1,
       agentActivities: agentActivitySeeds.length,
