@@ -18175,42 +18175,69 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
           eq(drawingSheets.tenantId, DEFAULT_TENANT_ID),
           eq(drawingSheets.id, p(req.params.id))
         ));
-      
+
       if (!sheet) {
         return res.status(404).json({ error: "Drawing sheet not found" });
       }
-      
+
       if (!sheet.storageKey) {
         return res.status(404).json({ error: "No file attached to this sheet" });
       }
-      
-      // Stream the file using ObjectStorageService
+
       const { ObjectStorageService, objectStorageClient } = await import("./replit_integrations/object_storage");
       const storageService = new ObjectStorageService();
-      
-      // Parse the storage key to get bucket and object name
+
+      // Resolve the storage key against three supported conventions:
+      //   1) "/objects/<entityId>"   – ObjectUploader normalized form
+      //   2) "/<bucket>/<objectName>" – raw signed-URL pathname (current
+      //      shape returned by /api/uploads/request-url)
+      //   3) "<relativePath>"        – legacy/seed paths; resolve against
+      //      PUBLIC_OBJECT_SEARCH_PATHS
       const storageKey = sheet.storageKey;
-      const parts = storageKey.startsWith("/") ? storageKey.slice(1).split("/") : storageKey.split("/");
-      const bucketName = parts[0];
-      const objectName = parts.slice(1).join("/");
-      
-      const bucket = objectStorageClient.bucket(bucketName);
-      const file = bucket.file(objectName);
-      
-      const [exists] = await file.exists();
-      if (!exists) {
-        return res.status(404).json({ error: "File not found in storage" });
+      let file: import("@google-cloud/storage").File | null = null;
+
+      try {
+        if (storageKey.startsWith("/objects/")) {
+          file = await storageService.getObjectEntityFile(storageKey);
+        } else if (storageKey.startsWith("/")) {
+          const parts = storageKey.slice(1).split("/");
+          if (parts.length >= 2) {
+            const bucketName = parts[0];
+            const objectName = parts.slice(1).join("/");
+            const candidate = objectStorageClient.bucket(bucketName).file(objectName);
+            const [exists] = await candidate.exists();
+            if (exists) file = candidate;
+          }
+        } else {
+          file = await storageService.searchPublicObject(storageKey);
+        }
+      } catch (resolveErr) {
+        console.error(`[drawing-sheets/download] resolve error for key="${storageKey}":`, resolveErr);
+        file = null;
       }
-      
-      // Set headers for download
-      const filename = `${sheet.sheetNumber}_${sheet.sheetTitle}.${sheet.fileType}`;
-      res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
-      res.setHeader("Content-Type", sheet.fileType === "pdf" ? "application/pdf" : "application/octet-stream");
-      
-      // Stream the file
+
+      if (!file) {
+        return res.status(404).json({
+          error: "No file uploaded for this drawing sheet",
+          sheetId: sheet.id,
+          sheetNumber: sheet.sheetNumber,
+          hint: "Upload a PDF for this sheet via the Blueprint Hub upload action.",
+        });
+      }
+
+      // Inline disposition so opening the URL in a new tab renders the PDF
+      // in the browser viewer instead of forcing a download.
+      const safeFilename = `${sheet.sheetNumber}_${sheet.sheetTitle}.${sheet.fileType}`
+        .replace(/[^\w.\- ]+/g, "_");
+      res.setHeader("Content-Disposition", `inline; filename="${safeFilename}"`);
+      res.setHeader(
+        "Content-Type",
+        sheet.fileType === "pdf" ? "application/pdf" : "application/octet-stream",
+      );
+
       const stream = file.createReadStream();
       stream.on("error", (err) => {
-        console.error("Stream error:", err);
+        console.error("[drawing-sheets/download] stream error:", err);
         if (!res.headersSent) {
           res.status(500).json({ error: "Error streaming file" });
         }
@@ -18218,7 +18245,9 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
       stream.pipe(res);
     } catch (error) {
       console.error("Error downloading sheet:", error);
-      res.status(500).json({ error: "Failed to download sheet" });
+      if (!res.headersSent) {
+        res.status(500).json({ error: "Failed to download sheet" });
+      }
     }
   });
 
