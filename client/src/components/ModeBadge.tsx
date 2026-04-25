@@ -19,6 +19,7 @@ export function ModeBadge() {
       ? "STATIC BUILD MODE \u2014 rebuild required"
       : "MODE UNKNOWN";
 
+  return null; // Hidden for production
   return (
     <div
       className="text-xs px-2 py-1 rounded border bg-background"
