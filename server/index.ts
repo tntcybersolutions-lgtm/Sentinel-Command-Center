@@ -266,8 +266,21 @@ app.use((req, res, next) => {
         if (rows > 0) {
           log(`Backfilled unit_cost on ${rows} takeoff_quantities row(s)`, "takeoff-heal");
         }
+
+        const extResult: any = await backfillDb.execute(backfillSql`
+          UPDATE takeoff_quantities
+          SET extended_cost = quantity * unit_cost
+          WHERE extended_cost IS NULL
+            AND quantity IS NOT NULL
+            AND unit_cost IS NOT NULL
+            AND tenant_id = 'blackhawk-default'
+        `);
+        const extRows = extResult?.rowCount ?? extResult?.rows?.length ?? 0;
+        if (extRows > 0) {
+          log(`Backfilled extended_cost on ${extRows} takeoff_quantities row(s)`, "takeoff-heal");
+        }
       } catch (e) {
-        console.error("Failed to backfill takeoff unit_cost:", e);
+        console.error("Failed to backfill takeoff costs:", e);
       }
 
       // Start HERBIE autonomous processing engine
