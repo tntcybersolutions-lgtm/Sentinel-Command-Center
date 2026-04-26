@@ -248,6 +248,28 @@ app.use((req, res, next) => {
         console.error("Failed to seed bid jacket data:", e);
       }
 
+      try {
+        const { db: backfillDb } = await import("./db");
+        const { sql: backfillSql } = await import("drizzle-orm");
+        const result: any = await backfillDb.execute(backfillSql`
+          UPDATE takeoff_quantities
+          SET unit_cost = CASE
+            WHEN unit = 'CY' THEN 180.00
+            WHEN unit = 'LF' THEN 8.00
+            WHEN unit = 'SF' THEN 2.50
+            WHEN unit = 'EA' THEN 45.00
+            ELSE 25.00
+          END
+          WHERE unit_cost IS NULL AND tenant_id = 'blackhawk-default'
+        `);
+        const rows = result?.rowCount ?? result?.rows?.length ?? 0;
+        if (rows > 0) {
+          log(`Backfilled unit_cost on ${rows} takeoff_quantities row(s)`, "takeoff-heal");
+        }
+      } catch (e) {
+        console.error("Failed to backfill takeoff unit_cost:", e);
+      }
+
       // Start HERBIE autonomous processing engine
       log("Starting HERBIE autonomous processing engine...", "herbie");
       
