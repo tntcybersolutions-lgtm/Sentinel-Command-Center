@@ -18780,9 +18780,23 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
         }
         case "cable_schedule": {
           title = "Cable Schedule Export";
-          const cables = await db.select().from(cableSchedules)
+          const cablesRaw = await db.select().from(cableSchedules)
             .where(eq(cableSchedules.tenantId, DEFAULT_TENANT_ID));
-          content = { cables, generatedAt: new Date().toISOString() };
+          if (cablesRaw.length === 0) {
+            const lfItems = await db.select().from(takeoffQuantities)
+              .where(and(
+                eq(takeoffQuantities.tenantId, DEFAULT_TENANT_ID),
+                eq(takeoffQuantities.unit, 'LF'),
+              ));
+            content = {
+              cables: lfItems,
+              source: 'takeoff_quantities_lf',
+              note: 'No cable entries found, showing LF takeoff items as cable runs',
+              generatedAt: new Date().toISOString(),
+            };
+          } else {
+            content = { cables: cablesRaw, generatedAt: new Date().toISOString() };
+          }
           break;
         }
         case "device_schedule": {
@@ -18880,6 +18894,77 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
           const sheets = await db.select().from(drawingSheets)
             .where(eq(drawingSheets.tenantId, DEFAULT_TENANT_ID));
           content = { systems, sheets, generatedAt: new Date().toISOString() };
+          break;
+        }
+        case "bid_package": {
+          title = "Bid Package Export";
+          const bidOpportunities = await db.select().from(opportunities)
+            .where(eq(opportunities.tenantId, DEFAULT_TENANT_ID))
+            .orderBy(desc(opportunities.createdAt))
+            .limit(10);
+          content = {
+            opportunities: bidOpportunities,
+            totalCount: bidOpportunities.length,
+            generatedAt: new Date().toISOString(),
+          };
+          break;
+        }
+        case "rack_elevation": {
+          title = "Rack Elevation Export";
+          const rackSpecific = await db.select().from(systemDevices)
+            .where(and(
+              eq(systemDevices.tenantId, DEFAULT_TENANT_ID),
+              inArray(systemDevices.deviceType, ['panel', 'switch', 'server', 'ups', 'patch_panel', 'router', 'firewall', 'rack_unit', 'rack']),
+            ))
+            .orderBy(systemDevices.location);
+          const rackDevices = rackSpecific.length > 0
+            ? rackSpecific
+            : await db.select().from(systemDevices)
+                .where(eq(systemDevices.tenantId, DEFAULT_TENANT_ID));
+          content = { rackDevices, generatedAt: new Date().toISOString() };
+          break;
+        }
+        case "owner_handoff": {
+          title = "Owner Handoff Package";
+          const [handoffSheets, handoffSystems] = await Promise.all([
+            db.select().from(drawingSheets).where(eq(drawingSheets.tenantId, DEFAULT_TENANT_ID)),
+            db.select().from(buildingSystems).where(eq(buildingSystems.tenantId, DEFAULT_TENANT_ID)),
+          ]);
+          content = {
+            sheets: handoffSheets,
+            systems: handoffSystems.map((s) => ({
+              id: s.id,
+              systemName: s.systemName,
+              systemType: s.systemType,
+              status: s.status,
+              completionPercent: s.completionPercent,
+              commissioningStatus: s.commissioningStatus,
+              asBuiltStatus: s.asBuiltStatus,
+            })),
+            totalSheets: handoffSheets.length,
+            totalSystems: handoffSystems.length,
+            generatedAt: new Date().toISOString(),
+          };
+          break;
+        }
+        case "smart_building_config": {
+          title = "Smart Building Config Export";
+          const smartRaw = await db.select().from(buildingSystems)
+            .where(and(
+              eq(buildingSystems.tenantId, DEFAULT_TENANT_ID),
+              inArray(buildingSystems.systemType, ['smart_building', 'lv_data', 'low_voltage', 'automation', 'fire_life_safety']),
+            ));
+          const allSmartDevices = await db.select().from(systemDevices)
+            .where(eq(systemDevices.tenantId, DEFAULT_TENANT_ID));
+          const smartSystems = smartRaw.length > 0
+            ? smartRaw
+            : await db.select().from(buildingSystems)
+                .where(eq(buildingSystems.tenantId, DEFAULT_TENANT_ID));
+          content = {
+            smartSystems,
+            devices: allSmartDevices,
+            generatedAt: new Date().toISOString(),
+          };
           break;
         }
         default:
