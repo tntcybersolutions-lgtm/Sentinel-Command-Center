@@ -345,17 +345,20 @@ export default function Herbie() {
       const response = await apiRequest("POST", "/api/herbie/chat", { message, history });
       return response.json();
     },
-    onSuccess: (data: { message?: string; toolCalls?: Array<{ name: string }> }) => {
+    onSuccess: (data: { message?: string; toolCalls?: Array<{ tool?: string; name?: string; result?: any }> }) => {
       const assistantMessage: Message = {
         id: Date.now().toString(),
         role: "assistant",
         content: data.message || "I processed your request.",
         timestamp: new Date(),
-        actions: data.toolCalls?.filter((tool) => tool?.name).map((tool) => ({
-          type: tool.name,
-          label: formatToolName(tool.name),
-          status: "completed" as const,
-        })),
+        actions: data.toolCalls
+          ?.map((tc) => tc?.tool ?? tc?.name)
+          .filter((name): name is string => Boolean(name))
+          .map((name) => ({
+            type: name,
+            label: formatToolName(name),
+            status: "completed" as const,
+          })),
       };
       setMessages(prev => [...prev, assistantMessage]);
     },

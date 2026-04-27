@@ -50,6 +50,8 @@ import {
   RefreshCw,
   FileSpreadsheet,
   Package,
+  Wand2,
+  Bot,
 } from "lucide-react";
 
 const DISCIPLINES = [
@@ -501,7 +503,7 @@ export default function DesignSystems() {
         rack_elevation: "Rack Elevations",
         as_built: "As-Built Sets",
         owner_handoff: "Owner Handoff",
-        smart_config: "Smart Building Config",
+        smart_building_config: "Smart Building Config",
       };
       toast({ title: "Deliverable generated", description: `${titles[type] || type} created successfully` });
       setGeneratingDeliverable(null);
@@ -514,7 +516,7 @@ export default function DesignSystems() {
 
   const generateAllDeliverablesMutation = useMutation({
     mutationFn: async () => {
-      const types = ["trade_scope", "bid_package", "material_list", "cable_schedule", "device_schedule", "rack_elevation", "as_built", "owner_handoff", "smart_config"];
+      const types = ["trade_scope", "bid_package", "material_list", "cable_schedule", "device_schedule", "rack_elevation", "as_built", "owner_handoff", "smart_building_config"];
       for (const type of types) {
         await apiRequest("POST", `/api/generate-deliverable/${type}`, { projectId: "current" });
       }
@@ -526,6 +528,45 @@ export default function DesignSystems() {
     },
     onError: (error: Error) => {
       toast({ title: "Generation failed", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const askHerbieAutoDocMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/herbie/chat", {
+        message: "Auto-document this project. Generate all 9 deliverables and enrich each with an executive summary for the PM.",
+        history: [],
+      });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/project-deliverables"] });
+      toast({ title: "Herbie is on it", description: "Generating + enriching all 9 deliverables." });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Herbie failed", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const askHerbieDeliverableMutation = useMutation({
+    mutationFn: async (type: string) => {
+      const titles: Record<string, string> = {
+        trade_scope: "trade scope", bid_package: "bid package", material_list: "material list",
+        cable_schedule: "cable schedule", device_schedule: "device schedule", rack_elevation: "rack elevation",
+        as_built: "as-built set", owner_handoff: "owner handoff", smart_building_config: "smart building config",
+      };
+      const res = await apiRequest("POST", "/api/herbie/chat", {
+        message: `Generate the ${titles[type] || type} deliverable for this project, enrich it with a sharp PM-facing summary, and tell me what's in it. Flag anything missing.`,
+        history: [],
+      });
+      return res.json();
+    },
+    onSuccess: (_data, type) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/project-deliverables"] });
+      toast({ title: `Herbie generated ${type}`, description: "Check the deliverable summary." });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Herbie failed", description: error.message, variant: "destructive" });
     },
   });
 
@@ -584,7 +625,7 @@ export default function DesignSystems() {
       rack_elevation: "Rack Elevations",
       as_built: "As-Built Sets",
       owner_handoff: "Owner Handoff",
-      smart_config: "Smart Building Config",
+      smart_building_config: "Smart Building Config",
     };
     const link = document.createElement("a");
     link.href = `/api/project-deliverables/download/${type}`;
@@ -1959,14 +2000,25 @@ export default function DesignSystems() {
               <h2 className="text-xl font-semibold">Generated Deliverables</h2>
               <p className="text-muted-foreground">Auto-generated documents from project data</p>
             </div>
-            <Button 
-              onClick={() => generateAllDeliverablesMutation.mutate()} 
-              disabled={generateAllDeliverablesMutation.isPending}
-              data-testid="button-generate-all"
-            >
-              <RefreshCw className={`h-4 w-4 mr-2 ${generateAllDeliverablesMutation.isPending ? "animate-spin" : ""}`} />
-              {generateAllDeliverablesMutation.isPending ? "Generating..." : "Regenerate All"}
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="secondary"
+                onClick={() => askHerbieAutoDocMutation.mutate()}
+                disabled={askHerbieAutoDocMutation.isPending}
+                data-testid="button-ask-herbie-autodoc"
+              >
+                <Bot className={`h-4 w-4 mr-2 ${askHerbieAutoDocMutation.isPending ? "animate-pulse" : ""}`} />
+                {askHerbieAutoDocMutation.isPending ? "Herbie working..." : "Ask Herbie"}
+              </Button>
+              <Button 
+                onClick={() => generateAllDeliverablesMutation.mutate()} 
+                disabled={generateAllDeliverablesMutation.isPending}
+                data-testid="button-generate-all"
+              >
+                <RefreshCw className={`h-4 w-4 mr-2 ${generateAllDeliverablesMutation.isPending ? "animate-spin" : ""}`} />
+                {generateAllDeliverablesMutation.isPending ? "Generating..." : "Regenerate All"}
+              </Button>
+            </div>
           </div>
 
           <div className="grid grid-cols-3 gap-4">
@@ -1979,40 +2031,53 @@ export default function DesignSystems() {
               { type: "rack_elevation", title: "Rack Elevations", icon: Building2, description: "Data/AV rack layouts" },
               { type: "as_built", title: "As-Built Sets", icon: FileText, description: "Record drawings" },
               { type: "owner_handoff", title: "Owner Handoff", icon: FileText, description: "Closeout documentation" },
-              { type: "smart_config", title: "Smart Building Config", icon: Brain, description: "BACnet/controls exports" },
-            ].map(del => (
-              <Card key={del.type} className="hover-elevate">
-                <CardHeader className="pb-2">
-                  <div className="flex items-center gap-2">
-                    <del.icon className="h-5 w-5 text-muted-foreground" />
-                    <CardTitle className="text-base">{del.title}</CardTitle>
-                  </div>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  <p className="text-sm text-muted-foreground">{del.description}</p>
-                  <div className="flex items-center gap-2">
-                    <Button 
-                      size="sm" 
-                      variant="outline" 
-                      className="flex-1" 
-                      onClick={() => generateDeliverableMutation.mutate(del.type)}
-                      disabled={generatingDeliverable === del.type}
-                      data-testid={`button-generate-${del.type}`}
-                    >
-                      {generatingDeliverable === del.type ? "Generating..." : "Generate"}
-                    </Button>
-                    <Button 
-                      size="sm" 
-                      variant="ghost" 
-                      onClick={() => downloadDeliverable(del.type)}
-                      data-testid={`button-download-${del.type}`}
-                    >
-                      <Download className="h-4 w-4" />
-                    </Button>
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
+              { type: "smart_building_config", title: "Smart Building Config", icon: Brain, description: "BACnet/controls exports" },
+            ].map(del => {
+              const herbieBusy = askHerbieDeliverableMutation.isPending && askHerbieDeliverableMutation.variables === del.type;
+              return (
+                <Card key={del.type} className="hover-elevate">
+                  <CardHeader className="pb-2">
+                    <div className="flex items-center gap-2">
+                      <del.icon className="h-5 w-5 text-muted-foreground" />
+                      <CardTitle className="text-base">{del.title}</CardTitle>
+                    </div>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    <p className="text-sm text-muted-foreground">{del.description}</p>
+                    <div className="flex items-center gap-2">
+                      <Button 
+                        size="sm" 
+                        variant="outline" 
+                        className="flex-1" 
+                        onClick={() => generateDeliverableMutation.mutate(del.type)}
+                        disabled={generatingDeliverable === del.type}
+                        data-testid={`button-generate-${del.type}`}
+                      >
+                        {generatingDeliverable === del.type ? "Generating..." : "Generate"}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        title="Ask Herbie to generate + enrich"
+                        onClick={() => askHerbieDeliverableMutation.mutate(del.type)}
+                        disabled={herbieBusy}
+                        data-testid={`button-ask-herbie-${del.type}`}
+                      >
+                        <Wand2 className={`h-4 w-4 ${herbieBusy ? "animate-pulse text-primary" : ""}`} />
+                      </Button>
+                      <Button 
+                        size="sm" 
+                        variant="ghost" 
+                        onClick={() => downloadDeliverable(del.type)}
+                        data-testid={`button-download-${del.type}`}
+                      >
+                        <Download className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+              );
+            })}
           </div>
         </TabsContent>
       </Tabs>
