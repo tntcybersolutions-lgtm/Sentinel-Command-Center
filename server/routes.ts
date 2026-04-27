@@ -24133,7 +24133,9 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
       const projectId = p(req.params.projectId);
       const { listForProject, partitionByTier, expiryTier, tierSeverity } =
         await import("./services/coi.service");
-      const rows = await listForProject(DEFAULT_TENANT_ID, projectId);
+      const all = await listForProject(DEFAULT_TENANT_ID, projectId);
+      // Per Feature 3 spec: GET returns non-expired only.
+      const rows = all.filter((r) => r.status !== "expired");
       const rollup = partitionByTier(rows);
       res.json({
         rows: rows.map((r) => {
@@ -24159,7 +24161,7 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
   app.post("/api/projects/:projectId/coi", async (req: Request, res: Response) => {
     try {
       const projectId = p(req.params.projectId);
-      const { upsertCoi } = await import("./services/coi.service");
+      const { upsertCOI } = await import("./services/coi.service");
       const body = req.body ?? {};
       if (!body.policyType || typeof body.policyType !== "string") {
         return res.status(400).json({ error: "policyType required" });
@@ -24167,8 +24169,8 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
       if (!body.expiryDate) {
         return res.status(400).json({ error: "expiryDate required" });
       }
-      const row = await upsertCoi({
-        tenantId: DEFAULT_TENANT_ID,
+      const expiryDate = new Date(body.expiryDate);
+      const { coiId } = await upsertCOI(DEFAULT_TENANT_ID, {
         projectId,
         vendorId: body.vendorId ?? null,
         policyType: body.policyType,
@@ -24176,12 +24178,31 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
         policyNumber: body.policyNumber ?? null,
         limitsJson: body.limitsJson ?? null,
         effectiveDate: body.effectiveDate ? new Date(body.effectiveDate) : null,
-        expiryDate: new Date(body.expiryDate),
+        expiryDate,
         documentId: body.documentId ?? null,
         status: body.status ?? "active",
         notes: body.notes ?? null,
       } as any);
-      res.status(201).json(row);
+      // Fire-and-forget Herbie memory write — never block the response.
+      void (async () => {
+        try {
+          const { writeFact } = await import("./services/herbie-memory.service");
+          await writeFact(
+            { tenantId: DEFAULT_TENANT_ID, projectId },
+            {
+              subjectType: "coi",
+              subjectId: coiId,
+              predicate: "coi_expiry",
+              object: expiryDate.toISOString(),
+              sourceType: "user",
+              confidence: 1.0,
+            },
+          );
+        } catch (e) {
+          console.error("[coi] writeFact hook failed:", e);
+        }
+      })();
+      res.status(201).json({ coiId });
     } catch (error: any) {
       console.error("POST /api/projects/:projectId/coi error:", error);
       res.status(500).json({ error: error?.message ?? "Failed to create COI" });
