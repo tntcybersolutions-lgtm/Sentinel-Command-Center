@@ -242,16 +242,30 @@ export async function getExpiringCOIs(
 
 /**
  * Mark a COI as expired. Returns the updated row, or undefined if no
- * row matched the id. Tenant-agnostic by design — callers that need
- * tenant scoping should look the COI up via `getCoi` first.
+ * row matched. Accepts either a bare `coiId` (legacy callers) or
+ * `(tenantId, coiId)` for explicit tenant scoping. New callers MUST
+ * pass tenantId — the bare-id form is preserved for backward compat
+ * but logs a warning so we can flush remaining call-sites.
  */
 export async function markExpired(
-  coiId: string,
+  tenantIdOrCoiId: string,
+  maybeCoiId?: string,
 ): Promise<CoiCertificate | undefined> {
+  const tenantScoped = typeof maybeCoiId === "string";
+  const coiId = tenantScoped ? maybeCoiId! : tenantIdOrCoiId;
+  const tenantId = tenantScoped ? tenantIdOrCoiId : undefined;
+  if (!tenantScoped) {
+    console.warn(
+      `[coi.markExpired] called without tenantId for coi=${coiId} — please update caller`,
+    );
+  }
+  const whereClause = tenantId
+    ? and(eq(coiCertificates.tenantId, tenantId), eq(coiCertificates.id, coiId))
+    : eq(coiCertificates.id, coiId);
   const [updated] = await db
     .update(coiCertificates)
     .set({ status: "expired", updatedAt: new Date() })
-    .where(eq(coiCertificates.id, coiId))
+    .where(whereClause)
     .returning();
   return updated;
 }

@@ -258,6 +258,160 @@ const JOB_HANDLERS: Record<string, JobHandler> = {
     console.log(`[DocAI] Scheduled processing complete: ${results.processed} processed, ${results.failed} failed, ${queued} queued`);
   },
 
+  // Roadmap Feature 3 — daily COI expiry monitor.
+  //   1. Pulls every active COI expiring within 30 days.
+  //   2. For each COI whose days_until_expiry lands EXACTLY on
+  //      30 / 14 / 7 / 1, drops a notification (type='coi_expiry_alert')
+  //      keyed by entity_id=coiId. The notifications table has no
+  //      uniqueness on (type,entityId,date), so we add a same-day
+  //      idempotency guard against the notifications row to avoid
+  //      duplicate alerts when the worker re-runs intra-day.
+  //   3. At the 14-day threshold ONLY, also drops a
+  //      draft_external_message approval_request whose contextJson
+  //      carries a pre-populated renewal email body. The PM approves
+  //      the draft and the existing outbound dispatcher handles the
+  //      send (Phase 1: still human-gated — no auto-send).
+  coi_expiry_monitor: async (payload) => {
+    const tenantId = payload.tenantId as string;
+    const { getExpiringCOIs } = await import("../services/coi.service");
+    const { db: workerDb } = await import("../db");
+    const { notifications, vendors, approvalRequests } = await import("@shared/schema");
+    const { and: andOp, eq: eqOp, gte: gteOp } = await import("drizzle-orm");
+
+    const cois = await getExpiringCOIs(tenantId, 30);
+    if (cois.length === 0) {
+      console.log(`[CoiMonitor] No COIs expiring within 30 days for tenant ${tenantId}`);
+      return;
+    }
+
+    const MS_PER_DAY = 24 * 60 * 60 * 1000;
+    const now = Date.now();
+    const ALERT_THRESHOLDS = new Set([30, 14, 7, 1]);
+    let notificationsCreated = 0;
+    let approvalDraftsCreated = 0;
+
+    for (const coi of cois) {
+      if (!coi.expiryDate) continue;
+      const daysUntilExpiry = Math.ceil(
+        (new Date(coi.expiryDate).getTime() - now) / MS_PER_DAY,
+      );
+      if (!ALERT_THRESHOLDS.has(daysUntilExpiry)) continue;
+
+      // Resolve vendor display name + email (best-effort, tenant-scoped
+      // to prevent cross-tenant lookup if vendorId ever collides).
+      let vendorName = "Vendor";
+      let vendorEmail = "vendor@example.com";
+      if (coi.vendorId) {
+        const [v] = await workerDb
+          .select({ companyName: vendors.companyName, email: vendors.email })
+          .from(vendors)
+          .where(andOp(eqOp(vendors.tenantId, tenantId), eqOp(vendors.id, coi.vendorId)))
+          .limit(1);
+        if (v) {
+          vendorName = v.companyName ?? vendorName;
+          vendorEmail = v.email ?? vendorEmail;
+        }
+      }
+
+      // Same-day idempotency: don't fire a duplicate notification if
+      // we've already alerted on this COI today.
+      const startOfToday = new Date();
+      startOfToday.setHours(0, 0, 0, 0);
+      const existingToday = await workerDb
+        .select({ id: notifications.id })
+        .from(notifications)
+        .where(andOp(
+          eqOp(notifications.tenantId, tenantId),
+          eqOp(notifications.type, "coi_expiry_alert"),
+          eqOp(notifications.entityId, coi.id),
+          gteOp(notifications.createdAt, startOfToday),
+        ))
+        .limit(1);
+
+      if (existingToday.length > 0) continue;
+
+      const message = `${vendorName} COI expires in ${daysUntilExpiry} ${daysUntilExpiry === 1 ? "day" : "days"}`;
+      const priority = daysUntilExpiry <= 1 ? "urgent" : daysUntilExpiry <= 7 ? "high" : "normal";
+
+      await workerDb.insert(notifications).values({
+        tenantId,
+        userId: null,
+        type: "coi_expiry_alert",
+        title: `COI expiring in ${daysUntilExpiry} ${daysUntilExpiry === 1 ? "day" : "days"}`,
+        message,
+        entityType: "coi_certificate",
+        entityId: coi.id,
+        priority,
+        read: false,
+        actionUrl: coi.projectId ? `/projects/${coi.projectId}/cockpit` : `/coi`,
+      });
+      notificationsCreated++;
+
+      // 14-day threshold: also draft a renewal email for the PM to send.
+      // Idempotency: don't queue a second draft if one already exists
+      // today for this same COI (prevents duplicate drafts in the
+      // approvals queue when the worker is re-run intra-day).
+      if (daysUntilExpiry === 14) {
+        const existingDraft = await workerDb
+          .select({ id: approvalRequests.id })
+          .from(approvalRequests)
+          .where(andOp(
+            eqOp(approvalRequests.tenantId, tenantId),
+            eqOp(approvalRequests.actionType, "draft_external_message"),
+            eqOp(approvalRequests.entityType, "coi_certificate"),
+            eqOp(approvalRequests.entityId, coi.id),
+            gteOp(approvalRequests.createdAt, startOfToday),
+          ))
+          .limit(1);
+        if (existingDraft.length > 0) continue;
+
+        const expiryHuman = new Date(coi.expiryDate).toLocaleDateString("en-US", {
+          month: "long",
+          day: "numeric",
+          year: "numeric",
+        });
+        const policyTypeLabel = coi.policyType.toUpperCase();
+        const renewalBody =
+          `Hi ${vendorName} team,\n\n` +
+          `Our records show your ${policyTypeLabel} certificate of insurance ` +
+          `(policy ${coi.policyNumber ?? "[number]"}) is set to expire on ${expiryHuman}.\n\n` +
+          `Please send us a renewed COI naming BlackHawk Construction as additional insured ` +
+          `at your earliest convenience so we don't lose access to the jobsite.\n\n` +
+          `Reply to this email or upload directly to our vendor portal.\n\n` +
+          `Thanks,\nBlackHawk PM`;
+
+        await workerDb.insert(approvalRequests).values({
+          tenantId,
+          entityType: "coi_certificate",
+          entityId: coi.id,
+          actionType: "draft_external_message",
+          requestedBy: "herbie",
+          status: "pending",
+          priority: "high",
+          contextJson: {
+            recipient: vendorEmail,
+            channel: "email",
+            subject: `Renewal needed: ${policyTypeLabel} COI expiring ${expiryHuman}`,
+            body: renewalBody,
+            coiId: coi.id,
+            projectId: coi.projectId ?? null,
+            vendorId: coi.vendorId ?? null,
+            vendorName,
+            policyType: coi.policyType,
+            expiryDate: coi.expiryDate,
+            triggeredBy: "coi_expiry_monitor",
+            daysUntilExpiry,
+          },
+        });
+        approvalDraftsCreated++;
+      }
+    }
+
+    console.log(
+      `[CoiMonitor] tenant=${tenantId} scanned=${cois.length} notifications=${notificationsCreated} drafts=${approvalDraftsCreated}`,
+    );
+  },
+
   compliance_expiry_check: async (payload) => {
     const tenantId = payload.tenantId as string;
     const { alertsService } = await import("../services/alerts.service");
