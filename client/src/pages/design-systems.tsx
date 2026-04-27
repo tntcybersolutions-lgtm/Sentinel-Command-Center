@@ -14,6 +14,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Progress } from "@/components/ui/progress";
 import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { ObjectUploader } from "@/components/ObjectUploader";
@@ -24,6 +25,7 @@ import {
   Cpu,
   Workflow,
   Upload,
+  Loader2,
   FileText,
   Lock,
   Unlock,
@@ -163,6 +165,8 @@ interface Blueprint {
   title: string;
   fileName?: string;
   pageCount?: number;
+  uploadedAt?: string;
+  createdAt?: string;
 }
 
 // Shape of takeoff_items returned by GET /api/blueprints/:id/takeoff-items.
@@ -205,7 +209,7 @@ export default function DesignSystems() {
   const [isAutoBuildOpen, setIsAutoBuildOpen] = useState(false);
   const [isNewTakeoffOpen, setIsNewTakeoffOpen] = useState(false);
   const [isImportTakeoffOpen, setIsImportTakeoffOpen] = useState(false);
-  const [importBlueprintId, setImportBlueprintId] = useState<string>("");
+  const [selectedBlueprintIds, setSelectedBlueprintIds] = useState<Set<string>>(new Set());
   const [isAddSystemOpen, setIsAddSystemOpen] = useState(false);
   const [isEditTakeoffOpen, setIsEditTakeoffOpen] = useState(false);
   const [isEditSystemOpen, setIsEditSystemOpen] = useState(false);
@@ -252,13 +256,6 @@ export default function DesignSystems() {
 
   const { data: blueprintsData = [] } = useQuery<Blueprint[]>({
     queryKey: ["/api/blueprints"],
-  });
-
-  // Preview the items for the currently selected blueprint so the user
-  // sees exactly what will be imported before committing.
-  const { data: importPreviewItems = [], isLoading: importPreviewLoading } = useQuery<BlueprintTakeoffItem[]>({
-    queryKey: ["/api/blueprints", importBlueprintId, "takeoff-items"],
-    enabled: !!importBlueprintId,
   });
 
   const { data: systemDevicesAll = [] } = useQuery<Array<{ id: string; systemId: string; deviceType: string; manufacturer?: string; model?: string; quantity: number; location?: string; installedCount?: number }>>({
@@ -384,73 +381,40 @@ export default function DesignSystems() {
     },
   });
 
-  // Pulls real takeoff items from a selected blueprint and merges them
-  // into the project's takeoff quantities list. Maps each blueprint
-  // item's free-text `category` to a takeoff_category by name; items
-  // whose category doesn't match an existing category are reported back
-  // as "skipped" so the user knows what didn't come over.
-  const importTakeoffFromBlueprintMutation = useMutation({
-    mutationFn: async (blueprintId: string) => {
-      const blueprint = blueprintsData.find(b => b.id === blueprintId);
-      if (!blueprint) throw new Error("Blueprint not found");
-
-      const items: BlueprintTakeoffItem[] = await fetch(
-        `/api/blueprints/${blueprintId}/takeoff-items`,
-        { credentials: "include" },
-      ).then(r => {
-        if (!r.ok) throw new Error(`Failed to fetch blueprint items (${r.status})`);
-        return r.json();
-      });
-
-      if (!items.length) {
-        return { created: 0, skipped: [] as string[], failed: [] as Array<{ name: string; error: string }>, blueprint };
-      }
-
-      const skipped: string[] = [];
-      const failed: Array<{ name: string; error: string }> = [];
-      let created = 0;
-
-      for (const it of items) {
-        const cat = takeoffCategoriesData.find(c => c.name === it.category);
-        if (!cat) {
-          skipped.push(`${it.name} (category: ${it.category})`);
-          continue;
-        }
-        try {
-          await apiRequest("POST", "/api/takeoff-quantities", {
-            categoryId: cat.id,
-            room: `${blueprint.title} — ${it.name}`,
-            floor: "",
-            quantity: String(it.quantity),
-            unit: it.unit,
-            unitCost: String(it.unitCost ?? "0"),
-          });
-          created++;
-        } catch (err) {
-          failed.push({ name: it.name, error: err instanceof Error ? err.message : String(err) });
-        }
-      }
-
-      if (created > 0) {
+  // Bulk-imports takeoff items from one or more selected blueprints.
+  // Delegates the per-item work to the server route
+  // POST /api/takeoffs/import-from-blueprints, which maps each blueprint
+  // item's free-text `category` to a takeoff_category by name. Items whose
+  // category doesn't match an existing category come back as "skipped".
+  const importTakeoffFromBlueprintsMutation = useMutation({
+    mutationFn: async (blueprintIds: string[]) => {
+      if (blueprintIds.length === 0) throw new Error("No blueprints selected");
+      const result = await apiRequest("POST", "/api/takeoffs/import-from-blueprints", { blueprintIds });
+      const data = await result.json() as {
+        created: number;
+        skipped: string[];
+        failed: Array<{ name: string; error: string }>;
+        perBlueprint: Array<{ blueprintId: string; blueprintTitle: string; created: number; skipped: string[]; failed: Array<{ name: string; error: string }> }>;
+      };
+      if (data.created > 0) {
         await queryClient.invalidateQueries({ queryKey: ["/api/takeoff-quantities"] });
       }
-      return { created, skipped, failed, blueprint };
+      return data;
     },
-    onSuccess: ({ created, skipped, failed, blueprint }) => {
+    onSuccess: ({ created, skipped, failed, perBlueprint }) => {
+      const bpCount = perBlueprint.length;
       if (created === 0) {
         const reason = skipped.length > 0
           ? `No matching takeoff categories. Missing: ${skipped.slice(0, 3).join(", ")}${skipped.length > 3 ? "…" : ""}.`
           : failed.length > 0
             ? `All ${failed.length} item(s) failed: ${failed[0].error}`
-            : `Blueprint "${blueprint.title}" has no takeoff items to import.`;
+            : `Selected blueprint${bpCount === 1 ? "" : "s"} ha${bpCount === 1 ? "s" : "ve"} no takeoff items to import.`;
         toast({ title: "Nothing imported", description: reason, variant: "destructive" });
         return;
       }
-
-      const parts: string[] = [`Created ${created} takeoff item${created === 1 ? "" : "s"} from ${blueprint.title}`];
+      const parts: string[] = [`Created ${created} takeoff item${created === 1 ? "" : "s"} from ${bpCount} blueprint${bpCount === 1 ? "" : "s"}`];
       if (skipped.length > 0) parts.push(`skipped ${skipped.length} (no matching category)`);
       if (failed.length > 0) parts.push(`${failed.length} failed`);
-
       const isPartial = skipped.length > 0 || failed.length > 0;
       toast({
         title: isPartial ? "Import partially complete" : "Import complete",
@@ -458,7 +422,7 @@ export default function DesignSystems() {
         variant: isPartial ? "destructive" : "default",
       });
       setIsImportTakeoffOpen(false);
-      setImportBlueprintId("");
+      setSelectedBlueprintIds(new Set());
     },
     onError: (error: Error) => {
       toast({ title: "Import failed", description: error.message, variant: "destructive" });
@@ -1528,94 +1492,118 @@ export default function DesignSystems() {
                   </form>
                 </DialogContent>
               </Dialog>
-              <Button variant="outline" onClick={() => { setImportBlueprintId(""); setIsImportTakeoffOpen(true); }} data-testid="button-import-takeoff">
+              <Button variant="outline" onClick={() => { setSelectedBlueprintIds(new Set()); setIsImportTakeoffOpen(true); }} data-testid="button-import-takeoff">
                 <Upload className="h-4 w-4 mr-2" />
                 Import from Plans
               </Button>
               <Dialog open={isImportTakeoffOpen} onOpenChange={setIsImportTakeoffOpen}>
-                <DialogContent>
+                <DialogContent className="max-w-2xl">
                   <DialogHeader>
                     <DialogTitle>Import Takeoff from Plans</DialogTitle>
                     <DialogDescription>
-                      Select a blueprint to pull its measured takeoff items into this list. Items are matched to your takeoff categories by name.
+                      Select one or more blueprints. Their measured takeoff items will be matched to your existing takeoff categories by name and added to this list.
                     </DialogDescription>
                   </DialogHeader>
                   <form
                     onSubmit={(e) => {
                       e.preventDefault();
-                      if (!importBlueprintId) {
-                        toast({ title: "No blueprint selected", description: "Choose a blueprint to import from.", variant: "destructive" });
+                      const ids = Array.from(selectedBlueprintIds);
+                      if (ids.length === 0) {
+                        toast({ title: "No blueprints selected", description: "Pick at least one blueprint to import from.", variant: "destructive" });
                         return;
                       }
-                      importTakeoffFromBlueprintMutation.mutate(importBlueprintId);
+                      importTakeoffFromBlueprintsMutation.mutate(ids);
                     }}
                     className="space-y-4"
                   >
-                    <div className="space-y-2">
-                      <Label htmlFor="import-blueprint">Blueprint</Label>
-                      <Select value={importBlueprintId} onValueChange={setImportBlueprintId}>
-                        <SelectTrigger id="import-blueprint" data-testid="select-import-blueprint">
-                          <SelectValue placeholder="Select a blueprint..." />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {blueprintsData.length === 0 && (
-                            <div className="px-2 py-1.5 text-sm text-muted-foreground">
-                              No blueprints available — upload one in Blueprint Hub first.
-                            </div>
-                          )}
-                          {blueprintsData.map((b) => (
-                            <SelectItem key={b.id} value={b.id} data-testid={`option-import-blueprint-${b.id}`}>
-                              {b.title}{b.fileName ? ` (${b.fileName})` : ""}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    {importBlueprintId && (
-                      <div className="rounded-md border bg-muted/30 p-3 space-y-1.5 max-h-64 overflow-y-auto" data-testid="import-preview">
-                        {importPreviewLoading ? (
-                          <div className="text-sm text-muted-foreground">Loading items…</div>
-                        ) : importPreviewItems.length === 0 ? (
-                          <div className="text-sm text-muted-foreground">
-                            This blueprint has no takeoff items yet. Add measurements to it from the Blueprint viewer first.
-                          </div>
-                        ) : (
-                          <>
-                            <div className="text-sm font-medium">
-                              Will attempt to import {importPreviewItems.length} item{importPreviewItems.length === 1 ? "" : "s"}:
-                            </div>
-                            {importPreviewItems.map((p) => {
-                              const qty = parseFloat(p.quantity || "0");
-                              const cost = parseFloat(p.unitCost || "0");
-                              const matched = takeoffCategoriesData.some(c => c.name === p.category);
-                              return (
-                                <div
-                                  key={p.id}
-                                  className="text-xs text-muted-foreground flex items-center gap-2"
-                                  data-testid={`preview-item-${p.id}`}
-                                >
-                                  <span className={matched ? "" : "line-through opacity-60"}>
-                                    • {p.name} — {qty} {p.unit}
-                                    {cost > 0 ? ` @ $${cost.toFixed(2)} = $${(qty * cost).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : ""}
-                                    {" "}<span className="opacity-70">[{p.category}]</span>
-                                  </span>
-                                  {!matched && (
-                                    <Badge variant="outline" className="text-[10px]">no matching category</Badge>
-                                  )}
-                                </div>
-                              );
-                            })}
-                          </>
-                        )}
+                    {/* Select-all / clear-all header for the blueprint checkbox list. */}
+                    {blueprintsData.length > 0 && (
+                      <div className="flex items-center justify-between text-xs text-muted-foreground">
+                        <span data-testid="text-blueprint-selection-count">
+                          {selectedBlueprintIds.size} of {blueprintsData.length} selected
+                        </span>
+                        <div className="flex gap-3">
+                          <button
+                            type="button"
+                            className="hover:text-foreground underline-offset-2 hover:underline"
+                            onClick={() => setSelectedBlueprintIds(new Set(blueprintsData.map(b => b.id)))}
+                            data-testid="button-select-all-blueprints"
+                          >
+                            Select all
+                          </button>
+                          <button
+                            type="button"
+                            className="hover:text-foreground underline-offset-2 hover:underline"
+                            onClick={() => setSelectedBlueprintIds(new Set())}
+                            data-testid="button-clear-blueprints"
+                          >
+                            Clear
+                          </button>
+                        </div>
                       </div>
                     )}
+                    <div className="rounded-md border max-h-80 overflow-y-auto divide-y" data-testid="list-blueprints">
+                      {blueprintsData.length === 0 ? (
+                        <div className="px-3 py-6 text-sm text-muted-foreground text-center">
+                          No blueprints available — upload one in Blueprint Hub first.
+                        </div>
+                      ) : (
+                        blueprintsData.map((b) => {
+                          const checked = selectedBlueprintIds.has(b.id);
+                          const uploaded = b.uploadedAt || b.createdAt;
+                          const uploadedLabel = uploaded
+                            ? new Date(uploaded).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" })
+                            : "Unknown date";
+                          const pages = b.pageCount ?? 1;
+                          return (
+                            <label
+                              key={b.id}
+                              htmlFor={`bp-${b.id}`}
+                              className="flex items-start gap-3 px-3 py-2.5 hover-elevate cursor-pointer"
+                              data-testid={`row-blueprint-${b.id}`}
+                            >
+                              <Checkbox
+                                id={`bp-${b.id}`}
+                                checked={checked}
+                                onCheckedChange={(v) => {
+                                  setSelectedBlueprintIds((prev) => {
+                                    const next = new Set(prev);
+                                    if (v) next.add(b.id); else next.delete(b.id);
+                                    return next;
+                                  });
+                                }}
+                                data-testid={`checkbox-blueprint-${b.id}`}
+                              />
+                              <div className="flex-1 min-w-0">
+                                <div className="text-sm font-medium truncate" data-testid={`text-blueprint-title-${b.id}`}>{b.title}</div>
+                                <div className="text-xs text-muted-foreground flex items-center gap-3 mt-0.5">
+                                  <span data-testid={`text-blueprint-uploaded-${b.id}`}>Uploaded {uploadedLabel}</span>
+                                  <span>·</span>
+                                  <span data-testid={`text-blueprint-pages-${b.id}`}>{pages} page{pages === 1 ? "" : "s"}</span>
+                                </div>
+                              </div>
+                            </label>
+                          );
+                        })
+                      )}
+                    </div>
                     <Button
                       type="submit"
                       className="w-full"
-                      disabled={!importBlueprintId || importPreviewLoading || importPreviewItems.length === 0 || importTakeoffFromBlueprintMutation.isPending}
+                      disabled={selectedBlueprintIds.size === 0 || importTakeoffFromBlueprintsMutation.isPending}
                       data-testid="button-confirm-import-takeoff"
                     >
-                      {importTakeoffFromBlueprintMutation.isPending ? "Importing..." : "Import Takeoff Items"}
+                      {importTakeoffFromBlueprintsMutation.isPending ? (
+                        <>
+                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                          Importing...
+                        </>
+                      ) : (
+                        <>
+                          <Upload className="h-4 w-4 mr-2" />
+                          Import from {selectedBlueprintIds.size || 0} Blueprint{selectedBlueprintIds.size === 1 ? "" : "s"}
+                        </>
+                      )}
                     </Button>
                   </form>
                 </DialogContent>
