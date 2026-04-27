@@ -8394,13 +8394,15 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
           const { executeHerbieTool } = await import("./services/herbie-tools");
           const summary = `SAM.gov ingestion run: ${JSON.stringify(stats).substring(0, 280)}`;
           await executeHerbieTool(
-            "record_fact" as any,
             {
-              projectId: "samgov-ingest",
-              fact: summary,
-              category: "observation",
-              source: "samgov_ingest",
-            } as any,
+              tool: "record_fact",
+              args: {
+                projectId: "samgov-ingest",
+                fact: summary,
+                category: "observation",
+                source: "samgov_ingest",
+              },
+            },
             { tenantId: DEFAULT_TENANT_ID, userId: "herbie" } as any,
           );
         } catch (e) {
@@ -17718,17 +17720,28 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
 
   app.post("/api/notifications/mark-all-read", async (req: Request, res: Response) => {
     try {
-      const { userId } = req.body;
-      
-      await db.update(notifications)
+      const tenantId = p(req.headers["x-tenant-id"] as string) || DEFAULT_TENANT_ID;
+      const { userId } = req.body ?? {};
+
+      // When the bell omits userId (system-wide notifications like COI
+      // alerts that have userId=null), mark every unread row in the
+      // tenant. When userId is provided, scope to that user. We never
+      // pass `eq(col, undefined)` to Drizzle because it produces
+      // unpredictable SQL across drivers.
+      const conditions = [
+        eq(notifications.tenantId, tenantId),
+        eq(notifications.read, false),
+      ];
+      if (typeof userId === "string" && userId.length > 0) {
+        conditions.push(eq(notifications.userId, userId));
+      }
+
+      const updated = await db.update(notifications)
         .set({ read: true })
-        .where(and(
-          eq(notifications.tenantId, DEFAULT_TENANT_ID),
-          eq(notifications.userId, userId),
-          eq(notifications.read, false)
-        ));
-      
-      res.json({ success: true });
+        .where(and(...conditions))
+        .returning({ id: notifications.id });
+
+      res.json({ success: true, updated: updated.length });
     } catch (error) {
       console.error("Error marking all notifications read:", error);
       res.status(500).json({ error: "Failed to mark all notifications read" });
@@ -18120,8 +18133,10 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
         try {
           const { executeHerbieTool } = await import("./services/herbie-tools");
           await executeHerbieTool(
-            "extract_fields" as any,
-            { documentId: sheet.id, extractionType: "drawing_sheet" } as any,
+            {
+              tool: "extract_fields",
+              args: { documentId: sheet.id, extractionType: "drawing_sheet" },
+            },
             { tenantId: DEFAULT_TENANT_ID, userId: "herbie" } as any,
           );
         } catch (e) {
@@ -18413,13 +18428,15 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
           try {
             const { executeHerbieTool } = await import("./services/herbie-tools");
             await executeHerbieTool(
-              "flag_for_review" as any,
               {
-                entityType: "takeoff_quantity",
-                entityId: quantity.id,
-                reason: `Takeoff item created without a unit cost (qty ${quantity.quantity} ${quantity.unit ?? ""}). PM should set pricing before bid.`,
-                priority: "normal",
-              } as any,
+                tool: "flag_for_review",
+                args: {
+                  entityType: "takeoff_quantity",
+                  entityId: quantity.id,
+                  reason: `Takeoff item created without a unit cost (qty ${quantity.quantity} ${quantity.unit ?? ""}). PM should set pricing before bid.`,
+                  priority: "normal",
+                },
+              },
               { tenantId: DEFAULT_TENANT_ID, userId: "herbie" } as any,
             );
           } catch (e) {
@@ -18522,13 +18539,15 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
           try {
             const { executeHerbieTool } = await import("./services/herbie-tools");
             await executeHerbieTool(
-              "record_fact" as any,
               {
-                projectId: system.projectId,
-                fact: `Building system added: ${system.systemName} (${system.systemType}). Status: ${system.status ?? "not_started"}.`,
-                category: "observation",
-                source: "design-systems UI",
-              } as any,
+                tool: "record_fact",
+                args: {
+                  projectId: system.projectId,
+                  fact: `Building system added: ${system.systemName} (${system.systemType}). Status: ${system.status ?? "not_started"}.`,
+                  category: "observation",
+                  source: "design-systems UI",
+                },
+              },
               { tenantId: DEFAULT_TENANT_ID, userId: "herbie" } as any,
             );
           } catch (e) {
@@ -20251,8 +20270,8 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
       const now = new Date();
       const items: any[] = [];
 
-      // 1. Overdue tasks
-      const overdueTasks = await db.select({ id: projectTasks.id, title: projectTasks.title, dueDate: projectTasks.dueDate, status: projectTasks.status })
+      // 1. Overdue tasks (project_tasks uses `name`, not `title`)
+      const overdueTasks = await db.select({ id: projectTasks.id, title: projectTasks.name, dueDate: projectTasks.dueDate, status: projectTasks.status })
         .from(projectTasks)
         .where(and(eq(projectTasks.tenantId, tenantId), sql`${projectTasks.dueDate} < NOW() AND ${projectTasks.status} != 'completed'`))
         .limit(5);
@@ -20260,8 +20279,8 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
         items.push({ id: `task-${t.id}`, title: `Overdue task: ${t.title}`, description: `This task was due ${t.dueDate ? new Date(t.dueDate).toLocaleDateString() : "in the past"} and is still open.`, priority: "high", source: "system", actionType: "follow_up", dueAt: t.dueDate, sourceEntityType: "task", createdAt: now.toISOString() });
       });
 
-      // 2. Open RFIs
-      const openRfis = await db.select({ id: rfis.id, title: rfis.title, status: rfis.status, dueDate: rfis.dueDate })
+      // 2. Open RFIs (rfis uses `subject`, not `title`)
+      const openRfis = await db.select({ id: rfis.id, title: rfis.subject, status: rfis.status, dueDate: rfis.dueDate })
         .from(rfis)
         .where(and(eq(rfis.tenantId, tenantId), sql`${rfis.status} = 'open'`))
         .limit(5);
@@ -20269,16 +20288,20 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
         items.push({ id: `rfi-${r.id}`, title: `Open RFI: ${r.title}`, description: `RFI is open and awaiting response.`, priority: r.dueDate && new Date(r.dueDate) < now ? "critical" : "medium", source: "system", actionType: "compliance_review", dueAt: r.dueDate, sourceEntityType: "rfi", createdAt: now.toISOString() });
       });
 
-      // 3. Bids without readiness scores (need attention)
-      const bidsWithoutScores = await db.select({ id: bidProjects.id, title: bidProjects.title })
+      // 3. Bids without readiness scores (need attention).
+      // bid_projects has no `title` column — pull the human-readable
+      // title from the joined opportunity (project convention; matches
+      // /api/bids/readiness-dashboard).
+      const bidsWithoutScores = await db.select({ id: bidProjects.id, title: opportunities.title })
         .from(bidProjects)
+        .leftJoin(opportunities, eq(bidProjects.opportunityId, opportunities.id))
         .where(and(
           eq(bidProjects.tenantId, tenantId),
           sql`NOT EXISTS (SELECT 1 FROM bid_readiness_scores brs WHERE brs.bid_project_id = ${bidProjects.id})`
         ))
         .limit(3);
       bidsWithoutScores.forEach((b: any) => {
-        items.push({ id: `bid-score-${b.id}`, title: `Score bid: ${b.title}`, description: `This bid project has no readiness score. Run Herbie analysis to score it.`, priority: "medium", source: "ai", actionType: "run_ingestion", sourceEntityType: "bid_project", createdAt: now.toISOString() });
+        items.push({ id: `bid-score-${b.id}`, title: `Score bid: ${b.title ?? b.id.slice(0, 8)}`, description: `This bid project has no readiness score. Run Herbie analysis to score it.`, priority: "medium", source: "ai", actionType: "run_ingestion", sourceEntityType: "bid_project", createdAt: now.toISOString() });
       });
 
       // Sort by priority: critical > high > medium > low
