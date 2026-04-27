@@ -14,7 +14,8 @@ import { ProjectContextProvider } from "@/nav/project-context";
 import { EntityDrawer } from "@/features/drawers/EntityDrawer";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { ModeBadge } from "@/components/ModeBadge";
-import { Bell, Search, AlertTriangle, RefreshCw } from "lucide-react";
+import { Search, AlertTriangle, RefreshCw } from "lucide-react";
+import { NotificationBell } from "@/components/notification-bell";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 
@@ -454,12 +455,7 @@ function App() {
                     </kbd>
                   </Button>
                   <div className="flex items-center gap-2">
-                    <Button variant="ghost" size="icon" className="relative" data-testid="button-notifications">
-                      <Bell className="h-4 w-4" />
-                      <Badge className="absolute -top-1 -right-1 h-4 min-w-4 p-0 flex items-center justify-center text-[10px]">
-                        3
-                      </Badge>
-                    </Button>
+                    <NotificationBell />
                     <ThemeToggle />
                   </div>
                 </header>
