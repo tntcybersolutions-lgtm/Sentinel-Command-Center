@@ -1774,7 +1774,7 @@ export default function DesignSystems() {
             )}
           </div>
 
-          <div className="grid grid-cols-4 gap-4">
+          <div className="grid grid-cols-5 gap-4">
             {filteredSummary.map(cat => (
               <Card key={cat.id} className="hover-elevate cursor-pointer" onClick={() => setTakeoffFilter(cat.id)} data-testid={`card-takeoff-${cat.id}`}>
                 <CardHeader className="pb-2">
@@ -1789,6 +1789,24 @@ export default function DesignSystems() {
                 </CardContent>
               </Card>
             ))}
+            {/* Grand-total card: always shows the project-wide totals across all
+                categories, regardless of the current category filter. */}
+            <Card className="border-primary/40 bg-primary/5" data-testid="card-takeoff-total-project">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-primary">Total Project</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold" data-testid="text-takeoff-grand-total-cost">
+                  ${takeoffSummary.reduce((s, c) => s + c.totalCost, 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </div>
+                <p className="text-sm text-muted-foreground" data-testid="text-takeoff-grand-total-count">
+                  {takeoffQuantities.length.toLocaleString()} {takeoffQuantities.length === 1 ? "line item" : "line items"}
+                </p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  across {takeoffSummary.filter(c => c.count > 0).length} {takeoffSummary.filter(c => c.count > 0).length === 1 ? "category" : "categories"}
+                </p>
+              </CardContent>
+            </Card>
           </div>
 
           <Card>
