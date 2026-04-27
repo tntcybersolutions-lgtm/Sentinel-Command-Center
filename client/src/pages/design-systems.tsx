@@ -218,6 +218,10 @@ export default function DesignSystems() {
   const [takeoffSortBy, setTakeoffSortBy] = useState<null | "category" | "trade" | "name" | "quantity" | "unit" | "unitCost" | "extended" | "notes">(null);
   const [takeoffSortDir, setTakeoffSortDir] = useState<"asc" | "desc">("asc");
   const [takeoffSearch, setTakeoffSearch] = useState("");
+  // Controlled state for the New Takeoff Item dialog so we can do inline validation.
+  const emptyNewTakeoff = { categoryId: "", projectId: "", room: "", quantity: "", unit: "EA", unitCost: "", notes: "" };
+  const [newTakeoffForm, setNewTakeoffForm] = useState(emptyNewTakeoff);
+  const [newTakeoffErrors, setNewTakeoffErrors] = useState<Record<string, string>>({});
   const [editingSystem, setEditingSystem] = useState<BuildingSystem | null>(null);
   const [viewingSheet, setViewingSheet] = useState<DrawingSheet | null>(null);
   const [selectedSystemId, setSelectedSystemId] = useState<string | null>(null);
@@ -240,6 +244,10 @@ export default function DesignSystems() {
 
   const { data: takeoffCategoriesData = [] } = useQuery<TakeoffCategory[]>({
     queryKey: ["/api/takeoff-categories"],
+  });
+
+  const { data: projectsData = [] } = useQuery<Array<{ id: string; name: string }>>({
+    queryKey: ["/api/projects"],
   });
 
   const { data: blueprintsData = [] } = useQuery<Blueprint[]>({
@@ -1319,35 +1327,83 @@ export default function DesignSystems() {
         <TabsContent value="takeoff" className="space-y-6">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <Dialog open={isNewTakeoffOpen} onOpenChange={setIsNewTakeoffOpen}>
+              <Dialog open={isNewTakeoffOpen} onOpenChange={(open) => {
+                setIsNewTakeoffOpen(open);
+                if (!open) { setNewTakeoffForm(emptyNewTakeoff); setNewTakeoffErrors({}); }
+              }}>
                 <DialogTrigger asChild>
                   <Button variant="outline" disabled={takeoffCategories.length === 0} data-testid="button-new-takeoff">
                     <Plus className="h-4 w-4 mr-2" />
                     {takeoffCategories.length === 0 ? "Loading Categories..." : "New Takeoff Item"}
                   </Button>
                 </DialogTrigger>
-                <DialogContent>
+                <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
                   <DialogHeader>
                     <DialogTitle>Add Takeoff Quantity</DialogTitle>
                     <DialogDescription>Record a new quantity measurement</DialogDescription>
                   </DialogHeader>
-                  <form onSubmit={(e) => {
-                    e.preventDefault();
-                    const formData = new FormData(e.currentTarget);
-                    createTakeoffQuantityMutation.mutate({
-                      categoryId: formData.get("categoryId") as string,
-                      room: formData.get("room") as string,
-                      floor: formData.get("floor") as string,
-                      quantity: formData.get("quantity") as string,
-                      unit: formData.get("unit") as string,
-                      unitCost: formData.get("unitCost") as string,
-                    });
-                  }} className="space-y-4">
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      // Inline validation for required fields.
+                      const errs: Record<string, string> = {};
+                      if (!newTakeoffForm.room.trim()) errs.room = "Item name is required";
+                      if (!newTakeoffForm.categoryId) errs.categoryId = "Category is required";
+                      const qty = parseFloat(newTakeoffForm.quantity);
+                      if (!newTakeoffForm.quantity.trim() || !isFinite(qty) || qty <= 0) errs.quantity = "Quantity must be greater than 0";
+                      if (!newTakeoffForm.unit) errs.unit = "Unit is required";
+                      if (newTakeoffForm.unitCost.trim()) {
+                        const uc = parseFloat(newTakeoffForm.unitCost);
+                        if (!isFinite(uc) || uc < 0) errs.unitCost = "Unit cost must be a non-negative number";
+                      }
+                      setNewTakeoffErrors(errs);
+                      if (Object.keys(errs).length > 0) return;
+                      createTakeoffQuantityMutation.mutate(
+                        {
+                          categoryId: newTakeoffForm.categoryId,
+                          projectId: newTakeoffForm.projectId || undefined,
+                          room: newTakeoffForm.room.trim(),
+                          quantity: newTakeoffForm.quantity,
+                          unit: newTakeoffForm.unit,
+                          unitCost: newTakeoffForm.unitCost || undefined,
+                          notes: newTakeoffForm.notes || undefined,
+                        } as any,
+                        {
+                          onSuccess: () => {
+                            setNewTakeoffForm(emptyNewTakeoff);
+                            setNewTakeoffErrors({});
+                          },
+                        }
+                      );
+                    }}
+                    className="space-y-4"
+                  >
+                    <div className="space-y-2">
+                      <Label htmlFor="new-takeoff-room">
+                        Item Name <span className="text-destructive">*</span>
+                      </Label>
+                      <Input
+                        id="new-takeoff-room"
+                        value={newTakeoffForm.room}
+                        onChange={(e) => setNewTakeoffForm(f => ({ ...f, room: e.target.value }))}
+                        placeholder="e.g. 4-inch concrete slab"
+                        aria-invalid={!!newTakeoffErrors.room}
+                        data-testid="input-takeoff-name"
+                      />
+                      {newTakeoffErrors.room && (
+                        <p className="text-sm text-destructive" data-testid="error-takeoff-name">{newTakeoffErrors.room}</p>
+                      )}
+                    </div>
                     <div className="grid grid-cols-2 gap-4">
                       <div className="space-y-2">
-                        <Label htmlFor="categoryId">Category</Label>
-                        <Select name="categoryId" required>
-                          <SelectTrigger data-testid="select-takeoff-category">
+                        <Label htmlFor="new-takeoff-category">
+                          Category <span className="text-destructive">*</span>
+                        </Label>
+                        <Select
+                          value={newTakeoffForm.categoryId}
+                          onValueChange={(v) => setNewTakeoffForm(f => ({ ...f, categoryId: v }))}
+                        >
+                          <SelectTrigger id="new-takeoff-category" aria-invalid={!!newTakeoffErrors.categoryId} data-testid="select-takeoff-category">
                             <SelectValue placeholder="Select category" />
                           </SelectTrigger>
                           <SelectContent>
@@ -1356,41 +1412,111 @@ export default function DesignSystems() {
                             ))}
                           </SelectContent>
                         </Select>
+                        {newTakeoffErrors.categoryId && (
+                          <p className="text-sm text-destructive" data-testid="error-takeoff-category">{newTakeoffErrors.categoryId}</p>
+                        )}
                       </div>
                       <div className="space-y-2">
-                        <Label htmlFor="unit">Unit</Label>
-                        <Select name="unit" defaultValue="EA">
-                          <SelectTrigger data-testid="select-takeoff-unit">
+                        <Label>Trade</Label>
+                        <Input
+                          value={takeoffCategories.find(c => c.id === newTakeoffForm.categoryId)?.trade || ""}
+                          readOnly
+                          disabled
+                          placeholder="Auto-filled from category"
+                          data-testid="input-takeoff-trade"
+                        />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-3 gap-4">
+                      <div className="space-y-2">
+                        <Label htmlFor="new-takeoff-quantity">
+                          Quantity <span className="text-destructive">*</span>
+                        </Label>
+                        <Input
+                          id="new-takeoff-quantity"
+                          type="number"
+                          step="0.01"
+                          value={newTakeoffForm.quantity}
+                          onChange={(e) => setNewTakeoffForm(f => ({ ...f, quantity: e.target.value }))}
+                          placeholder="0.00"
+                          aria-invalid={!!newTakeoffErrors.quantity}
+                          data-testid="input-takeoff-quantity"
+                        />
+                        {newTakeoffErrors.quantity && (
+                          <p className="text-sm text-destructive" data-testid="error-takeoff-quantity">{newTakeoffErrors.quantity}</p>
+                        )}
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="new-takeoff-unit">
+                          Unit <span className="text-destructive">*</span>
+                        </Label>
+                        <Select
+                          value={newTakeoffForm.unit}
+                          onValueChange={(v) => setNewTakeoffForm(f => ({ ...f, unit: v }))}
+                        >
+                          <SelectTrigger id="new-takeoff-unit" aria-invalid={!!newTakeoffErrors.unit} data-testid="select-takeoff-unit">
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
                             <SelectItem value="EA">EA (Each)</SelectItem>
-                            <SelectItem value="SF">SF (Sq Ft)</SelectItem>
                             <SelectItem value="LF">LF (Linear Ft)</SelectItem>
+                            <SelectItem value="SF">SF (Sq Ft)</SelectItem>
                             <SelectItem value="CY">CY (Cubic Yd)</SelectItem>
+                            <SelectItem value="LB">LB (Pound)</SelectItem>
+                            <SelectItem value="HR">HR (Hour)</SelectItem>
+                            <SelectItem value="LS">LS (Lump Sum)</SelectItem>
+                            <SelectItem value="TON">TON</SelectItem>
+                            <SelectItem value="GAL">GAL (Gallon)</SelectItem>
                           </SelectContent>
                         </Select>
+                        {newTakeoffErrors.unit && (
+                          <p className="text-sm text-destructive" data-testid="error-takeoff-unit">{newTakeoffErrors.unit}</p>
+                        )}
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="new-takeoff-unit-cost">Unit Cost ($)</Label>
+                        <Input
+                          id="new-takeoff-unit-cost"
+                          type="number"
+                          step="0.01"
+                          value={newTakeoffForm.unitCost}
+                          onChange={(e) => setNewTakeoffForm(f => ({ ...f, unitCost: e.target.value }))}
+                          placeholder="0.00"
+                          aria-invalid={!!newTakeoffErrors.unitCost}
+                          data-testid="input-takeoff-cost"
+                        />
+                        {newTakeoffErrors.unitCost && (
+                          <p className="text-sm text-destructive" data-testid="error-takeoff-cost">{newTakeoffErrors.unitCost}</p>
+                        )}
                       </div>
                     </div>
-                    <div className="grid grid-cols-2 gap-4">
-                      <div className="space-y-2">
-                        <Label htmlFor="room">Room/Area</Label>
-                        <Input id="room" name="room" placeholder="e.g. Room 101" data-testid="input-takeoff-room" />
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="floor">Floor</Label>
-                        <Input id="floor" name="floor" placeholder="e.g. Floor 1" data-testid="input-takeoff-floor" />
-                      </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="new-takeoff-project">Project</Label>
+                      <Select
+                        value={newTakeoffForm.projectId || "__none__"}
+                        onValueChange={(v) => setNewTakeoffForm(f => ({ ...f, projectId: v === "__none__" ? "" : v }))}
+                      >
+                        <SelectTrigger id="new-takeoff-project" data-testid="select-takeoff-project">
+                          <SelectValue placeholder="Optional — leave blank for unassigned" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__none__">— Unassigned —</SelectItem>
+                          {projectsData.map(p => (
+                            <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
                     </div>
-                    <div className="grid grid-cols-2 gap-4">
-                      <div className="space-y-2">
-                        <Label htmlFor="quantity">Quantity</Label>
-                        <Input id="quantity" name="quantity" type="number" step="0.01" required placeholder="0.00" data-testid="input-takeoff-quantity" />
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="unitCost">Unit Cost ($)</Label>
-                        <Input id="unitCost" name="unitCost" type="number" step="0.01" placeholder="0.00" data-testid="input-takeoff-cost" />
-                      </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="new-takeoff-notes">Notes</Label>
+                      <Textarea
+                        id="new-takeoff-notes"
+                        value={newTakeoffForm.notes}
+                        onChange={(e) => setNewTakeoffForm(f => ({ ...f, notes: e.target.value }))}
+                        placeholder="Optional notes for this line item"
+                        rows={3}
+                        data-testid="input-takeoff-notes"
+                      />
                     </div>
                     <Button type="submit" className="w-full" disabled={createTakeoffQuantityMutation.isPending} data-testid="button-submit-takeoff">
                       {createTakeoffQuantityMutation.isPending ? "Adding..." : "Add Takeoff Item"}
