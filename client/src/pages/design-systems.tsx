@@ -140,6 +140,7 @@ interface DrawingSheet {
 interface TakeoffQuantity {
   id: string;
   categoryId: string;
+  projectId?: string;
   room?: string;
   floor?: string;
   quantity: string;
@@ -147,6 +148,8 @@ interface TakeoffQuantity {
   unitCost?: string;
   extendedCost?: string;
   notes?: string;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 interface BuildingSystem {
