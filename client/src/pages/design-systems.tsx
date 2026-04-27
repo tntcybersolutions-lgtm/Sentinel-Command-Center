@@ -210,7 +210,7 @@ export default function DesignSystems() {
   const [isAutoBuildOpen, setIsAutoBuildOpen] = useState(false);
   const [isNewTakeoffOpen, setIsNewTakeoffOpen] = useState(false);
   const [isImportTakeoffOpen, setIsImportTakeoffOpen] = useState(false);
-  const [importSheetId, setImportSheetId] = useState<string>("");
+  const [importBlueprintId, setImportBlueprintId] = useState<string>("");
   const [isAddSystemOpen, setIsAddSystemOpen] = useState(false);
   const [isEditTakeoffOpen, setIsEditTakeoffOpen] = useState(false);
   const [isEditSystemOpen, setIsEditSystemOpen] = useState(false);
@@ -238,6 +238,17 @@ export default function DesignSystems() {
 
   const { data: takeoffCategoriesData = [] } = useQuery<TakeoffCategory[]>({
     queryKey: ["/api/takeoff-categories"],
+  });
+
+  const { data: blueprintsData = [] } = useQuery<Blueprint[]>({
+    queryKey: ["/api/blueprints"],
+  });
+
+  // Preview the items for the currently selected blueprint so the user
+  // sees exactly what will be imported before committing.
+  const { data: importPreviewItems = [], isLoading: importPreviewLoading } = useQuery<BlueprintTakeoffItem[]>({
+    queryKey: ["/api/blueprints", importBlueprintId, "takeoff-items"],
+    enabled: !!importBlueprintId,
   });
 
   const { data: systemDevicesAll = [] } = useQuery<Array<{ id: string; systemId: string; deviceType: string; manufacturer?: string; model?: string; quantity: number; location?: string; installedCount?: number }>>({
@@ -363,58 +374,70 @@ export default function DesignSystems() {
     },
   });
 
-  const importTakeoffFromSheetMutation = useMutation({
-    mutationFn: async (sheetId: string) => {
-      const sheet = drawingSheets.find(s => s.id === sheetId);
-      if (!sheet) throw new Error("Drawing sheet not found");
-      const templates = IMPORT_TEMPLATES[sheet.discipline] || IMPORT_TEMPLATES.default;
+  // Pulls real takeoff items from a selected blueprint and merges them
+  // into the project's takeoff quantities list. Maps each blueprint
+  // item's free-text `category` to a takeoff_category by name; items
+  // whose category doesn't match an existing category are reported back
+  // as "skipped" so the user knows what didn't come over.
+  const importTakeoffFromBlueprintMutation = useMutation({
+    mutationFn: async (blueprintId: string) => {
+      const blueprint = blueprintsData.find(b => b.id === blueprintId);
+      if (!blueprint) throw new Error("Blueprint not found");
+
+      const items: BlueprintTakeoffItem[] = await fetch(
+        `/api/blueprints/${blueprintId}/takeoff-items`,
+        { credentials: "include" },
+      ).then(r => {
+        if (!r.ok) throw new Error(`Failed to fetch blueprint items (${r.status})`);
+        return r.json();
+      });
+
+      if (!items.length) {
+        return { created: 0, skipped: [] as string[], failed: [] as Array<{ name: string; error: string }>, blueprint };
+      }
 
       const skipped: string[] = [];
       const failed: Array<{ name: string; error: string }> = [];
       let created = 0;
 
-      for (const t of templates) {
-        const cat = takeoffCategoriesData.find(c => c.name === t.categoryName);
+      for (const it of items) {
+        const cat = takeoffCategoriesData.find(c => c.name === it.category);
         if (!cat) {
-          skipped.push(t.categoryName);
+          skipped.push(`${it.name} (category: ${it.category})`);
           continue;
         }
         try {
           await apiRequest("POST", "/api/takeoff-quantities", {
             categoryId: cat.id,
-            sheetId: sheet.id,
-            room: `${sheet.sheetNumber} — ${sheet.sheetTitle}`,
+            room: `${blueprint.title} — ${it.name}`,
             floor: "",
-            quantity: t.quantity.toString(),
-            unit: t.unit,
-            unitCost: t.unitCost.toFixed(2),
-            extendedCost: (t.quantity * t.unitCost).toFixed(2),
+            quantity: String(it.quantity),
+            unit: it.unit,
+            unitCost: String(it.unitCost ?? "0"),
           });
           created++;
         } catch (err) {
-          failed.push({ name: t.name, error: err instanceof Error ? err.message : String(err) });
+          failed.push({ name: it.name, error: err instanceof Error ? err.message : String(err) });
         }
       }
 
-      // Refresh the list whenever ANY rows were written, even on partial failure
       if (created > 0) {
         await queryClient.invalidateQueries({ queryKey: ["/api/takeoff-quantities"] });
       }
-      return { created, skipped, failed, sheet };
+      return { created, skipped, failed, blueprint };
     },
-    onSuccess: ({ created, skipped, failed, sheet }) => {
-      // Treat zero-created as an error so the user knows nothing actually happened
+    onSuccess: ({ created, skipped, failed, blueprint }) => {
       if (created === 0) {
         const reason = skipped.length > 0
-          ? `No matching takeoff categories found for ${sheet.discipline}. Missing: ${skipped.join(", ")}.`
+          ? `No matching takeoff categories. Missing: ${skipped.slice(0, 3).join(", ")}${skipped.length > 3 ? "…" : ""}.`
           : failed.length > 0
             ? `All ${failed.length} item(s) failed: ${failed[0].error}`
-            : "No items to import.";
+            : `Blueprint "${blueprint.title}" has no takeoff items to import.`;
         toast({ title: "Nothing imported", description: reason, variant: "destructive" });
         return;
       }
 
-      const parts: string[] = [`Created ${created} takeoff item${created === 1 ? "" : "s"} from ${sheet.sheetNumber}`];
+      const parts: string[] = [`Created ${created} takeoff item${created === 1 ? "" : "s"} from ${blueprint.title}`];
       if (skipped.length > 0) parts.push(`skipped ${skipped.length} (no matching category)`);
       if (failed.length > 0) parts.push(`${failed.length} failed`);
 

@@ -4479,6 +4479,19 @@ export async function registerRoutes(
     }
   });
 
+  // Returns the takeoff items associated with a blueprint. Used by the
+  // "Import from Plans" flow on /estimate/takeoff so PMs can pull a
+  // plan's pre-measured items into the project's takeoff_quantities list.
+  app.get("/api/blueprints/:id/takeoff-items", async (req: Request, res: Response) => {
+    try {
+      const items = await storage.getTakeoffItems(p(req.params.id));
+      res.json(items);
+    } catch (error) {
+      console.error("Error fetching blueprint takeoff items:", error);
+      res.status(500).json({ error: "Failed to fetch blueprint takeoff items" });
+    }
+  });
+
   app.post("/api/blueprints/:id/annotations", async (req: Request, res: Response) => {
     try {
       const createSchema = z.object({
@@ -19515,7 +19528,7 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
   // Financial Data API Routes (Invoices, Purchase Orders, Submittals, Tasks)
   app.get("/api/invoices", async (req: Request, res: Response) => {
     try {
-      const { invoices: invoicesTable, projects: projectsTable } = await import("@shared/schema");
+      const { invoices: invoicesTable, projects: projectsTable, vendors: vendorsTable } = await import("@shared/schema");
       const { eq, desc, and } = await import("drizzle-orm");
       const typeFilter = req.query.type as string | undefined;
       const projectId = req.query.projectId as string | undefined;
@@ -19524,6 +19537,8 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
       const typeMap: Record<string, string> = { ap: "payable", ar: "receivable" };
       const mappedType = typeFilter ? (typeMap[typeFilter] || typeFilter) : undefined;
       if (mappedType) conditions.push(eq(invoicesTable.invoiceType, mappedType));
+      // Join vendors so the Bills tab on /financial/invoices can show
+      // the actual vendor name without scraping notes_json on the client.
       let query = db.select({
         id: invoicesTable.id,
         invoiceNumber: invoicesTable.invoiceNumber,
@@ -19538,8 +19553,10 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
         notesJson: invoicesTable.notesJson,
         createdAt: invoicesTable.createdAt,
         projectName: projectsTable.name,
+        vendorName: vendorsTable.companyName,
       }).from(invoicesTable)
         .leftJoin(projectsTable, eq(invoicesTable.projectId, projectsTable.id))
+        .leftJoin(vendorsTable, eq(invoicesTable.vendorId, vendorsTable.id))
         .where(and(...conditions))
         .orderBy(desc(invoicesTable.createdAt))
         .$dynamic();
@@ -19548,6 +19565,49 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
     } catch (error) {
       console.error("Error fetching invoices:", error);
       res.status(500).json({ error: "Failed to fetch invoices" });
+    }
+  });
+
+  // Lightweight invoice creation used by the "+ New Invoice" dialog on
+  // /financial/invoices. Validates the minimal field set, persists the
+  // row directly, and returns the created invoice so the client can
+  // optimistically refresh the list.
+  const createInvoiceSchema = z.object({
+    invoiceNumber: z.string().min(1, "Invoice number required"),
+    invoiceType: z.enum(["receivable", "payable"]),
+    projectId: z.string().min(1).optional().nullable(),
+    vendorId: z.string().min(1).optional().nullable(),
+    totalAmount: z.string().or(z.number()).optional().transform(v => v == null || v === "" ? "0" : String(v)),
+    dueDate: z.string().optional().nullable(),
+    status: z.string().optional().default("draft"),
+  });
+
+  app.post("/api/invoices", async (req: Request, res: Response) => {
+    try {
+      const validated = createInvoiceSchema.safeParse(req.body);
+      if (!validated.success) {
+        return res.status(400).json({ error: "Validation failed", details: fromError(validated.error).toString() });
+      }
+      const { invoices: invoicesTable } = await import("@shared/schema");
+      const data = validated.data;
+      const [created] = await db.insert(invoicesTable).values({
+        tenantId: DEFAULT_TENANT_ID,
+        invoiceNumber: data.invoiceNumber,
+        invoiceType: data.invoiceType,
+        projectId: data.projectId || null,
+        vendorId: data.vendorId || null,
+        totalAmount: data.totalAmount,
+        dueDate: data.dueDate ? new Date(data.dueDate) : null,
+        status: data.status || "draft",
+      }).returning();
+      res.status(201).json(created);
+    } catch (error: any) {
+      console.error("Error creating invoice:", error);
+      // Friendly handling for unique-constraint violations (duplicate invoice number per tenant).
+      if (error?.code === "23505") {
+        return res.status(409).json({ error: "An invoice with that number already exists." });
+      }
+      res.status(500).json({ error: "Failed to create invoice" });
     }
   });
 
