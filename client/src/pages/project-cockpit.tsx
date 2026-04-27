@@ -7,7 +7,7 @@ import {
   FileQuestion, FileCheck, ArrowLeftRight, ClipboardList, ListChecks, Bot,
   Loader2, Play, ChevronDown, ChevronRight, AlertTriangle, Clock, CheckCircle2,
   XCircle, ArrowUp, ArrowRight, Minus, Brain, Lightbulb, GitBranch, Zap,
-  Plus, Shield, ExternalLink,
+  Plus, Shield, ExternalLink, Send,
 } from "lucide-react";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
@@ -1002,10 +1002,301 @@ function HerbieMemoryTab({ projectId }: { projectId: string }) {
   );
 }
 
+// Roadmap Feature 11 — Share with Client / Sub modal.
+//
+// Lets the PM mint a portal share token scoped to an audience + a list of
+// document categories with an expiry. Lists existing shares and allows
+// revocation. The token URL is /portal/:token.
+const SHARE_CATEGORIES = [
+  { value: "drawings", label: "Drawings" },
+  { value: "specs", label: "Specifications" },
+  { value: "submittals", label: "Submittals" },
+  { value: "rfis", label: "RFIs" },
+  { value: "change_orders", label: "Change Orders" },
+  { value: "daily_logs", label: "Daily Logs" },
+  { value: "permits", label: "Permits" },
+  { value: "compliance", label: "Compliance / COIs" },
+];
+
+interface PortalShareRow {
+  id: string;
+  token: string;
+  audience: string | null;
+  categoriesJson?: string[] | null;
+  expiresAt: string | null;
+  createdAt: string;
+  revokedAt: string | null;
+}
+
+function ShareDialog({
+  open,
+  onOpenChange,
+  projectId,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  projectId: string;
+}) {
+  const { toast } = useToast();
+  const qc = useQueryClient();
+  const [audience, setAudience] = useState<string>("client");
+  const [categories, setCategories] = useState<string[]>([
+    "drawings",
+    "submittals",
+  ]);
+  const [expiresInDays, setExpiresInDays] = useState<string>("14");
+
+  const sharesQ = useQuery<PortalShareRow[]>({
+    queryKey: ["/api/portal/shares", projectId],
+    queryFn: () =>
+      fetch(`/api/portal/shares?projectId=${encodeURIComponent(projectId)}`)
+        .then((r) => r.json())
+        .then((rows) => (Array.isArray(rows) ? rows : [])),
+    enabled: open && !!projectId,
+  });
+
+  const createShare = useMutation({
+    mutationFn: async () => {
+      const days = parseInt(expiresInDays, 10);
+      const expiresAt = Number.isFinite(days) && days > 0
+        ? new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString()
+        : null;
+      // Backend audience enum is `client | sub | internal`; map UI labels.
+      const audienceMap: Record<string, string> = {
+        client: "client",
+        subcontractor: "sub",
+        architect: "internal",
+        inspector: "internal",
+      };
+      const apiAudience = audienceMap[audience] ?? "client";
+      const resp = await apiRequest("POST", "/api/portal/shares", {
+        projectId,
+        audience: apiAudience,
+        audienceLabel: audience,
+        categoriesJson: categories,
+        expiresAt,
+      });
+      return resp.json();
+    },
+    onSuccess: (data: any) => {
+      toast({
+        title: "Share link created",
+        description: data?.token
+          ? `Portal token: ${String(data.token).slice(0, 12)}…`
+          : "Active",
+      });
+      qc.invalidateQueries({ queryKey: ["/api/portal/shares", projectId] });
+    },
+    onError: (e: any) => {
+      toast({
+        title: "Failed to create share",
+        description: e?.message || "Try again",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const revokeShare = useMutation({
+    mutationFn: async (token: string) => {
+      const resp = await apiRequest(
+        "DELETE",
+        `/api/portal/${encodeURIComponent(token)}`,
+      );
+      return resp.json().catch(() => ({}));
+    },
+    onSuccess: () => {
+      toast({ title: "Share revoked" });
+      qc.invalidateQueries({ queryKey: ["/api/portal/shares", projectId] });
+    },
+    onError: (e: any) => {
+      toast({
+        title: "Failed to revoke",
+        description: e?.message || "Try again",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const portalUrl = (token: string) =>
+    `${window.location.origin}/portal/${token}`;
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent
+        data-testid="dialog-share-portal"
+        className="max-w-2xl bg-[#0f0f17] border-white/10 text-white"
+      >
+        <DialogHeader>
+          <DialogTitle className="font-mono text-sm">
+            Share with Client / Subcontractor
+          </DialogTitle>
+        </DialogHeader>
+
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Label className="text-xs">Audience</Label>
+              <Select value={audience} onValueChange={setAudience}>
+                <SelectTrigger
+                  className="h-9 bg-black/40 border-white/10"
+                  data-testid="select-share-audience"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="client">Client / Owner</SelectItem>
+                  <SelectItem value="subcontractor">Subcontractor</SelectItem>
+                  <SelectItem value="architect">Architect / Engineer</SelectItem>
+                  <SelectItem value="inspector">Inspector / AHJ</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label className="text-xs">Expires in (days)</Label>
+              <Input
+                type="number"
+                min={1}
+                max={365}
+                value={expiresInDays}
+                onChange={(e) => setExpiresInDays(e.target.value)}
+                className="h-9 bg-black/40 border-white/10"
+                data-testid="input-share-expiry"
+              />
+            </div>
+          </div>
+
+          <div>
+            <Label className="text-xs">Document Categories</Label>
+            <div className="grid grid-cols-2 gap-2 mt-1">
+              {SHARE_CATEGORIES.map((c) => {
+                const checked = categories.includes(c.value);
+                return (
+                  <label
+                    key={c.value}
+                    className="flex items-center gap-2 text-xs px-2 py-1.5 border border-white/10 rounded cursor-pointer hover:bg-white/5"
+                    data-testid={`label-share-cat-${c.value}`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={(e) => {
+                        setCategories((prev) =>
+                          e.target.checked
+                            ? [...prev, c.value]
+                            : prev.filter((x) => x !== c.value),
+                        );
+                      }}
+                      data-testid={`checkbox-share-cat-${c.value}`}
+                    />
+                    {c.label}
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="flex justify-end">
+            <Button
+              onClick={() => createShare.mutate()}
+              disabled={createShare.isPending || categories.length === 0}
+              data-testid="button-create-share"
+              size="sm"
+            >
+              {createShare.isPending ? (
+                <Loader2 className="w-3 h-3 mr-2 animate-spin" />
+              ) : null}
+              Create share link
+            </Button>
+          </div>
+
+          <div className="border-t border-white/10 pt-3">
+            <div className="text-xs font-mono text-zinc-400 mb-2">
+              Existing shares
+            </div>
+            {sharesQ.isLoading ? (
+              <div className="text-xs text-zinc-500">Loading…</div>
+            ) : (sharesQ.data || []).length === 0 ? (
+              <div
+                className="text-xs text-zinc-500"
+                data-testid="text-share-empty"
+              >
+                No active shares.
+              </div>
+            ) : (
+              <div className="space-y-2 max-h-64 overflow-y-auto">
+                {(sharesQ.data || []).map((s) => (
+                  <div
+                    key={s.id}
+                    className="flex items-center gap-2 p-2 border border-white/10 rounded text-xs"
+                    data-testid={`row-share-${s.id}`}
+                  >
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono uppercase text-cyan-400">
+                          {s.audience || "client"}
+                        </span>
+                        {s.expiresAt ? (
+                          <span className="text-zinc-500">
+                            exp {new Date(s.expiresAt).toLocaleDateString()}
+                          </span>
+                        ) : null}
+                      </div>
+                      <div className="font-mono truncate text-zinc-400">
+                        {portalUrl(s.token)}
+                      </div>
+                    </div>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="h-7 text-xs"
+                      onClick={() => {
+                        navigator.clipboard
+                          .writeText(portalUrl(s.token))
+                          .then(() => toast({ title: "Copied to clipboard" }))
+                          .catch(() => {});
+                      }}
+                      data-testid={`button-copy-share-${s.id}`}
+                    >
+                      Copy
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="destructive"
+                      className="h-7 text-xs"
+                      onClick={() => revokeShare.mutate(s.token)}
+                      disabled={revokeShare.isPending}
+                      data-testid={`button-revoke-share-${s.id}`}
+                    >
+                      Revoke
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <DialogFooter>
+          <Button
+            variant="outline"
+            onClick={() => onOpenChange(false)}
+            data-testid="button-share-close"
+          >
+            Close
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export default function ProjectCockpit() {
   const [, params] = useRoute("/projects/:id/cockpit");
   const projectId = params?.id || "";
   const [activeTab, setActiveTab] = useState<TabId>("rfis");
+  const [shareOpen, setShareOpen] = useState(false);
 
   const { data: cockpit, isLoading } = useQuery<any>({
     queryKey: ["/api/projects", projectId, "cockpit"],
@@ -1076,9 +1367,19 @@ export default function ProjectCockpit() {
               {runAgent.isPending && runAgent.variables === "fieldops" ? <Loader2 className="w-3 h-3 animate-spin" /> : <Play className="w-3 h-3" />}
               Run Field Ops
             </button>
+            <button
+              data-testid="btn-share-portal"
+              onClick={() => setShareOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-mono border border-amber-500/30 text-amber-400 hover:bg-amber-500/10 transition-colors"
+            >
+              <Send className="w-3 h-3" />
+              Share with Client / Sub
+            </button>
           </div>
         </div>
       </div>
+
+      <ShareDialog open={shareOpen} onOpenChange={setShareOpen} projectId={projectId} />
 
       <HerbieDigestCard projectId={projectId} />
       <CoiStatusCard projectId={projectId} />

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -99,6 +99,12 @@ export default function VoiceDailyLogPage() {
 
   const [voiceOpen, setVoiceOpen] = useState(false);
   const [voiceRecording, setVoiceRecording] = useState(false);
+  const [voiceProcessing, setVoiceProcessing] = useState(false);
+  const [voiceError, setVoiceError] = useState<string | null>(null);
+  const [voiceTranscript, setVoiceTranscript] = useState<string | null>(null);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const recorderChunksRef = useRef<BlobPart[]>([]);
+  const recorderStreamRef = useRef<MediaStream | null>(null);
   const [form, setForm] = useState<ManualLogFormState>(EMPTY_FORM);
 
   const logsQuery = useQuery<DailyLogRow[]>({
@@ -158,26 +164,109 @@ export default function VoiceDailyLogPage() {
     submitMutation.mutate(form);
   };
 
-  const startMockVoice = () => {
-    setVoiceRecording(true);
-    setTimeout(() => setVoiceRecording(false), 2500);
+  const stopRecorderTracks = () => {
+    recorderStreamRef.current?.getTracks().forEach((t) => t.stop());
+    recorderStreamRef.current = null;
+    recorderRef.current = null;
+    recorderChunksRef.current = [];
   };
 
-  const useMockTranscript = () => {
-    setForm({
-      weather: "Clear, 68°F",
-      crew_count: "8",
-      tasks_completed: "Framed 2nd floor partitions\nRoughed in HVAC trunk\nDelivered drywall to 3rd floor",
-      issues: "Plumbing inspection rescheduled to Friday",
-      safety_notes: "Toolbox talk on ladder safety completed",
-    });
-    setVoiceOpen(false);
-    setVoiceRecording(false);
-    toast({
-      title: "Transcript loaded",
-      description: "Edit the manual form below, then submit.",
-    });
+  const startVoiceRecording = async () => {
+    setVoiceError(null);
+    if (typeof window === "undefined" || !navigator.mediaDevices?.getUserMedia) {
+      setVoiceError("Microphone API not available in this browser.");
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      recorderStreamRef.current = stream;
+      recorderChunksRef.current = [];
+      const recorder = new MediaRecorder(stream);
+      recorderRef.current = recorder;
+      recorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) recorderChunksRef.current.push(e.data);
+      };
+      recorder.onstop = () => {
+        const blob = new Blob(recorderChunksRef.current, {
+          type: recorder.mimeType || "audio/webm",
+        });
+        stopRecorderTracks();
+        void uploadVoiceMemo(blob);
+      };
+      recorder.start();
+      setVoiceRecording(true);
+    } catch (err) {
+      setVoiceError(
+        err instanceof Error
+          ? err.message
+          : "Microphone permission denied or unavailable.",
+      );
+      stopRecorderTracks();
+    }
   };
+
+  const stopVoiceRecording = () => {
+    if (recorderRef.current && recorderRef.current.state !== "inactive") {
+      recorderRef.current.stop();
+    }
+    setVoiceRecording(false);
+  };
+
+  const uploadVoiceMemo = async (blob: Blob) => {
+    if (!projectId) return;
+    setVoiceProcessing(true);
+    try {
+      const fd = new FormData();
+      fd.append("audio", blob, "memo.webm");
+      fd.append("logDate", new Date().toISOString());
+      const res = await fetch(
+        `/api/projects/${projectId}/daily-logs/voice`,
+        { method: "POST", body: fd, credentials: "include" },
+      );
+      if (!res.ok) {
+        const txt = await res.text().catch(() => "");
+        throw new Error(txt || `Upload failed (${res.status})`);
+      }
+      const data = await res.json();
+      const structured = data?.structured ?? {};
+      setForm({
+        weather: typeof structured.weather === "string" ? structured.weather : "",
+        crew_count: Array.isArray(structured.labor)
+          ? String(
+              structured.labor.reduce(
+                (s: number, l: any) => s + (Number(l?.count) || 0),
+                0,
+              ) || "",
+            )
+          : "",
+        tasks_completed: Array.isArray(structured.workPerformed)
+          ? structured.workPerformed.join("\n")
+          : "",
+        issues: Array.isArray(structured.issues)
+          ? structured.issues.join("\n")
+          : "",
+        safety_notes: Array.isArray(structured.safetyNotes)
+          ? structured.safetyNotes.join("\n")
+          : "",
+      });
+      setVoiceTranscript(typeof data?.transcript === "string" ? data.transcript : null);
+      setVoiceOpen(false);
+      qc.invalidateQueries({ queryKey: ["/api/projects", projectId, "daily-logs"] });
+      toast({
+        title: data?.stubbed?.transcribe ? "Transcript drafted (stub mode)" : "Transcript loaded",
+        description: "Review the pre-filled form below, then save.",
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Upload failed";
+      setVoiceError(msg);
+      toast({ title: "Voice upload failed", description: msg, variant: "destructive" });
+    } finally {
+      setVoiceProcessing(false);
+    }
+  };
+
+  // Cleanup: ensure no dangling mic stream if component unmounts mid-record.
+  useEffect(() => () => stopRecorderTracks(), []);
 
   if (!projectId) {
     return (
@@ -424,7 +513,13 @@ export default function VoiceDailyLogPage() {
         </CardContent>
       </Card>
 
-      <Dialog open={voiceOpen} onOpenChange={(o) => { setVoiceOpen(o); if (!o) setVoiceRecording(false); }}>
+      <Dialog
+        open={voiceOpen}
+        onOpenChange={(o) => {
+          setVoiceOpen(o);
+          if (!o && voiceRecording) stopVoiceRecording();
+        }}
+      >
         <DialogContent data-testid="dialog-voice-recorder">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
@@ -432,22 +527,25 @@ export default function VoiceDailyLogPage() {
               Record Voice Memo
             </DialogTitle>
             <DialogDescription>
-              Live mic capture isn't wired in this build — tap below to simulate a recording.
-              Herbie will fill the manual form with a sample transcript.
+              Tap the mic to start. Tap Stop when finished — Herbie will
+              transcribe and pre-fill the form below.
             </DialogDescription>
           </DialogHeader>
           <div className="py-6 flex flex-col items-center gap-4">
             <button
               type="button"
-              onClick={voiceRecording ? () => setVoiceRecording(false) : startMockVoice}
-              className={`relative h-28 w-28 rounded-full flex items-center justify-center transition-colors ${
+              onClick={voiceRecording ? stopVoiceRecording : startVoiceRecording}
+              disabled={voiceProcessing}
+              className={`relative h-28 w-28 rounded-full flex items-center justify-center transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
                 voiceRecording
                   ? "bg-red-500 text-white"
                   : "bg-primary text-primary-foreground hover-elevate active-elevate-2"
               }`}
               data-testid="button-mic-toggle"
             >
-              {voiceRecording ? (
+              {voiceProcessing ? (
+                <RefreshCcw className="h-10 w-10 animate-spin" />
+              ) : voiceRecording ? (
                 <>
                   <span className="absolute inset-0 rounded-full bg-red-500/50 animate-ping" />
                   <Square className="h-10 w-10 relative" />
@@ -457,34 +555,58 @@ export default function VoiceDailyLogPage() {
               )}
             </button>
             <p className="text-xs text-muted-foreground" data-testid="text-mic-status">
-              {voiceRecording ? "Listening... (simulated)" : "Tap to start"}
+              {voiceProcessing
+                ? "Transcribing..."
+                : voiceRecording
+                  ? "Recording — tap to stop"
+                  : "Tap to start"}
             </p>
+            {voiceError && (
+              <p
+                className="text-xs text-red-600 text-center max-w-sm"
+                data-testid="text-voice-error"
+              >
+                {voiceError}
+              </p>
+            )}
             <Separator />
             <p className="text-xs text-muted-foreground text-center max-w-sm">
-              When real microphone access is wired in, audio will stream to Herbie's transcription pipeline.
+              Audio is streamed to Herbie's transcription pipeline. If no LLM
+              key is configured, a stub transcript is returned so the flow still
+              works end-to-end.
             </p>
           </div>
           <DialogFooter className="gap-2 sm:gap-2">
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => { setVoiceOpen(false); setVoiceRecording(false); }}
+              onClick={() => {
+                if (voiceRecording) stopVoiceRecording();
+                setVoiceOpen(false);
+              }}
               data-testid="button-cancel-voice"
             >
-              Cancel
-            </Button>
-            <Button
-              size="sm"
-              onClick={useMockTranscript}
-              className="gap-2"
-              data-testid="button-use-sample-transcript"
-            >
-              <Sparkles className="h-4 w-4" />
-              Use Sample Transcript
+              Close
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {voiceTranscript && (
+        <Card className="border-emerald-200 bg-emerald-50 dark:bg-emerald-950/20">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center gap-2">
+              <Sparkles className="h-4 w-4 text-emerald-600" />
+              Last Transcript
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-xs whitespace-pre-wrap text-emerald-900 dark:text-emerald-100" data-testid="text-last-transcript">
+              {voiceTranscript}
+            </p>
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }

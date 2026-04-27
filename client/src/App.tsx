@@ -224,6 +224,7 @@ import EgnyteSyncMonitor from "@/pages/egnyte-sync-monitor";
 import AIReviewQueue from "@/pages/ai-review-queue";
 import ViewerDemo from "@/pages/viewer-demo";
 import VendorPortal from "@/pages/vendor-portal";
+import PortalPage from "@/pages/portal/[token]";
 import Competitors from "@/pages/competitors";
 import FederalSearch from "@/pages/federal-search";
 import CaptureFeed from "@/pages/capture-feed";
@@ -417,6 +418,19 @@ function App() {
         <ThemeProvider defaultTheme="dark">
           <TooltipProvider>
             <Route path="/v/bid/:token" component={VendorPortal} />
+            <Toaster />
+          </TooltipProvider>
+        </ThemeProvider>
+      </QueryClientProvider>
+    );
+  }
+
+  if (location.startsWith("/portal/")) {
+    return (
+      <QueryClientProvider client={queryClient}>
+        <ThemeProvider defaultTheme="light">
+          <TooltipProvider>
+            <Route path="/portal/:token" component={PortalPage} />
             <Toaster />
           </TooltipProvider>
         </ThemeProvider>

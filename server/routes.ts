@@ -4,6 +4,7 @@ import { storage } from "./storage";
 import { registerChatRoutes } from "./replit_integrations/chat";
 import { registerObjectStorageRoutes } from "./replit_integrations/object_storage";
 import { herbieToolsRouter } from "./routes/herbie-tools.routes";
+import { registerSentinelPhase1Routes } from "./routes-sentinel-phase1";
 import * as ReplitObjectStorage from "@replit/object-storage";
 import { Readable } from "node:stream";
 import OpenAI from "openai";
@@ -24803,6 +24804,13 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
       res.status(500).json({ error: (error as Error)?.message ?? "Failed to fetch workforce stats" });
     }
   });
+
+  // ============================================================
+  // Phase 1 — Sentinel Command Center routes
+  // (Voice daily log, Herbie LLM-backed RFI/Submittal drafts,
+  //  PATCH approve/reject aliases, Portal share links.)
+  // ============================================================
+  registerSentinelPhase1Routes(app);
 
   app.use((err: Error, _req: Request, res: Response, next: Function) => {
     if (err instanceof ParamError) {

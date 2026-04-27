@@ -1509,6 +1509,7 @@ export const rfis = pgTable("rfis", {
   answeredAt: timestamp("answered_at"),
   attachmentsJson: jsonb("attachments_json"),
   distributionJson: jsonb("distribution_json"),
+  draftedByHerbie: boolean("drafted_by_herbie").notNull().default(false),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => ({
@@ -1557,6 +1558,7 @@ export const submittals = pgTable("submittals", {
   attachmentsJson: jsonb("attachments_json"),
   submittedAt: timestamp("submitted_at"),
   approvedAt: timestamp("approved_at"),
+  draftedByHerbie: boolean("drafted_by_herbie").notNull().default(false),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => ({
@@ -2175,6 +2177,11 @@ export const conversationMemory = pgTable("conversation_memory", {
   id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()`),
   tenantId: varchar("tenant_id", { length: 36 }).notNull().references(() => tenants.id, { onDelete: "cascade" }),
   userId: varchar("user_id", { length: 36 }).references(() => users.id, { onDelete: "cascade" }),
+  // Optional project context — set when the memory was captured during a
+  // conversation that was scoped to a specific project (Herbie chat with the
+  // project chip selected). Lets recall queries filter by project when
+  // helpful and lets us audit cross-project leakage.
+  projectId: varchar("project_id", { length: 36 }),
   memoryType: text("memory_type").notNull(), // session, tenant_preference, user_preference, learned_fact
   memoryKey: text("memory_key").notNull(),
   memoryValue: jsonb("memory_value").notNull(),
@@ -2184,6 +2191,7 @@ export const conversationMemory = pgTable("conversation_memory", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => ({
   tenantKeyIdx: index("memory_tenant_key_idx").on(table.tenantId, table.memoryType, table.memoryKey),
+  projectIdx: index("memory_project_idx").on(table.tenantId, table.projectId),
 }));
 
 // Connector Status - Integration Connection Tracking
@@ -6665,6 +6673,76 @@ export type HerbieDraftFollowupResponse = {
   subject: string;
   body: string;
 };
+
+// ============================================================================
+// PORTAL SHARES (Phase 1, Roadmap Feature 11)
+// ----------------------------------------------------------------------------
+// Token-gated, read-only share links a PM creates from a project cockpit so
+// a client (or sub) can view a curated slice of project documents without
+// needing a Sentinel login. Each share is scoped to a project, an audience
+// ("client" | "sub" | "internal"), an opaque list of allowed document
+// categories (e.g. ["bid_set", "submittals"]), and an expiry. The token is
+// the public URL key — keep it long, random, and never re-emit revoked
+// tokens. `revokedAt` lets us hard-deny access without losing the audit row.
+// ============================================================================
+export const portalShares = pgTable("portal_shares", {
+  id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id", { length: 36 }).notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  projectId: varchar("project_id", { length: 36 }).notNull().references(() => projects.id, { onDelete: "cascade" }),
+  token: text("token").notNull(),
+  audience: text("audience").notNull(), // "client" | "sub" | "internal"
+  // Allowed document categories. We store as text[] (Postgres array) so the
+  // GET handler can index/filter without JSON unpacking. Empty array =
+  // share all categories.
+  allowedCategories: text("allowed_categories").array().notNull().default(sql`'{}'::text[]`),
+  expiresAt: timestamp("expires_at"),
+  createdByUserId: varchar("created_by_user_id", { length: 36 }).references(() => users.id),
+  revokedAt: timestamp("revoked_at"),
+  revokedByUserId: varchar("revoked_by_user_id", { length: 36 }).references(() => users.id),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  portalSharesTokenIdx: unique("portal_shares_token_uidx").on(t.token),
+  portalSharesProjectIdx: index("portal_shares_project_idx").on(t.tenantId, t.projectId, t.revokedAt),
+}));
+
+export const insertPortalShareSchema = createInsertSchema(portalShares).omit({
+  id: true,
+  createdAt: true,
+  revokedAt: true,
+  revokedByUserId: true,
+});
+export type InsertPortalShare = z.infer<typeof insertPortalShareSchema>;
+export type PortalShare = typeof portalShares.$inferSelect;
+
+// ============================================================================
+// MONITOR EVENTS (Phase 1, Roadmap Feature 12)
+// ----------------------------------------------------------------------------
+// Idempotency ledger for the daily monitor jobs (coi_expiry, submittal_overdue,
+// daily_log_missing, change_order_stale, invoice_overdue). Each row marks
+// "monitor X already fired for entity Y on date Z", so a re-run of the same
+// scheduler tick (manual or recovery) does not double-notify.
+// `windowDate` is stored as ISO date string ('YYYY-MM-DD') for trivial joins.
+// ============================================================================
+export const monitorEvents = pgTable("monitor_events", {
+  id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id", { length: 36 }).notNull(),
+  monitorId: text("monitor_id").notNull(), // e.g. "coi_expiry", "submittal_overdue"
+  entityId: varchar("entity_id", { length: 36 }), // null for tenant-level fires
+  windowDate: text("window_date").notNull(), // 'YYYY-MM-DD'
+  metadata: jsonb("metadata"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  monitorEventsUidx: unique("monitor_events_uidx").on(t.monitorId, t.entityId, t.windowDate),
+  monitorEventsTenantIdx: index("monitor_events_tenant_idx").on(t.tenantId, t.monitorId, t.windowDate),
+}));
+
+export const insertMonitorEventSchema = createInsertSchema(monitorEvents).omit({
+  id: true,
+  createdAt: true,
+});
+export type InsertMonitorEvent = z.infer<typeof insertMonitorEventSchema>;
+export type MonitorEvent = typeof monitorEvents.$inferSelect;
 
 export type HerbieToolAction = "tree" | "file" | "search" | "patch" | "run";
 

@@ -604,7 +604,254 @@ const JOB_HANDLERS: Record<string, JobHandler> = {
 
     console.log(`[orphan-sweep] tenant=${tenantId} checked=${checked} markedMissing=${markedMissing} errors=${errors}`);
   },
+
+  // ────────────────────────────────────────────────────────────────
+  // Roadmap Feature 12 — daily monitor jobs.
+  //
+  // Each handler walks a small slice of project state, decides which
+  // entities cross a threshold today, and drops one notification row
+  // per entity per (monitor_id, entity_id, window_date) tuple. The
+  // unique index on monitor_events makes the insert the idempotency
+  // primitive — we attempt it inside a transaction with the
+  // notification, and if the insert fails on conflict we know the
+  // notification was already sent and skip cleanly. This keeps a
+  // recovery re-run (or a manual scheduler bump) from double-firing.
+  // ────────────────────────────────────────────────────────────────
+  submittal_overdue_monitor: async (payload) => {
+    await runDailyMonitor("submittal_overdue", payload.tenantId as string, async (ctx) => {
+      const { submittals } = await import("@shared/schema");
+      const { db: workerDb } = await import("../db");
+      const { and: andOp, eq: eqOp, lt: ltOp, isNotNull, ne } = await import("drizzle-orm");
+      // For Phase 1 we treat any non-approved submittal whose
+      // submittedAt is older than 14 days as "overdue". The schema
+      // doesn't carry a reviewer dueDate; this is a sane heuristic
+      // that matches what the demo wants to surface and can be
+      // tightened later without an interface change.
+      const cutoff = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
+      const rows = await workerDb
+        .select({
+          id: submittals.id,
+          name: submittals.name,
+          submittalNumber: submittals.submittalNumber,
+          projectId: submittals.projectId,
+        })
+        .from(submittals)
+        .where(andOp(
+          eqOp(submittals.tenantId, ctx.tenantId),
+          ne(submittals.status, "approved"),
+          isNotNull(submittals.submittedAt),
+          ltOp(submittals.submittedAt, cutoff),
+        ));
+      for (const r of rows) {
+        await ctx.fire({
+          entityId: r.id,
+          type: "submittal_overdue",
+          title: `Submittal ${r.submittalNumber} overdue`,
+          message: `${r.name} has been pending review for more than 14 days.`,
+          entityType: "submittal",
+          actionUrl: `/projects/${r.projectId}/submittals`,
+        });
+      }
+    });
+  },
+
+  daily_log_missing_monitor: async (payload) => {
+    await runDailyMonitor("daily_log_missing", payload.tenantId as string, async (ctx) => {
+      const { projects, dailyLogs } = await import("@shared/schema");
+      const { db: workerDb } = await import("../db");
+      const { and: andOp, eq: eqOp, gte: gteOp, inArray } = await import("drizzle-orm");
+      const startOfYesterday = new Date();
+      startOfYesterday.setHours(0, 0, 0, 0);
+      startOfYesterday.setDate(startOfYesterday.getDate() - 1);
+      const startOfToday = new Date();
+      startOfToday.setHours(0, 0, 0, 0);
+
+      const activeProjects = await workerDb
+        .select({ id: projects.id, name: projects.name })
+        .from(projects)
+        .where(andOp(
+          eqOp(projects.tenantId, ctx.tenantId),
+          inArray(projects.status, ["active", "in_progress", "planning"]),
+        ));
+
+      for (const p of activeProjects) {
+        const logs = await workerDb
+          .select({ id: dailyLogs.id })
+          .from(dailyLogs)
+          .where(andOp(
+            eqOp(dailyLogs.tenantId, ctx.tenantId),
+            eqOp(dailyLogs.projectId, p.id),
+            gteOp(dailyLogs.logDate, startOfYesterday),
+          ))
+          .limit(1);
+        if (logs.length > 0) continue;
+        await ctx.fire({
+          entityId: p.id,
+          type: "daily_log_missing",
+          title: `No daily log for ${p.name}`,
+          message: `Yesterday closed without a field daily log entry.`,
+          entityType: "project",
+          actionUrl: `/projects/${p.id}/daily-log`,
+        });
+      }
+    });
+  },
+
+  change_order_stale_monitor: async (payload) => {
+    await runDailyMonitor("co_stale", payload.tenantId as string, async (ctx) => {
+      const { changeOrders } = await import("@shared/schema");
+      const { db: workerDb } = await import("../db");
+      const { and: andOp, eq: eqOp, lt: ltOp, inArray } = await import("drizzle-orm");
+      // Stale = submitted but neither approved nor rejected for >7d.
+      const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+      const rows = await workerDb
+        .select({
+          id: changeOrders.id,
+          coNumber: changeOrders.coNumber,
+          title: changeOrders.title,
+          projectId: changeOrders.projectId,
+        })
+        .from(changeOrders)
+        .where(andOp(
+          eqOp(changeOrders.tenantId, ctx.tenantId),
+          inArray(changeOrders.status, ["submitted", "pending"]),
+          ltOp(changeOrders.updatedAt, cutoff),
+        ));
+      for (const r of rows) {
+        await ctx.fire({
+          entityId: r.id,
+          type: "co_stale",
+          title: `${r.coNumber} stalled awaiting decision`,
+          message: `${r.title} has had no movement for >7 days.`,
+          entityType: "change_order",
+          actionUrl: `/change-order-approvals`,
+        });
+      }
+    });
+  },
+
+  invoice_overdue_monitor: async (payload) => {
+    await runDailyMonitor("invoice_overdue", payload.tenantId as string, async (ctx) => {
+      const { invoices } = await import("@shared/schema");
+      const { db: workerDb } = await import("../db");
+      const { and: andOp, eq: eqOp, lt: ltOp, isNotNull, inArray } = await import("drizzle-orm");
+      const today = new Date();
+      const rows = await workerDb
+        .select({
+          id: invoices.id,
+          invoiceNumber: invoices.invoiceNumber,
+          totalAmount: invoices.totalAmount,
+          dueDate: invoices.dueDate,
+          projectId: invoices.projectId,
+        })
+        .from(invoices)
+        .where(andOp(
+          eqOp(invoices.tenantId, ctx.tenantId),
+          isNotNull(invoices.dueDate),
+          ltOp(invoices.dueDate, today),
+          inArray(invoices.status, ["sent", "approved", "pending", "draft"]),
+        ));
+      for (const r of rows) {
+        const total = r.totalAmount ?? "0";
+        await ctx.fire({
+          entityId: r.id,
+          type: "invoice_overdue",
+          title: `Invoice ${r.invoiceNumber} overdue`,
+          message: `Past due (${total}). Follow up with AP.`,
+          entityType: "invoice",
+          actionUrl: r.projectId ? `/projects/${r.projectId}/financials` : `/invoices`,
+        });
+      }
+    });
+  },
 };
+
+// ────────────────────────────────────────────────────────────────────
+// Shared monitor scaffold.
+// ────────────────────────────────────────────────────────────────────
+interface MonitorFire {
+  entityId: string;
+  entityType: string;
+  type: string;
+  title: string;
+  message: string;
+  actionUrl: string;
+}
+
+interface MonitorCtx {
+  tenantId: string;
+  windowDate: string; // YYYY-MM-DD
+  fire: (input: MonitorFire) => Promise<void>;
+}
+
+async function runDailyMonitor(
+  monitorId: string,
+  tenantId: string,
+  body: (ctx: MonitorCtx) => Promise<void>,
+): Promise<void> {
+  const { db: workerDb } = await import("../db");
+  const { notifications, monitorEvents } = await import("@shared/schema");
+
+  const today = new Date();
+  const windowDate = today.toISOString().slice(0, 10);
+
+  let fired = 0;
+  let skipped = 0;
+
+  const ctx: MonitorCtx = {
+    tenantId,
+    windowDate,
+    async fire(input) {
+      try {
+        await workerDb.transaction(async (tx) => {
+          // Idempotency primitive: insert into monitor_events first.
+          // The unique index on (monitor_id, entity_id, window_date)
+          // throws on conflict — we catch and skip the notification,
+          // guaranteeing one notification per (monitor, entity, day).
+          await tx.insert(monitorEvents).values({
+            tenantId,
+            monitorId,
+            entityId: input.entityId,
+            windowDate,
+            metadata: { type: input.type },
+          });
+          await tx.insert(notifications).values({
+            tenantId,
+            userId: null,
+            type: input.type,
+            title: input.title,
+            message: input.message,
+            entityType: input.entityType,
+            entityId: input.entityId,
+            priority: "normal",
+            read: false,
+            actionUrl: input.actionUrl,
+          });
+        });
+        fired++;
+      } catch (err) {
+        // Unique-violation = already fired today. Anything else is a
+        // genuine failure we log so the next sweep can retry.
+        const msg = err instanceof Error ? err.message : String(err);
+        if (/duplicate key|unique constraint|monitor_events_uidx/i.test(msg)) {
+          skipped++;
+        } else {
+          console.error(
+            `[monitor:${monitorId}] tenant=${tenantId} entity=${input.entityId} fire failed:`,
+            msg,
+          );
+        }
+      }
+    },
+  };
+
+  try {
+    await body(ctx);
+    console.log(`[monitor:${monitorId}] tenant=${tenantId} window=${windowDate} fired=${fired} skipped=${skipped}`);
+  } catch (err) {
+    console.error(`[monitor:${monitorId}] tenant=${tenantId} body failed:`, err);
+  }
+}
 
 class Worker {
   private running = false;
