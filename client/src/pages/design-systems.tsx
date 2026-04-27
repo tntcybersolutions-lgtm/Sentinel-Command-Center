@@ -1550,6 +1550,7 @@ export default function DesignSystems() {
                     <tr>
                       <th className="text-left p-3 font-medium">Category</th>
                       <th className="text-left p-3 font-medium">Trade</th>
+                      <th className="text-left p-3 font-medium">Item Name</th>
                       <th className="text-right p-3 font-medium">Quantity</th>
                       <th className="text-left p-3 font-medium">Unit</th>
                       <th className="text-right p-3 font-medium">Unit Cost</th>
@@ -1565,6 +1566,11 @@ export default function DesignSystems() {
                           <td className="p-3 font-medium">{cat?.name || "Unknown"}</td>
                           <td className="p-3">
                             <Badge variant="outline">{cat?.trade || "Unknown"}</Badge>
+                          </td>
+                          <td className="p-3 max-w-xs">
+                            <div className="truncate" title={item.room || "—"} data-testid={`text-takeoff-name-${item.id}`}>
+                              {item.room || <span className="text-muted-foreground">—</span>}
+                            </div>
                           </td>
                           <td className="p-3 text-right">{parseFloat(item.quantity).toLocaleString()}</td>
                           <td className="p-3">{item.unit}</td>
@@ -1592,7 +1598,7 @@ export default function DesignSystems() {
                       );
                     }) : (
                       <tr className="border-t">
-                        <td colSpan={7} className="p-6 text-center text-muted-foreground">
+                        <td colSpan={8} className="p-6 text-center text-muted-foreground">
                           No takeoff items yet. Click "New Takeoff Item" to add quantities.
                         </td>
                       </tr>
