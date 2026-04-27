@@ -179,6 +179,34 @@ interface BlueprintTakeoffItem {
   unitCost?: string;
 }
 
+// Deterministic muted-color palette for category badges. Each category name
+// hashes to a fixed slot in the palette, so the same category always renders
+// in the same color across reloads. Colors are explicit light/dark pairs so
+// they read well in both themes without relying on Tailwind's `dark:`
+// auto-handling for non-utility custom classes.
+const CATEGORY_BADGE_PALETTE = [
+  "bg-blue-100 text-blue-900 border-blue-200 dark:bg-blue-950/50 dark:text-blue-200 dark:border-blue-900",
+  "bg-emerald-100 text-emerald-900 border-emerald-200 dark:bg-emerald-950/50 dark:text-emerald-200 dark:border-emerald-900",
+  "bg-amber-100 text-amber-900 border-amber-200 dark:bg-amber-950/50 dark:text-amber-200 dark:border-amber-900",
+  "bg-violet-100 text-violet-900 border-violet-200 dark:bg-violet-950/50 dark:text-violet-200 dark:border-violet-900",
+  "bg-rose-100 text-rose-900 border-rose-200 dark:bg-rose-950/50 dark:text-rose-200 dark:border-rose-900",
+  "bg-cyan-100 text-cyan-900 border-cyan-200 dark:bg-cyan-950/50 dark:text-cyan-200 dark:border-cyan-900",
+  "bg-orange-100 text-orange-900 border-orange-200 dark:bg-orange-950/50 dark:text-orange-200 dark:border-orange-900",
+  "bg-teal-100 text-teal-900 border-teal-200 dark:bg-teal-950/50 dark:text-teal-200 dark:border-teal-900",
+  "bg-pink-100 text-pink-900 border-pink-200 dark:bg-pink-950/50 dark:text-pink-200 dark:border-pink-900",
+  "bg-indigo-100 text-indigo-900 border-indigo-200 dark:bg-indigo-950/50 dark:text-indigo-200 dark:border-indigo-900",
+  "bg-lime-100 text-lime-900 border-lime-200 dark:bg-lime-950/50 dark:text-lime-200 dark:border-lime-900",
+  "bg-sky-100 text-sky-900 border-sky-200 dark:bg-sky-950/50 dark:text-sky-200 dark:border-sky-900",
+];
+function categoryBadgeClass(name: string | undefined | null): string {
+  const key = (name || "Unknown").trim().toLowerCase();
+  let h = 0;
+  for (let i = 0; i < key.length; i++) {
+    h = (h * 31 + key.charCodeAt(i)) | 0;
+  }
+  return CATEGORY_BADGE_PALETTE[Math.abs(h) % CATEGORY_BADGE_PALETTE.length];
+}
+
 export default function DesignSystems() {
   const [, navigate] = useLocation();
   const { toast } = useToast();
@@ -1893,7 +1921,14 @@ export default function DesignSystems() {
                       const cat = takeoffCategories.find(c => c.id === item.categoryId);
                       return (
                         <tr key={item.id} className="border-t">
-                          <td className="p-3 font-medium">{cat?.name || "Unknown"}</td>
+                          <td className="p-3">
+                            <span
+                              className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium ${categoryBadgeClass(cat?.name)}`}
+                              data-testid={`badge-category-${item.id}`}
+                            >
+                              {cat?.name || "Unknown"}
+                            </span>
+                          </td>
                           <td className="p-3">
                             <Badge variant="outline">{cat?.trade || "Unknown"}</Badge>
                           </td>
