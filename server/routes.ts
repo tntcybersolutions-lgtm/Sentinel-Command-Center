@@ -18396,11 +18396,24 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
     floor: z.string().optional(),
     phase: z.string().optional(),
     zone: z.string().optional(),
-    unitCost: z.string().optional(),
+    unitCost: z.string().or(z.number()).optional().transform(v => v == null || v === "" ? undefined : String(v)),
     laborRate: z.string().optional(),
     laborHours: z.string().optional(),
     notes: z.string().optional(),
   });
+
+  // Server-authoritative extended-cost calculator. Uses qty * unit_cost so the
+  // server is the single source of truth — the client may pre-compute for UX
+  // but the value persisted to the DB is always recomputed here.
+  const computeExtendedCost = (
+    quantity: string | number | null | undefined,
+    unitCost: string | number | null | undefined,
+  ): string | null => {
+    const q = quantity == null || quantity === "" ? NaN : Number(quantity);
+    const u = unitCost == null || unitCost === "" ? NaN : Number(unitCost);
+    if (!isFinite(q) || !isFinite(u)) return null;
+    return (q * u).toFixed(2);
+  };
 
   app.post("/api/takeoff-quantities", async (req: Request, res: Response) => {
     try {
@@ -18408,10 +18421,13 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
       if (!validated.success) {
         return res.status(400).json({ error: "Validation failed", details: fromError(validated.error).toString() });
       }
-      
+
+      const extendedCost = computeExtendedCost(validated.data.quantity, validated.data.unitCost);
+
       const [quantity] = await db.insert(takeoffQuantities).values({
         tenantId: DEFAULT_TENANT_ID,
         ...validated.data,
+        extendedCost: extendedCost ?? undefined,
       }).returning();
       
       await auditService.logEvent({
@@ -18456,8 +18472,35 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
 
   app.patch("/api/takeoff-quantities/:id", async (req: Request, res: Response) => {
     try {
+      const validated = takeoffQuantityInputSchema.partial().safeParse(req.body);
+      if (!validated.success) {
+        return res.status(400).json({ error: "Validation failed", details: fromError(validated.error).toString() });
+      }
+
+      // Recompute extended cost server-side using the resulting (post-update)
+      // quantity & unit_cost. Read the existing row first so a partial update
+      // (e.g. just unit_cost) still produces a correct extended_cost.
+      const [existing] = await db
+        .select()
+        .from(takeoffQuantities)
+        .where(and(
+          eq(takeoffQuantities.tenantId, DEFAULT_TENANT_ID),
+          eq(takeoffQuantities.id, p(req.params.id)),
+        ));
+      if (!existing) {
+        return res.status(404).json({ error: "Takeoff quantity not found" });
+      }
+
+      const nextQuantity = validated.data.quantity ?? existing.quantity;
+      const nextUnitCost = validated.data.unitCost ?? existing.unitCost;
+      const extendedCost = computeExtendedCost(nextQuantity, nextUnitCost);
+
       const [quantity] = await db.update(takeoffQuantities)
-        .set({ ...req.body, updatedAt: new Date() })
+        .set({
+          ...validated.data,
+          extendedCost: extendedCost ?? undefined,
+          updatedAt: new Date(),
+        })
         .where(and(
           eq(takeoffQuantities.tenantId, DEFAULT_TENANT_ID),
           eq(takeoffQuantities.id, p(req.params.id))

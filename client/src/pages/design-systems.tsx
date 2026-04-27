@@ -1523,9 +1523,20 @@ export default function DesignSystems() {
                           </td>
                           <td className="p-3 text-right">{parseFloat(item.quantity).toLocaleString()}</td>
                           <td className="p-3">{item.unit}</td>
-                          <td className="p-3 text-right">{item.unitCost ? `$${item.unitCost}` : "-"}</td>
+                          <td className="p-3 text-right">
+                            {item.unitCost && parseFloat(item.unitCost) > 0
+                              ? `$${parseFloat(item.unitCost).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                              : "—"}
+                          </td>
                           <td className="p-3 text-right font-medium">
-                            {item.extendedCost ? `$${parseFloat(item.extendedCost).toLocaleString()}` : "-"}
+                            {(() => {
+                              const ext = item.extendedCost != null && item.extendedCost !== ""
+                                ? parseFloat(item.extendedCost)
+                                : (parseFloat(item.quantity || "0") * parseFloat(item.unitCost || "0"));
+                              return ext > 0
+                                ? `$${ext.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                                : "—";
+                            })()}
                           </td>
                           <td className="p-3 text-right">
                             <Button size="sm" variant="ghost" onClick={() => { setEditingTakeoff(item); setIsEditTakeoffOpen(true); }} data-testid={`button-edit-takeoff-${item.id}`}>
