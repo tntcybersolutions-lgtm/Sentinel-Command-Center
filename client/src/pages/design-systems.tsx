@@ -1778,29 +1778,38 @@ export default function DesignSystems() {
             {/* Render the FULL summary so cards stay visible even when a single
                 category is selected — clicking a card filters the table; clicking
                 the same card again clears the filter. */}
-            {takeoffSummary.map(cat => {
-              const active = takeoffFilter === cat.id;
-              return (
-                <Card
-                  key={cat.id}
-                  className={`hover-elevate cursor-pointer transition-colors ${active ? "ring-2 ring-primary border-primary bg-primary/5" : ""}`}
-                  onClick={() => setTakeoffFilter(active ? "all" : cat.id)}
-                  data-testid={`card-takeoff-${cat.id}`}
-                  aria-pressed={active}
-                >
-                  <CardHeader className="pb-2">
-                    <CardTitle className={`text-sm font-medium ${active ? "text-primary" : ""}`}>{cat.name}</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="text-2xl font-bold">{cat.totalQty.toLocaleString()} {cat.unit}</div>
-                    <p className="text-sm text-muted-foreground">{cat.count} line items</p>
-                    {cat.totalCost > 0 && (
-                      <p className="text-sm font-medium mt-1">${cat.totalCost.toLocaleString()}</p>
-                    )}
-                  </CardContent>
-                </Card>
-              );
-            })}
+            {(() => {
+              const grandTotal = takeoffSummary.reduce((s, c) => s + c.totalCost, 0);
+              return takeoffSummary.map(cat => {
+                const active = takeoffFilter === cat.id;
+                const pct = grandTotal > 0 ? (cat.totalCost / grandTotal) * 100 : 0;
+                return (
+                  <Card
+                    key={cat.id}
+                    className={`hover-elevate cursor-pointer transition-colors ${active ? "ring-2 ring-primary border-primary bg-primary/5" : ""}`}
+                    onClick={() => setTakeoffFilter(active ? "all" : cat.id)}
+                    data-testid={`card-takeoff-${cat.id}`}
+                    aria-pressed={active}
+                  >
+                    <CardHeader className="pb-2">
+                      <CardTitle className={`text-sm font-medium ${active ? "text-primary" : ""}`}>{cat.name}</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="text-2xl font-bold">{cat.totalQty.toLocaleString()} {cat.unit}</div>
+                      <p className="text-sm text-muted-foreground">{cat.count} line items</p>
+                      {cat.totalCost > 0 && (
+                        <>
+                          <p className="text-sm font-medium mt-1">${cat.totalCost.toLocaleString()}</p>
+                          <p className="text-xs text-muted-foreground" data-testid={`text-takeoff-pct-${cat.id}`}>
+                            {pct < 0.1 ? "<0.1" : pct.toFixed(pct < 10 ? 1 : 0)}% of project total
+                          </p>
+                        </>
+                      )}
+                    </CardContent>
+                  </Card>
+                );
+              });
+            })()}
             {/* Grand-total card: always shows the project-wide totals across all
                 categories. Clicking it clears the active category filter. */}
             <Card
