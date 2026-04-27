@@ -1775,23 +1775,40 @@ export default function DesignSystems() {
           </div>
 
           <div className="grid grid-cols-5 gap-4">
-            {filteredSummary.map(cat => (
-              <Card key={cat.id} className="hover-elevate cursor-pointer" onClick={() => setTakeoffFilter(cat.id)} data-testid={`card-takeoff-${cat.id}`}>
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-sm font-medium">{cat.name}</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="text-2xl font-bold">{cat.totalQty.toLocaleString()} {cat.unit}</div>
-                  <p className="text-sm text-muted-foreground">{cat.count} line items</p>
-                  {cat.totalCost > 0 && (
-                    <p className="text-sm font-medium mt-1">${cat.totalCost.toLocaleString()}</p>
-                  )}
-                </CardContent>
-              </Card>
-            ))}
+            {/* Render the FULL summary so cards stay visible even when a single
+                category is selected — clicking a card filters the table; clicking
+                the same card again clears the filter. */}
+            {takeoffSummary.map(cat => {
+              const active = takeoffFilter === cat.id;
+              return (
+                <Card
+                  key={cat.id}
+                  className={`hover-elevate cursor-pointer transition-colors ${active ? "ring-2 ring-primary border-primary bg-primary/5" : ""}`}
+                  onClick={() => setTakeoffFilter(active ? "all" : cat.id)}
+                  data-testid={`card-takeoff-${cat.id}`}
+                  aria-pressed={active}
+                >
+                  <CardHeader className="pb-2">
+                    <CardTitle className={`text-sm font-medium ${active ? "text-primary" : ""}`}>{cat.name}</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="text-2xl font-bold">{cat.totalQty.toLocaleString()} {cat.unit}</div>
+                    <p className="text-sm text-muted-foreground">{cat.count} line items</p>
+                    {cat.totalCost > 0 && (
+                      <p className="text-sm font-medium mt-1">${cat.totalCost.toLocaleString()}</p>
+                    )}
+                  </CardContent>
+                </Card>
+              );
+            })}
             {/* Grand-total card: always shows the project-wide totals across all
-                categories, regardless of the current category filter. */}
-            <Card className="border-primary/40 bg-primary/5" data-testid="card-takeoff-total-project">
+                categories. Clicking it clears the active category filter. */}
+            <Card
+              className={`hover-elevate cursor-pointer border-primary/40 bg-primary/5 ${takeoffFilter === "all" ? "ring-2 ring-primary" : ""}`}
+              onClick={() => setTakeoffFilter("all")}
+              data-testid="card-takeoff-total-project"
+              aria-pressed={takeoffFilter === "all"}
+            >
               <CardHeader className="pb-2">
                 <CardTitle className="text-sm font-medium text-primary">Total Project</CardTitle>
               </CardHeader>
