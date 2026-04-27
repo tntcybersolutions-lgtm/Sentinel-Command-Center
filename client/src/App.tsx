@@ -246,6 +246,7 @@ const ProactiveIntelligence = lazy(() => import("@/pages/proactive-intelligence"
 const CoiTracker = lazy(() => import("@/pages/coi-tracker"));
 const BidReadiness = lazy(() => import("@/pages/bid-readiness"));
 const VoiceDailyLog = lazy(() => import("./pages/voice-daily-log"));
+const LienWaivers = lazy(() => import("./pages/lien-waivers"));
 const VendorConfidence = lazy(() => import('@/pages/vendor-confidence-dashboard'));
 const HerbieDigest = lazy(() => import('@/pages/herbie-digest-page'));
 const HerbieAutonomous = lazy(() => import('@/pages/herbie-autonomous-dashboard'));
@@ -314,6 +315,7 @@ function Router() {
         <Route path="/coi" component={() => <Suspense fallback={<div>Loading...</div>}><CoiTracker /></Suspense>} />
               <Route path="/bid-readiness" component={() => <Suspense fallback={<div>Loading...</div>}><BidReadiness /></Suspense>} />
         <Route path="/voice-daily-log" component={() => <Suspense fallback={<div>Loading...</div>}><VoiceDailyLog /></Suspense>} />
+        <Route path="/lien-waivers" component={() => <SafeRoute component={LienWaivers} name="Lien Waivers" />} />
               <Route path="/proactive-intelligence" component={() => <Suspense fallback={<div>Loading...</div>}><ProactiveIntelligence /></Suspense>} />
               <Route path="/vendor-confidence" component={() => <Suspense fallback={<div>Loading...</div>}><VendorConfidence /></Suspense>} />
               <Route path="/herbie-digest" component={() => <Suspense fallback={<div>Loading...</div>}><HerbieDigest /></Suspense>} />
