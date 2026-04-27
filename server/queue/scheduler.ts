@@ -106,6 +106,35 @@ const SCHEDULES: ScheduleConfig[] = [
     intervalMs: 24 * 60 * 60 * 1000,
     description: "COI expiry monitor daily at 09:00",
   },
+  // Roadmap Feature 12 — daily monitor jobs. Each fires once per
+  // tenant per day and records a `monitor_events` row keyed on
+  // (monitor_id, entity_id, window_date) for idempotency. The same
+  // (monitor, entity, day) cannot double-notify even if the scheduler
+  // tick is replayed (manual trigger, restart, etc).
+  {
+    jobType: "submittal_overdue_monitor",
+    cronPattern: "0 9 * * *",
+    intervalMs: 24 * 60 * 60 * 1000,
+    description: "Submittal overdue sweep daily at 09:00",
+  },
+  {
+    jobType: "daily_log_missing_monitor",
+    cronPattern: "0 9 * * *",
+    intervalMs: 24 * 60 * 60 * 1000,
+    description: "Daily log missing sweep daily at 09:00",
+  },
+  {
+    jobType: "change_order_stale_monitor",
+    cronPattern: "0 9 * * *",
+    intervalMs: 24 * 60 * 60 * 1000,
+    description: "Change order stale sweep daily at 09:00",
+  },
+  {
+    jobType: "invoice_overdue_monitor",
+    cronPattern: "0 9 * * *",
+    intervalMs: 24 * 60 * 60 * 1000,
+    description: "Invoice overdue sweep daily at 09:00",
+  },
 ];
 
 class Scheduler {
