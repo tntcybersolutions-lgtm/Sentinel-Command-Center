@@ -1,6 +1,8 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useLocation } from "wouter";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
 import { RowActionMenu } from "@/features/row-actions/RowActionMenu";
 import {
   DollarSign,
@@ -32,6 +34,30 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Plus } from "lucide-react";
+
+interface ProjectOption {
+  id: string;
+  name: string;
+}
 
 interface Invoice {
   id: string;
@@ -47,6 +73,7 @@ interface Invoice {
   notesJson: any;
   createdAt: string;
   projectName: string | null;
+  vendorName: string | null;
 }
 
 interface ChangeOrder {
@@ -90,12 +117,110 @@ interface RFI {
   projectName: string | null;
 }
 
+// Maps the URL slug under /financial/* to the Tabs `value` and back.
+// Keeping the mapping here (vs. naming tabs after slugs) preserves the
+// existing test-ids and lets us alias overview/dashboard/invoices.
+const URL_TO_TAB: Record<string, string> = {
+  overview: "overview",
+  dashboard: "overview",
+  bills: "bills",
+  invoices: "client-invoices",
+  "client-invoices": "client-invoices",
+  "change-orders": "change-orders",
+  "purchase-orders": "purchase-orders",
+  rfis: "rfis",
+};
+const TAB_TO_URL: Record<string, string> = {
+  overview: "overview",
+  bills: "bills",
+  "client-invoices": "invoices",
+  "change-orders": "change-orders",
+  "purchase-orders": "purchase-orders",
+  rfis: "rfis",
+};
+
 export default function Finance() {
-  const [, setLocation] = useLocation();
-  const [selectedTab, setSelectedTab] = useState("overview");
+  const [location, setLocation] = useLocation();
+  const { toast } = useToast();
+
+  // Derive the initial tab from the URL so a deep-link to
+  // /financial/invoices opens the Client Invoices tab on first paint.
+  const slugFromPath = (path: string) => {
+    const m = path.match(/^\/financial\/([^/?#]+)/);
+    return m ? m[1] : "overview";
+  };
+  const [selectedTab, setSelectedTab] = useState(() => URL_TO_TAB[slugFromPath(location)] ?? "overview");
+
+  // Keep the tab in sync when the URL changes externally (back/forward,
+  // sidebar nav, etc.) without thrashing if the slug already matches.
+  useEffect(() => {
+    const desired = URL_TO_TAB[slugFromPath(location)] ?? "overview";
+    if (desired !== selectedTab) setSelectedTab(desired);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location]);
+
+  // Update the URL when the user clicks a tab so the path stays
+  // shareable. Replace, not push, to avoid polluting history.
+  const handleTabChange = (next: string) => {
+    setSelectedTab(next);
+    const slug = TAB_TO_URL[next] ?? next;
+    const target = `/financial/${slug}`;
+    if (location !== target) setLocation(target, { replace: true });
+  };
 
   const { data: invoices, isLoading: invoicesLoading } = useQuery<Invoice[]>({
     queryKey: ["/api/invoices"],
+  });
+
+  const { data: projectOptions = [] } = useQuery<ProjectOption[]>({
+    queryKey: ["/api/projects"],
+  });
+
+  // "+ New Invoice" dialog state. Kept local — the dialog is small and
+  // tightly coupled to this page.
+  const [isNewInvoiceOpen, setIsNewInvoiceOpen] = useState(false);
+  const [newInvoice, setNewInvoice] = useState({
+    invoiceNumber: "",
+    invoiceType: "receivable" as "receivable" | "payable",
+    projectId: "",
+    totalAmount: "",
+    dueDate: "",
+    status: "draft",
+  });
+
+  const createInvoiceMutation = useMutation({
+    mutationFn: async (payload: typeof newInvoice) => {
+      const body = {
+        invoiceNumber: payload.invoiceNumber.trim(),
+        invoiceType: payload.invoiceType,
+        projectId: payload.projectId || null,
+        totalAmount: payload.totalAmount || "0",
+        dueDate: payload.dueDate || null,
+        status: payload.status || "draft",
+      };
+      const res = await apiRequest("POST", "/api/invoices", body);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/invoices"] });
+      toast({ title: "Invoice created", description: `#${newInvoice.invoiceNumber} was added.` });
+      setIsNewInvoiceOpen(false);
+      setNewInvoice({
+        invoiceNumber: "",
+        invoiceType: "receivable",
+        projectId: "",
+        totalAmount: "",
+        dueDate: "",
+        status: "draft",
+      });
+    },
+    onError: (err: any) => {
+      toast({
+        title: "Failed to create invoice",
+        description: err?.message || "Please check the fields and try again.",
+        variant: "destructive",
+      });
+    },
   });
 
   const { data: changeOrders, isLoading: coLoading } = useQuery<ChangeOrder[]>({
@@ -330,7 +455,10 @@ export default function Finance() {
               <Skeleton className="h-8 w-28" />
             ) : (
               <>
-                <div className="text-2xl font-bold" data-testid="text-projected-cash-flow">
+                <div
+                  className={`text-2xl font-bold ${(stats?.projectedCashFlow ?? 0) >= 0 ? "text-green-500" : "text-red-500"}`}
+                  data-testid="text-projected-cash-flow"
+                >
                   {formatCurrency(stats?.projectedCashFlow ?? 0)}
                 </div>
                 <div className="flex items-center gap-1 text-xs text-muted-foreground">
@@ -347,14 +475,14 @@ export default function Finance() {
         </Card>
       </div>
 
-      <Tabs value={selectedTab} onValueChange={setSelectedTab} className="space-y-4">
+      <Tabs value={selectedTab} onValueChange={handleTabChange} className="space-y-4">
         <TabsList data-testid="tabs-finance" className="flex-wrap">
           <TabsTrigger value="overview" data-testid="tab-overview">Overview</TabsTrigger>
           <TabsTrigger value="bills" data-testid="tab-bills">Bills (Payable)</TabsTrigger>
           <TabsTrigger value="client-invoices" data-testid="tab-client-invoices">Client Invoices</TabsTrigger>
           <TabsTrigger value="change-orders" data-testid="tab-change-orders">Change Orders</TabsTrigger>
           <TabsTrigger value="purchase-orders" data-testid="tab-purchase-orders">Purchase Orders</TabsTrigger>
-          <TabsTrigger value="rfis" data-testid="tab-rfis">RFIs</TabsTrigger>
+          <TabsTrigger value="rfis" data-testid="tab-rfis">RFIs &amp; Docs</TabsTrigger>
         </TabsList>
 
         <TabsContent value="overview" className="space-y-4" data-testid="tabcontent-overview">
@@ -440,21 +568,21 @@ export default function Finance() {
                 ) : (
                   <div className="space-y-3">
                     {(invoices ?? []).slice(0, 6).map((invoice) => (
-                      <div key={invoice.id} className="flex items-center justify-between p-3 rounded-lg border cursor-pointer hover-elevate" data-testid={`recent-invoice-${invoice.id}`} onClick={() => setLocation(`/entity/invoice/${invoice.id}`)}>
-                        <div className="flex items-center gap-3">
+                      <div key={invoice.id} className="flex items-center justify-between gap-3 p-3 rounded-lg border cursor-pointer hover-elevate" data-testid={`recent-invoice-${invoice.id}`} onClick={() => setLocation(`/entity/invoice/${invoice.id}`)}>
+                        <div className="flex items-center gap-3 min-w-0 flex-1">
                           {invoice.invoiceType === "receivable" ? (
-                            <Receipt className="h-4 w-4 text-green-500" />
+                            <Receipt className="h-4 w-4 shrink-0 text-green-500" />
                           ) : (
-                            <FileText className="h-4 w-4 text-amber-500" />
+                            <FileText className="h-4 w-4 shrink-0 text-amber-500" />
                           )}
-                          <div>
-                            <div className="text-sm font-medium">{invoice.invoiceNumber}</div>
-                            <div className="text-xs text-muted-foreground">{invoice.projectName || "-"}</div>
+                          <div className="min-w-0 flex-1">
+                            <div className="text-sm font-medium truncate" title={invoice.invoiceNumber}>{invoice.invoiceNumber}</div>
+                            <div className="text-xs text-muted-foreground truncate" title={invoice.projectName || "-"}>{invoice.projectName || "-"}</div>
                           </div>
                         </div>
-                        <div className="flex items-center gap-3">
+                        <div className="flex items-center gap-3 shrink-0">
                           {getStatusBadge(invoice.status)}
-                          <span className="font-medium text-sm">{formatCurrency(Number(invoice.totalAmount || 0))}</span>
+                          <span className="font-medium text-sm whitespace-nowrap">{formatCurrency(Number(invoice.totalAmount || 0))}</span>
                         </div>
                       </div>
                     ))}
@@ -517,7 +645,7 @@ export default function Finance() {
                         <TableRow key={bill.id} data-testid={`row-bill-${bill.id}`} className="hover-elevate cursor-pointer" onClick={() => setLocation(`/entity/invoice/${bill.id}`)}>
                           <TableCell className="font-medium" data-testid={`text-bill-number-${bill.id}`}>{bill.invoiceNumber}</TableCell>
                           <TableCell data-testid={`text-bill-project-${bill.id}`}>{bill.projectName || "-"}</TableCell>
-                          <TableCell data-testid={`text-bill-vendor-${bill.id}`}>{getVendorFromNotes(bill.notesJson)}</TableCell>
+                          <TableCell data-testid={`text-bill-vendor-${bill.id}`}>{bill.vendorName || getVendorFromNotes(bill.notesJson)}</TableCell>
                           <TableCell className="text-right">{formatCurrency(total)}</TableCell>
                           <TableCell className="text-right text-green-500">{formatCurrency(paid)}</TableCell>
                           <TableCell className="text-right text-amber-500">{formatCurrency(due)}</TableCell>
@@ -545,6 +673,138 @@ export default function Finance() {
                 <CardTitle>Client Invoices (Accounts Receivable)</CardTitle>
                 <CardDescription>Invoices sent to clients</CardDescription>
               </div>
+              <Dialog open={isNewInvoiceOpen} onOpenChange={setIsNewInvoiceOpen}>
+                <DialogTrigger asChild>
+                  <Button size="sm" data-testid="button-new-invoice">
+                    <Plus className="h-4 w-4 mr-1" />
+                    New Invoice
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="sm:max-w-md" data-testid="dialog-new-invoice">
+                  <DialogHeader>
+                    <DialogTitle>New Invoice</DialogTitle>
+                    <DialogDescription>Create an invoice receivable from a client or payable to a vendor.</DialogDescription>
+                  </DialogHeader>
+                  <form
+                    className="space-y-3"
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      if (!newInvoice.invoiceNumber.trim()) {
+                        toast({ title: "Invoice number required", variant: "destructive" });
+                        return;
+                      }
+                      createInvoiceMutation.mutate(newInvoice);
+                    }}
+                  >
+                    <div className="space-y-1.5">
+                      <Label htmlFor="invoice-number">Invoice #</Label>
+                      <Input
+                        id="invoice-number"
+                        data-testid="input-invoice-number"
+                        value={newInvoice.invoiceNumber}
+                        onChange={(e) => setNewInvoice((s) => ({ ...s, invoiceNumber: e.target.value }))}
+                        placeholder="INV-2026-0001"
+                      />
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-1.5">
+                        <Label htmlFor="invoice-type">Type</Label>
+                        <Select
+                          value={newInvoice.invoiceType}
+                          onValueChange={(v) => setNewInvoice((s) => ({ ...s, invoiceType: v as "receivable" | "payable" }))}
+                        >
+                          <SelectTrigger id="invoice-type" data-testid="select-invoice-type">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="receivable">Receivable (AR)</SelectItem>
+                            <SelectItem value="payable">Payable (AP)</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label htmlFor="invoice-status">Status</Label>
+                        <Select
+                          value={newInvoice.status}
+                          onValueChange={(v) => setNewInvoice((s) => ({ ...s, status: v }))}
+                        >
+                          <SelectTrigger id="invoice-status" data-testid="select-invoice-status">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="draft">Draft</SelectItem>
+                            <SelectItem value="sent">Sent</SelectItem>
+                            <SelectItem value="approved">Approved</SelectItem>
+                            <SelectItem value="paid">Paid</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="invoice-project">Project</Label>
+                      <Select
+                        value={newInvoice.projectId || "__none__"}
+                        onValueChange={(v) => setNewInvoice((s) => ({ ...s, projectId: v === "__none__" ? "" : v }))}
+                      >
+                        <SelectTrigger id="invoice-project" data-testid="select-invoice-project">
+                          <SelectValue placeholder="Select a project (optional)" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__none__">No project</SelectItem>
+                          {projectOptions.map((p) => (
+                            <SelectItem key={p.id} value={p.id} data-testid={`option-invoice-project-${p.id}`}>
+                              {p.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-1.5">
+                        <Label htmlFor="invoice-amount">Amount</Label>
+                        <Input
+                          id="invoice-amount"
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          inputMode="decimal"
+                          data-testid="input-invoice-amount"
+                          value={newInvoice.totalAmount}
+                          onChange={(e) => setNewInvoice((s) => ({ ...s, totalAmount: e.target.value }))}
+                          placeholder="0.00"
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label htmlFor="invoice-due">Due Date</Label>
+                        <Input
+                          id="invoice-due"
+                          type="date"
+                          data-testid="input-invoice-due-date"
+                          value={newInvoice.dueDate}
+                          onChange={(e) => setNewInvoice((s) => ({ ...s, dueDate: e.target.value }))}
+                        />
+                      </div>
+                    </div>
+                    <DialogFooter>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => setIsNewInvoiceOpen(false)}
+                        data-testid="button-cancel-new-invoice"
+                      >
+                        Cancel
+                      </Button>
+                      <Button
+                        type="submit"
+                        disabled={createInvoiceMutation.isPending}
+                        data-testid="button-submit-new-invoice"
+                      >
+                        {createInvoiceMutation.isPending ? "Creating..." : "Create Invoice"}
+                      </Button>
+                    </DialogFooter>
+                  </form>
+                </DialogContent>
+              </Dialog>
             </CardHeader>
             <CardContent>
               {invoicesLoading ? (
@@ -733,7 +993,7 @@ export default function Finance() {
             <CardHeader className="flex flex-row items-center justify-between gap-2">
               <div>
                 <CardTitle>Requests for Information</CardTitle>
-                <CardDescription>Project RFIs and responses</CardDescription>
+                <CardDescription>For cost-impact RFIs only</CardDescription>
               </div>
             </CardHeader>
             <CardContent>

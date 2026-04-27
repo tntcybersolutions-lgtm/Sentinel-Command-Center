@@ -103,36 +103,6 @@ const DEFAULT_TAKEOFF_CATEGORIES = [
   { id: "cabling", name: "Cabling", code: "CABL", trade: "cabling", defaultUnit: "LF" },
 ];
 
-const IMPORT_TEMPLATES: Record<string, Array<{ name: string; categoryName: string; quantity: number; unit: string; unitCost: number }>> = {
-  architectural: [
-    { name: "Drywall", categoryName: "Drywall", quantity: 8500, unit: "SF", unitCost: 2.50 },
-    { name: "Doors & Hardware", categoryName: "Doors & Hardware", quantity: 24, unit: "EA", unitCost: 425.00 },
-    { name: "Flooring", categoryName: "Flooring", quantity: 6200, unit: "SF", unitCost: 4.75 },
-  ],
-  structural: [
-    { name: "Concrete", categoryName: "Concrete", quantity: 150, unit: "CY", unitCost: 180.00 },
-    { name: "Framing", categoryName: "Framing", quantity: 2500, unit: "LF", unitCost: 8.00 },
-  ],
-  electrical: [
-    { name: "Electrical Devices", categoryName: "Electrical Devices", quantity: 85, unit: "EA", unitCost: 45.00 },
-    { name: "Cabling", categoryName: "Cabling", quantity: 1800, unit: "LF", unitCost: 3.25 },
-  ],
-  mep: [
-    { name: "Electrical Devices", categoryName: "Electrical Devices", quantity: 60, unit: "EA", unitCost: 45.00 },
-    { name: "Plumbing Fixtures", categoryName: "Plumbing Fixtures", quantity: 18, unit: "EA", unitCost: 380.00 },
-  ],
-  low_voltage: [
-    { name: "Low-Voltage Devices", categoryName: "Low-Voltage Devices", quantity: 42, unit: "EA", unitCost: 95.00 },
-    { name: "Cabling", categoryName: "Cabling", quantity: 3200, unit: "LF", unitCost: 1.85 },
-  ],
-  fire_life_safety: [
-    { name: "Fire Devices", categoryName: "Fire Devices", quantity: 36, unit: "EA", unitCost: 125.00 },
-  ],
-  default: [
-    { name: "Generic Item", categoryName: "Concrete", quantity: 100, unit: "EA", unitCost: 25.00 },
-  ],
-};
-
 const AUTO_BUILD_PHASES = [
   { name: "Framing", type: "framing", dependencies: [], inspections: ["Rough Framing"], submittals: ["Lumber Shop Drawings"] },
   { name: "Electrical Rough-In", type: "electrical_rough", dependencies: ["Framing"], inspections: ["Electrical Rough"], submittals: ["Panel Schedules", "Fixture Cut Sheets"] },
@@ -178,6 +148,24 @@ interface BuildingSystem {
   completionPercent: number;
   commissioningStatus: string;
   asBuiltStatus: string;
+}
+
+// Subset of the blueprints row needed by the Import-from-Plans flow.
+interface Blueprint {
+  id: string;
+  title: string;
+  fileName?: string;
+  pageCount?: number;
+}
+
+// Shape of takeoff_items returned by GET /api/blueprints/:id/takeoff-items.
+interface BlueprintTakeoffItem {
+  id: string;
+  name: string;
+  category: string;
+  quantity: string;
+  unit: string;
+  unitCost?: string;
 }
 
 export default function DesignSystems() {
@@ -448,7 +436,7 @@ export default function DesignSystems() {
         variant: isPartial ? "destructive" : "default",
       });
       setIsImportTakeoffOpen(false);
-      setImportSheetId("");
+      setImportBlueprintId("");
     },
     onError: (error: Error) => {
       toast({ title: "Import failed", description: error.message, variant: "destructive" });
@@ -1330,7 +1318,7 @@ export default function DesignSystems() {
                   </form>
                 </DialogContent>
               </Dialog>
-              <Button variant="outline" onClick={() => { setImportSheetId(""); setIsImportTakeoffOpen(true); }} data-testid="button-import-takeoff">
+              <Button variant="outline" onClick={() => { setImportBlueprintId(""); setIsImportTakeoffOpen(true); }} data-testid="button-import-takeoff">
                 <Upload className="h-4 w-4 mr-2" />
                 Import from Plans
               </Button>
@@ -1339,61 +1327,85 @@ export default function DesignSystems() {
                   <DialogHeader>
                     <DialogTitle>Import Takeoff from Plans</DialogTitle>
                     <DialogDescription>
-                      Select a drawing sheet to auto-populate takeoff quantities based on its discipline.
+                      Select a blueprint to pull its measured takeoff items into this list. Items are matched to your takeoff categories by name.
                     </DialogDescription>
                   </DialogHeader>
                   <form
                     onSubmit={(e) => {
                       e.preventDefault();
-                      if (!importSheetId) {
-                        toast({ title: "No sheet selected", description: "Choose a drawing sheet to import from.", variant: "destructive" });
+                      if (!importBlueprintId) {
+                        toast({ title: "No blueprint selected", description: "Choose a blueprint to import from.", variant: "destructive" });
                         return;
                       }
-                      importTakeoffFromSheetMutation.mutate(importSheetId);
+                      importTakeoffFromBlueprintMutation.mutate(importBlueprintId);
                     }}
                     className="space-y-4"
                   >
                     <div className="space-y-2">
-                      <Label htmlFor="import-sheet">Drawing Sheet</Label>
-                      <Select value={importSheetId} onValueChange={setImportSheetId}>
-                        <SelectTrigger id="import-sheet" data-testid="select-import-sheet">
-                          <SelectValue placeholder="Select a drawing sheet..." />
+                      <Label htmlFor="import-blueprint">Blueprint</Label>
+                      <Select value={importBlueprintId} onValueChange={setImportBlueprintId}>
+                        <SelectTrigger id="import-blueprint" data-testid="select-import-blueprint">
+                          <SelectValue placeholder="Select a blueprint..." />
                         </SelectTrigger>
                         <SelectContent>
-                          {drawingSheets.length === 0 && (
+                          {blueprintsData.length === 0 && (
                             <div className="px-2 py-1.5 text-sm text-muted-foreground">
-                              No sheets available — upload some first.
+                              No blueprints available — upload one in Blueprint Hub first.
                             </div>
                           )}
-                          {drawingSheets.map((s) => (
-                            <SelectItem key={s.id} value={s.id} data-testid={`option-import-sheet-${s.id}`}>
-                              {s.sheetNumber} — {s.sheetTitle} ({s.discipline})
+                          {blueprintsData.map((b) => (
+                            <SelectItem key={b.id} value={b.id} data-testid={`option-import-blueprint-${b.id}`}>
+                              {b.title}{b.fileName ? ` (${b.fileName})` : ""}
                             </SelectItem>
                           ))}
                         </SelectContent>
                       </Select>
                     </div>
-                    {importSheetId && (() => {
-                      const selected = drawingSheets.find(s => s.id === importSheetId);
-                      const preview = selected ? IMPORT_TEMPLATES[selected.discipline] || IMPORT_TEMPLATES.default : [];
-                      return (
-                        <div className="rounded-md border bg-muted/30 p-3 space-y-1.5" data-testid="import-preview">
-                          <div className="text-sm font-medium">Will create {preview.length} takeoff item{preview.length === 1 ? "" : "s"}:</div>
-                          {preview.map((p, i) => (
-                            <div key={i} className="text-xs text-muted-foreground">
-                              • {p.name} — {p.quantity} {p.unit} @ ${p.unitCost.toFixed(2)} = ${(p.quantity * p.unitCost).toLocaleString()}
+                    {importBlueprintId && (
+                      <div className="rounded-md border bg-muted/30 p-3 space-y-1.5 max-h-64 overflow-y-auto" data-testid="import-preview">
+                        {importPreviewLoading ? (
+                          <div className="text-sm text-muted-foreground">Loading items…</div>
+                        ) : importPreviewItems.length === 0 ? (
+                          <div className="text-sm text-muted-foreground">
+                            This blueprint has no takeoff items yet. Add measurements to it from the Blueprint viewer first.
+                          </div>
+                        ) : (
+                          <>
+                            <div className="text-sm font-medium">
+                              Will attempt to import {importPreviewItems.length} item{importPreviewItems.length === 1 ? "" : "s"}:
                             </div>
-                          ))}
-                        </div>
-                      );
-                    })()}
+                            {importPreviewItems.map((p) => {
+                              const qty = parseFloat(p.quantity || "0");
+                              const cost = parseFloat(p.unitCost || "0");
+                              const matched = takeoffCategoriesData.some(c => c.name === p.category);
+                              return (
+                                <div
+                                  key={p.id}
+                                  className="text-xs text-muted-foreground flex items-center gap-2"
+                                  data-testid={`preview-item-${p.id}`}
+                                >
+                                  <span className={matched ? "" : "line-through opacity-60"}>
+                                    • {p.name} — {qty} {p.unit}
+                                    {cost > 0 ? ` @ $${cost.toFixed(2)} = $${(qty * cost).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : ""}
+                                    {" "}<span className="opacity-70">[{p.category}]</span>
+                                  </span>
+                                  {!matched && (
+                                    <Badge variant="outline" className="text-[10px]">no matching category</Badge>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </>
+                        )}
+                      </div>
+                    )}
                     <Button
                       type="submit"
                       className="w-full"
-                      disabled={!importSheetId || importTakeoffFromSheetMutation.isPending}
+                      disabled={!importBlueprintId || importPreviewLoading || importPreviewItems.length === 0 || importTakeoffFromBlueprintMutation.isPending}
                       data-testid="button-confirm-import-takeoff"
                     >
-                      {importTakeoffFromSheetMutation.isPending ? "Importing..." : "Auto-Populate Quantities"}
+                      {importTakeoffFromBlueprintMutation.isPending ? "Importing..." : "Import Takeoff Items"}
                     </Button>
                   </form>
                 </DialogContent>
