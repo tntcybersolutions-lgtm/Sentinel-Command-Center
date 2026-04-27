@@ -8387,6 +8387,27 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
       }
 
       const stats = await service.runIngestion();
+
+      // Fire-and-forget: Herbie records a fact about the ingestion run.
+      void (async () => {
+        try {
+          const { executeHerbieTool } = await import("./services/herbie-tools");
+          const summary = `SAM.gov ingestion run: ${JSON.stringify(stats).substring(0, 280)}`;
+          await executeHerbieTool(
+            "record_fact" as any,
+            {
+              projectId: "samgov-ingest",
+              fact: summary,
+              category: "observation",
+              source: "samgov_ingest",
+            } as any,
+            { tenantId: DEFAULT_TENANT_ID, userId: "herbie" } as any,
+          );
+        } catch (e) {
+          console.warn("[herbie auto-hook samgov_ingest]", e instanceof Error ? e.message : e);
+        }
+      })();
+
       res.json({ success: true, stats });
     } catch (error) {
       console.error("Error running SAM.gov ingestion:", error);
@@ -18093,6 +18114,20 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
         entityId: sheet.id,
         afterJson: sheet as unknown as Record<string, unknown>,
       });
+
+      // Fire-and-forget: ask Herbie to extract structured fields from the sheet.
+      void (async () => {
+        try {
+          const { executeHerbieTool } = await import("./services/herbie-tools");
+          await executeHerbieTool(
+            "extract_fields" as any,
+            { documentId: sheet.id, extractionType: "drawing_sheet" } as any,
+            { tenantId: DEFAULT_TENANT_ID, userId: "herbie" } as any,
+          );
+        } catch (e) {
+          console.warn("[herbie auto-hook drawing_sheet]", e instanceof Error ? e.message : e);
+        }
+      })();
       
       res.status(201).json(sheet);
     } catch (error) {
@@ -18370,6 +18405,28 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
         entityId: quantity.id,
         afterJson: quantity as unknown as Record<string, unknown>,
       });
+
+      // Fire-and-forget: if no unit cost, have Herbie flag it for review.
+      const unitCostNum = quantity.unitCost == null ? 0 : Number(quantity.unitCost);
+      if (!unitCostNum || unitCostNum <= 0) {
+        void (async () => {
+          try {
+            const { executeHerbieTool } = await import("./services/herbie-tools");
+            await executeHerbieTool(
+              "flag_for_review" as any,
+              {
+                entityType: "takeoff_quantity",
+                entityId: quantity.id,
+                reason: `Takeoff item created without a unit cost (qty ${quantity.quantity} ${quantity.unit ?? ""}). PM should set pricing before bid.`,
+                priority: "normal",
+              } as any,
+              { tenantId: DEFAULT_TENANT_ID, userId: "herbie" } as any,
+            );
+          } catch (e) {
+            console.warn("[herbie auto-hook takeoff_quantity]", e instanceof Error ? e.message : e);
+          }
+        })();
+      }
       
       res.status(201).json(quantity);
     } catch (error) {
@@ -18458,6 +18515,27 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
         entityId: system.id,
         afterJson: system as unknown as Record<string, unknown>,
       });
+
+      // Fire-and-forget: Herbie records a fact so the system shows up in project memory.
+      if (system.projectId) {
+        void (async () => {
+          try {
+            const { executeHerbieTool } = await import("./services/herbie-tools");
+            await executeHerbieTool(
+              "record_fact" as any,
+              {
+                projectId: system.projectId,
+                fact: `Building system added: ${system.systemName} (${system.systemType}). Status: ${system.status ?? "not_started"}.`,
+                category: "observation",
+                source: "design-systems UI",
+              } as any,
+              { tenantId: DEFAULT_TENANT_ID, userId: "herbie" } as any,
+            );
+          } catch (e) {
+            console.warn("[herbie auto-hook building_system]", e instanceof Error ? e.message : e);
+          }
+        })();
+      }
       
       res.status(201).json(system);
     } catch (error) {
