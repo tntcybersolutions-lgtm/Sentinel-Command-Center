@@ -1697,6 +1697,25 @@ export const subcontracts = pgTable("subcontracts", {
 //   - unconditional_partial (lien released for partial payment, no contingency)
 //   - conditional_final     (lien released for final payment, contingent)
 //   - unconditional_final   (lien released for final payment, no contingency)
+// Statutory lien waiver templates (state-required forms). Global (no tenantId).
+export const lienWaiverTemplates = pgTable("lien_waiver_templates", {
+  id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()`),
+  state: varchar("state", { length: 2 }).notNull(),
+  waiverType: text("waiver_type").notNull(), // conditional_progress | unconditional_progress | conditional_final | unconditional_final
+  templateBody: text("template_body").notNull(), // statutory text with {{placeholders}}
+  statutory: boolean("statutory").notNull().default(false),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  stateTypeIdx: index("lwt_state_type_idx").on(table.state, table.waiverType),
+}));
+
+export const insertLienWaiverTemplateSchema = createInsertSchema(lienWaiverTemplates).omit({
+  id: true,
+  createdAt: true,
+});
+export type InsertLienWaiverTemplate = z.infer<typeof insertLienWaiverTemplateSchema>;
+export type LienWaiverTemplate = typeof lienWaiverTemplates.$inferSelect;
+
 // State machine: draft → sent → signed → received → (final). Terminal: voided.
 export const lienWaivers = pgTable("lien_waivers", {
   id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()`),
@@ -1708,9 +1727,20 @@ export const lienWaivers = pgTable("lien_waivers", {
   waiverNumber: text("waiver_number").notNull(),
   waiverType: text("waiver_type").notNull(), // conditional_partial | unconditional_partial | conditional_final | unconditional_final
   status: text("status").notNull().default("draft"), // draft | sent | signed | received | voided
+  state: varchar("state", { length: 2 }), // jurisdiction state code (CA, TX, ...) for statutory templates
   throughDate: timestamp("through_date").notNull(),
+  paymentDate: timestamp("payment_date"),
   paymentAmount: decimal("payment_amount", { precision: 15, scale: 2 }).notNull(),
   exceptionsJson: jsonb("exceptions_json"), // [{description, amount}] for unpaid items
+  vendorName: text("vendor_name"),
+  vendorEmail: text("vendor_email"),
+  vendorAddress: text("vendor_address"),
+  claimantName: text("claimant_name"),
+  claimantAddress: text("claimant_address"),
+  ownerName: text("owner_name"),
+  projectDescription: text("project_description"),
+  propertyDescription: text("property_description"),
+  filledBody: text("filled_body"), // Herbie-filled waiver text
   signerName: text("signer_name"),
   signerTitle: text("signer_title"),
   signerEmail: text("signer_email"),
