@@ -38,7 +38,7 @@ The user interface is a responsive single-page application built with React 18, 
 -   **Buyer & Vendor Routing**: Normalizes buyer names, matches companies, and routes new entities for auto-creation or AI review.
 -   **HERBIE Autonomous Scoring**: Scores opportunities and triggers approval for high-scoring prospects.
 -   **Retro-Organizer**: Scans bid packages for misplaced documents, proposes reorganization, and generates a BID_INDEX JSON.
--   **Lien Waiver System**: End-to-end conditional/unconditional partial+final waiver workflow with strict state machine enforcement and audit trails.
+-   **Lien Waiver System**: End-to-end conditional/unconditional partial+final waiver workflow with strict state machine enforcement and audit trails. Includes 50-state statutory templates, public e-sign magic links (`/sign/lien-waiver/:token`) with atomic single-use token burn (DB-enforced via partial unique index `lw_sign_token_uniq`), 3/7/14-day reminder schedule with overlap-safe 60s monitor (in-process in-flight guard + atomic conditional `markReminderSent` claim), and `voidWaiver` service-level invariant that cancels pending reminders for every caller.
 -   **Automated Document Ingestion Pipeline**: Unified pipeline orchestrates discovery (SAM.gov, HigherGov), artifact upsert, document download, 3-tier classification, and project document filing, with a UI for monitoring.
 -   **Ingestion Chaining Architecture**: Enables automated chaining from opportunity discovery to document ingestion.
 -   **Org Memory System**: Organizational knowledge base with approval workflows and Herbie policies for RAG integration.

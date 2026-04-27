@@ -30,11 +30,27 @@ import {
   getStats,
   listEvents,
   generateDocumentText,
+  generateSignToken,
+  findWaiverBySignToken,
+  signByToken,
+  scheduleDefaultReminders,
+  listReminders,
+  cancelPendingReminders,
+  processDueReminders,
+  autofillWaiver,
   WAIVER_TYPES,
   WAIVER_STATUSES,
   type WaiverStatus,
   type WaiverType,
 } from "./services/lien-waiver.service";
+import {
+  seedLienWaiverTemplates,
+  ALL_STATES,
+  WAIVER_TYPE_KEYS,
+} from "./services/lien-waiver-templates.seed";
+import { db } from "./db";
+import { lienWaiverTemplates, vendors, projects } from "@shared/schema";
+import { and, eq } from "drizzle-orm";
 
 const DEFAULT_TENANT_ID = "blackhawk-default";
 
@@ -253,6 +269,8 @@ export function registerLienWaiverRoutes(app: Express): void {
         typeof req.body?.reason === "string" && req.body.reason.trim()
           ? req.body.reason
           : "voided";
+      // voidWaiver service cancels any outstanding reminders inline
+      // so the invariant holds for every caller (route, worker, etc).
       const row = await voidWaiver(
         DEFAULT_TENANT_ID,
         pid(req.params.id),
@@ -265,4 +283,235 @@ export function registerLienWaiverRoutes(app: Express): void {
       handleError(res, err, "void failed");
     }
   });
+
+  // ── E-SIGN TOKEN FLOW ────────────────────────────────────────────
+  app.post(
+    "/api/lien-waivers/:id/sign-token",
+    async (req: Request, res: Response) => {
+      try {
+        const ttlDays =
+          typeof req.body?.ttlDays === "number" && req.body.ttlDays > 0
+            ? Math.min(365, req.body.ttlDays)
+            : undefined;
+        const result = await generateSignToken(
+          DEFAULT_TENANT_ID,
+          pid(req.params.id),
+          ttlDays,
+        );
+        res.json({
+          token: result.token,
+          expiresAt: result.expiresAt.toISOString(),
+          signUrl: `/sign/lien-waiver/${result.token}`,
+        });
+      } catch (err) {
+        handleError(res, err, "sign-token failed");
+      }
+    },
+  );
+
+  // PUBLIC route — no auth, no tenant scope. Looks up purely by token.
+  app.get(
+    "/api/sign/lien-waivers/:token",
+    async (req: Request, res: Response) => {
+      try {
+        const waiver = await findWaiverBySignToken(pid(req.params.token));
+        if (!waiver) return res.status(404).json({ error: "invalid sign link" });
+        if (
+          waiver.signTokenExpiresAt &&
+          waiver.signTokenExpiresAt.getTime() < Date.now()
+        ) {
+          return res.status(410).json({ error: "sign link expired" });
+        }
+        // Try to autofill on first visit so the signer sees a complete
+        // document. autofill is idempotent — re-running just refreshes.
+        let filledBody = waiver.filledBody;
+        try {
+          if (!filledBody) {
+            const filled = await autofillWaiver(waiver.tenantId, waiver.id);
+            filledBody = filled.filledBody;
+          }
+        } catch {
+          // fall through with raw waiver — generateDocumentText is the fallback
+        }
+        if (!filledBody) {
+          try {
+            filledBody = await generateDocumentText(waiver.tenantId, waiver.id);
+          } catch {
+            filledBody = "";
+          }
+        }
+
+        // Resolve a few display fields so the signer can verify context.
+        const [project] = waiver.projectId
+          ? await db
+              .select({ name: projects.name, projectNumber: projects.projectNumber })
+              .from(projects)
+              .where(eq(projects.id, waiver.projectId))
+              .limit(1)
+          : [];
+        const [vendor] = waiver.vendorId
+          ? await db
+              .select({ companyName: vendors.companyName })
+              .from(vendors)
+              .where(eq(vendors.id, waiver.vendorId))
+              .limit(1)
+          : [];
+
+        res.json({
+          waiver: {
+            id: waiver.id,
+            waiverNumber: waiver.waiverNumber,
+            waiverType: waiver.waiverType,
+            status: waiver.status,
+            paymentAmount: waiver.paymentAmount,
+            throughDate: waiver.throughDate,
+            signerName: waiver.signerName,
+            signerTitle: waiver.signerTitle,
+            signerEmail: waiver.signerEmail,
+            tokenExpiresAt: waiver.signTokenExpiresAt,
+          },
+          projectName: project?.name ?? waiver.projectDescription ?? "—",
+          projectNumber: project?.projectNumber ?? "—",
+          vendorName: vendor?.companyName ?? waiver.vendorName ?? "—",
+          filledBody: filledBody ?? "",
+        });
+      } catch (err) {
+        handleError(res, err, "sign lookup failed");
+      }
+    },
+  );
+
+  // PUBLIC route — accepts the captured signature.
+  app.post(
+    "/api/sign/lien-waivers/:token",
+    async (req: Request, res: Response) => {
+      try {
+        const b = req.body ?? {};
+        if (!b.signerName || typeof b.signerName !== "string") {
+          return badRequest(res, "signerName required");
+        }
+        if (!b.signatureDataUrl || typeof b.signatureDataUrl !== "string") {
+          return badRequest(res, "signatureDataUrl required");
+        }
+        const ip =
+          (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() ||
+          req.socket.remoteAddress ||
+          null;
+        const row = await signByToken(
+          pid(req.params.token),
+          {
+            name: b.signerName,
+            title: b.signerTitle ?? null,
+            email: b.signerEmail ?? null,
+          },
+          b.signatureDataUrl,
+          ip,
+        );
+        res.json({ ok: true, waiverId: row.id, signedAt: row.signedAt });
+      } catch (err) {
+        handleError(res, err, "sign failed");
+      }
+    },
+  );
+
+  // ── REMINDERS ────────────────────────────────────────────────────
+  app.get(
+    "/api/lien-waivers/:id/reminders",
+    async (req: Request, res: Response) => {
+      try {
+        const rows = await listReminders(DEFAULT_TENANT_ID, pid(req.params.id));
+        res.json(rows);
+      } catch (err) {
+        handleError(res, err, "reminders list failed");
+      }
+    },
+  );
+
+  app.post(
+    "/api/lien-waivers/:id/schedule-reminders",
+    async (req: Request, res: Response) => {
+      try {
+        const channel =
+          typeof req.body?.channel === "string" && req.body.channel.trim()
+            ? (req.body.channel as "email" | "sms" | "teams")
+            : "email";
+        // Re-scheduling? Cancel any pending first so we don't stack.
+        await cancelPendingReminders(DEFAULT_TENANT_ID, pid(req.params.id));
+        const rows = await scheduleDefaultReminders(
+          DEFAULT_TENANT_ID,
+          pid(req.params.id),
+          new Date(),
+          channel,
+        );
+        res.json(rows);
+      } catch (err) {
+        handleError(res, err, "schedule-reminders failed");
+      }
+    },
+  );
+
+  // Manual fire — useful for ops + tests. The setInterval monitor
+  // calls this same service function once per minute.
+  app.post(
+    "/api/lien-waivers/process-reminders",
+    async (_req: Request, res: Response) => {
+      try {
+        const result = await processDueReminders();
+        res.json(result);
+      } catch (err) {
+        handleError(res, err, "process-reminders failed");
+      }
+    },
+  );
+
+  // ── AUTOFILL ─────────────────────────────────────────────────────
+  app.post(
+    "/api/lien-waivers/:id/autofill",
+    async (req: Request, res: Response) => {
+      try {
+        const result = await autofillWaiver(
+          DEFAULT_TENANT_ID,
+          pid(req.params.id),
+        );
+        res.json(result);
+      } catch (err) {
+        handleError(res, err, "autofill failed");
+      }
+    },
+  );
+
+  // ── TEMPLATES ────────────────────────────────────────────────────
+  app.get(
+    "/api/lien-waiver-templates",
+    async (req: Request, res: Response) => {
+      try {
+        const state = typeof req.query.state === "string" ? req.query.state : null;
+        const rows = state
+          ? await db
+              .select()
+              .from(lienWaiverTemplates)
+              .where(eq(lienWaiverTemplates.state, state))
+          : await db.select().from(lienWaiverTemplates).limit(500);
+        res.json(rows);
+      } catch (err) {
+        handleError(res, err, "templates list failed");
+      }
+    },
+  );
+
+  app.post(
+    "/api/lien-waiver-templates/seed",
+    async (_req: Request, res: Response) => {
+      try {
+        const result = await seedLienWaiverTemplates();
+        res.json({
+          ...result,
+          allStates: ALL_STATES.length,
+          waiverTypes: WAIVER_TYPE_KEYS,
+        });
+      } catch (err) {
+        handleError(res, err, "seed failed");
+      }
+    },
+  );
 }

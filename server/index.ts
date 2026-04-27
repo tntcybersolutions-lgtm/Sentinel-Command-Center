@@ -293,6 +293,61 @@ app.use((req, res, next) => {
       // Start the scheduler (enqueues jobs on schedule)
       await scheduler.start();
       log("Scheduler started - HERBIE is now active", "herbie");
+
+      // Lien Waiver reminder monitor — fires due reminders every 60s.
+      // Kept lightweight (single setInterval) instead of adding a JobType
+      // to avoid mutating the queue enum & touching tenant loops.
+      try {
+        const { processDueReminders } = await import(
+          "./services/lien-waiver.service"
+        );
+        // In-flight guard prevents the next 60s setInterval tick from
+        // starting before the previous one has finished. Without this,
+        // a slow tick (e.g. DB backpressure) can stack overlapping
+        // executions and process the same reminder twice. Combined with
+        // the atomic `markReminderSent` claim in the service, this gives
+        // us belt-and-suspenders safety against duplicate firing.
+        let reminderTickInFlight = false;
+        const tickReminders = async () => {
+          if (reminderTickInFlight) return;
+          reminderTickInFlight = true;
+          try {
+            const result = await processDueReminders();
+            if (result.processed > 0 || result.skipped > 0) {
+              log(
+                `Lien waiver reminders: ${result.processed} sent, ${result.skipped} skipped`,
+                "lien-waiver",
+              );
+            }
+          } catch (e) {
+            console.error("[lien-waiver] reminder tick failed:", e);
+          } finally {
+            reminderTickInFlight = false;
+          }
+        };
+        setInterval(tickReminders, 60_000);
+        // First tick on a small delay so the rest of startup finishes.
+        setTimeout(tickReminders, 5_000);
+        log("Lien waiver reminder monitor started (60s interval)", "lien-waiver");
+
+        // Seed templates idempotently on boot so /sign/lien-waiver/:token
+        // can render the statutory body even on a fresh database.
+        const { seedLienWaiverTemplates } = await import(
+          "./services/lien-waiver-templates.seed"
+        );
+        seedLienWaiverTemplates()
+          .then((r) =>
+            log(
+              `Lien waiver templates seeded (inserted=${r.inserted}, skipped=${r.skipped}, total=${r.totalCombinations})`,
+              "lien-waiver",
+            ),
+          )
+          .catch((e) =>
+            console.error("[lien-waiver] template seed failed:", e),
+          );
+      } catch (e) {
+        console.error("[lien-waiver] failed to start reminder monitor:", e);
+      }
     },
   );
 })();

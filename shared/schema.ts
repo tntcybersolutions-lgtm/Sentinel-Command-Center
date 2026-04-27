@@ -1744,6 +1744,10 @@ export const lienWaivers = pgTable("lien_waivers", {
   signerName: text("signer_name"),
   signerTitle: text("signer_title"),
   signerEmail: text("signer_email"),
+  signToken: varchar("sign_token", { length: 64 }), // opaque token for public e-sign URL
+  signTokenExpiresAt: timestamp("sign_token_expires_at"),
+  signatureDataUrl: text("signature_data_url"), // captured signature image (data URL)
+  signedIpAddress: varchar("signed_ip_address", { length: 64 }),
   sentAt: timestamp("sent_at"),
   signedAt: timestamp("signed_at"),
   receivedAt: timestamp("received_at"),
@@ -1759,6 +1763,15 @@ export const lienWaivers = pgTable("lien_waivers", {
   projectStatusIdx: index("lw_project_status_idx").on(table.projectId, table.status),
   vendorIdx: index("lw_vendor_idx").on(table.vendorId),
   payAppIdx: index("lw_pay_app_idx").on(table.payAppId),
+  // Partial unique index — every non-null token is unique. The partial
+  // predicate keeps inserts of waivers WITHOUT a sign token (e.g. drafts
+  // that haven't been issued a magic link) from colliding on `null`.
+  // This guarantees signByToken's atomic UPDATE...WHERE sign_token=?
+  // touches at most one row, so it is safe without an explicit tenant
+  // predicate (the unique token implicitly identifies one tenant).
+  signTokenIdx: uniqueIndex("lw_sign_token_uniq")
+    .on(table.signToken)
+    .where(sql`sign_token IS NOT NULL`),
 }));
 
 export const insertLienWaiverSchema = createInsertSchema(lienWaivers).omit({
@@ -1788,6 +1801,32 @@ export const insertLienWaiverEventSchema = createInsertSchema(lienWaiverEvents).
 });
 export type InsertLienWaiverEvent = z.infer<typeof insertLienWaiverEventSchema>;
 export type LienWaiverEvent = typeof lienWaiverEvents.$inferSelect;
+
+// Scheduled reminders for outstanding (sent-but-not-signed) waivers.
+// Default cadence: reminder #1 at +3 days, #2 at +7 days, #3 at +14 days
+// after the waiver is sent. The reminder monitor (server/index.ts) wakes
+// every minute and processes any reminder whose scheduled_for is past
+// and sent_at is null.
+export const lienWaiverReminders = pgTable("lien_waiver_reminders", {
+  id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()`),
+  lienWaiverId: varchar("lien_waiver_id", { length: 36 }).notNull().references(() => lienWaivers.id, { onDelete: "cascade" }),
+  tenantId: varchar("tenant_id", { length: 36 }).notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  reminderNumber: integer("reminder_number").notNull(), // 1, 2, 3
+  scheduledFor: timestamp("scheduled_for").notNull(),
+  sentAt: timestamp("sent_at"),
+  channel: text("channel").notNull().default("email"), // email | sms | teams
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  dueIdx: index("lwr_due_idx").on(table.scheduledFor, table.sentAt),
+  waiverIdx: index("lwr_waiver_idx").on(table.lienWaiverId),
+}));
+
+export const insertLienWaiverReminderSchema = createInsertSchema(lienWaiverReminders).omit({
+  id: true,
+  createdAt: true,
+});
+export type InsertLienWaiverReminder = z.infer<typeof insertLienWaiverReminderSchema>;
+export type LienWaiverReminder = typeof lienWaiverReminders.$inferSelect;
 
 // ============================================================================
 // DAILY PLANNER & BRIEFINGS (220_planner.sql)

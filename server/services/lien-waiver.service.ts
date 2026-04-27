@@ -16,12 +16,16 @@ import { db } from "../db";
 import {
   lienWaivers,
   lienWaiverEvents,
+  lienWaiverReminders,
   vendors,
   projects,
   type LienWaiver,
   type InsertLienWaiver,
+  type LienWaiverReminder,
 } from "@shared/schema";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, isNull, lte, sql } from "drizzle-orm";
+import { randomBytes } from "crypto";
+import { findTemplate, fillTemplate, type TemplateWaiverType } from "./lien-waiver-templates.seed";
 
 export const WAIVER_TYPES = [
   "conditional_partial",
@@ -275,14 +279,14 @@ export function receiveWaiver(
   );
 }
 
-export function voidWaiver(
+export async function voidWaiver(
   tenantId: string,
   waiverId: string,
   reason: string,
   actorUserId: string | null = null,
   actorName: string | null = null,
 ): Promise<LienWaiver> {
-  return transition(
+  const row = await transition(
     tenantId,
     waiverId,
     ["draft", "sent", "signed"],
@@ -293,6 +297,17 @@ export function voidWaiver(
     actorName,
     { reason },
   );
+  // Cancel any outstanding reminders so we don't keep nagging a vendor
+  // about a waiver that's been voided. Done inside the service so EVERY
+  // caller (route, worker, future automation) gets the invariant.
+  const cancelled = await cancelPendingReminders(tenantId, waiverId);
+  if (cancelled > 0) {
+    await logEvent(tenantId, waiverId, "reminders_cancelled", actorUserId, actorName, {
+      cancelled,
+      reason: "void",
+    });
+  }
+  return row;
 }
 
 export async function getWaiver(
@@ -396,6 +411,364 @@ export async function listEvents(
     .limit(200);
 }
 
+// ──────────────────────────────────────────────────────────────────────
+// E-SIGN TOKEN FLOW
+// ──────────────────────────────────────────────────────────────────────
+//
+// generateSignToken issues an opaque random token bound to one waiver.
+// The vendor receives a magic link `/sign/lien-waiver/:token` (no auth
+// required) — the public route resolves the waiver, lets the signer
+// review the document, capture a signature, and POST back to flip the
+// state to 'signed'. Tokens default to a 30-day TTL.
+
+export const SIGN_TOKEN_TTL_DAYS = 30;
+
+export async function generateSignToken(
+  tenantId: string,
+  waiverId: string,
+  ttlDays: number = SIGN_TOKEN_TTL_DAYS,
+): Promise<{ token: string; expiresAt: Date }> {
+  const existing = await getWaiver(tenantId, waiverId);
+  if (!existing) throw new Error("waiver not found");
+  if (existing.status === "voided") {
+    throw Object.assign(new Error("cannot generate sign token for voided waiver"), {
+      statusCode: 409,
+    });
+  }
+  if (existing.status === "received") {
+    throw Object.assign(new Error("waiver already received"), { statusCode: 409 });
+  }
+  const token = randomBytes(24).toString("base64url");
+  const expiresAt = new Date(Date.now() + ttlDays * 24 * 60 * 60 * 1000);
+  await db
+    .update(lienWaivers)
+    .set({
+      signToken: token,
+      signTokenExpiresAt: expiresAt,
+      updatedAt: new Date(),
+    } as never)
+    .where(and(eq(lienWaivers.tenantId, tenantId), eq(lienWaivers.id, waiverId)));
+  await logEvent(tenantId, waiverId, "sign_token_generated", null, null, {
+    expiresAt: expiresAt.toISOString(),
+  });
+  return { token, expiresAt };
+}
+
+export async function findWaiverBySignToken(token: string): Promise<LienWaiver | null> {
+  if (!token || typeof token !== "string") return null;
+  const [row] = await db
+    .select()
+    .from(lienWaivers)
+    .where(eq(lienWaivers.signToken, token))
+    .limit(1);
+  return row ?? null;
+}
+
+export async function signByToken(
+  token: string,
+  signedBy: { name: string; title?: string | null; email?: string | null },
+  signatureDataUrl: string,
+  ipAddress?: string | null,
+): Promise<LienWaiver> {
+  // Cheap input validation first (does NOT touch the DB).
+  if (!token || typeof token !== "string") {
+    throw Object.assign(new Error("invalid sign token"), { statusCode: 404 });
+  }
+  if (!signedBy.name || !signedBy.name.trim()) {
+    throw Object.assign(new Error("signer name required"), { statusCode: 400 });
+  }
+  if (!signatureDataUrl || !signatureDataUrl.startsWith("data:")) {
+    throw Object.assign(new Error("signature data URL required"), { statusCode: 400 });
+  }
+
+  // Atomic single-use burn: only one concurrent caller can satisfy the
+  // composite predicate (token matches, status='sent', not expired).
+  // The first UPDATE wins, clears `sign_token`, and flips status; every
+  // subsequent UPDATE returns 0 rows because the token is gone.
+  const now = new Date();
+  const updated = await db
+    .update(lienWaivers)
+    .set({
+      status: "signed",
+      signedAt: now,
+      signerName: signedBy.name,
+      signerTitle: signedBy.title ?? undefined,
+      signerEmail: signedBy.email ?? undefined,
+      signatureDataUrl,
+      signedIpAddress: ipAddress ?? null,
+      // burn the token so it can't be reused
+      signToken: null,
+      updatedAt: now,
+    } as never)
+    .where(
+      and(
+        eq(lienWaivers.signToken, token),
+        eq(lienWaivers.status, "sent"),
+        gt(lienWaivers.signTokenExpiresAt, now),
+      ),
+    )
+    .returning();
+
+  if (updated.length === 0) {
+    // Disambiguate the failure mode for a useful HTTP status: re-read by
+    // raw token (no status/expiry guard) so the caller sees the right
+    // error. If the row truly doesn't exist anymore the second lookup
+    // returns null and we fall through to 404.
+    const stale = await findWaiverBySignToken(token);
+    if (!stale) {
+      throw Object.assign(new Error("invalid sign token"), { statusCode: 404 });
+    }
+    if (
+      stale.signTokenExpiresAt &&
+      stale.signTokenExpiresAt.getTime() < Date.now()
+    ) {
+      throw Object.assign(new Error("sign token expired"), { statusCode: 410 });
+    }
+    throw Object.assign(
+      new Error(
+        `waiver is in '${stale.status}' state — only 'sent' waivers can be signed via token`,
+      ),
+      { statusCode: 409 },
+    );
+  }
+
+  const row = updated[0];
+  await logEvent(row.tenantId, row.id, "signed", null, signedBy.name, {
+    signerEmail: signedBy.email,
+    via: "public_token",
+    ipAddress: ipAddress ?? null,
+  });
+  return row;
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// REMINDER SCHEDULING
+// ──────────────────────────────────────────────────────────────────────
+
+export const DEFAULT_REMINDER_OFFSETS_DAYS = [3, 7, 14] as const;
+
+export async function scheduleDefaultReminders(
+  tenantId: string,
+  waiverId: string,
+  baseTime: Date = new Date(),
+  channel: "email" | "sms" | "teams" = "email",
+): Promise<LienWaiverReminder[]> {
+  const created: LienWaiverReminder[] = [];
+  for (let i = 0; i < DEFAULT_REMINDER_OFFSETS_DAYS.length; i++) {
+    const offset = DEFAULT_REMINDER_OFFSETS_DAYS[i];
+    const scheduledFor = new Date(baseTime.getTime() + offset * 24 * 60 * 60 * 1000);
+    const [row] = await db
+      .insert(lienWaiverReminders)
+      .values({
+        tenantId,
+        lienWaiverId: waiverId,
+        reminderNumber: i + 1,
+        scheduledFor,
+        channel,
+      })
+      .returning();
+    created.push(row);
+  }
+  await logEvent(tenantId, waiverId, "reminders_scheduled", null, null, {
+    count: created.length,
+    offsetsDays: Array.from(DEFAULT_REMINDER_OFFSETS_DAYS),
+  });
+  return created;
+}
+
+export async function listReminders(
+  tenantId: string,
+  waiverId: string,
+): Promise<LienWaiverReminder[]> {
+  return db
+    .select()
+    .from(lienWaiverReminders)
+    .where(
+      and(
+        eq(lienWaiverReminders.tenantId, tenantId),
+        eq(lienWaiverReminders.lienWaiverId, waiverId),
+      ),
+    )
+    .orderBy(asc(lienWaiverReminders.reminderNumber));
+}
+
+export async function cancelPendingReminders(
+  tenantId: string,
+  waiverId: string,
+): Promise<number> {
+  // soft-cancel by marking sentAt with a sentinel so they're skipped.
+  // Using a delete keeps the table tidy; we audit via the parent event.
+  const result = await db
+    .delete(lienWaiverReminders)
+    .where(
+      and(
+        eq(lienWaiverReminders.tenantId, tenantId),
+        eq(lienWaiverReminders.lienWaiverId, waiverId),
+        isNull(lienWaiverReminders.sentAt),
+      ),
+    )
+    .returning({ id: lienWaiverReminders.id });
+  return result.length;
+}
+
+/**
+ * Atomically claim a reminder by setting `sent_at` ONLY when it's still
+ * null. Returns true if THIS caller burned it (and therefore owns the
+ * follow-up side effects), false if another worker / overlapping tick
+ * already claimed it. This is the lock-free guard that lets multiple
+ * `processDueReminders` invocations run without double-firing.
+ */
+export async function markReminderSent(reminderId: string): Promise<boolean> {
+  const updated = await db
+    .update(lienWaiverReminders)
+    .set({ sentAt: new Date() })
+    .where(
+      and(
+        eq(lienWaiverReminders.id, reminderId),
+        isNull(lienWaiverReminders.sentAt),
+      ),
+    )
+    .returning({ id: lienWaiverReminders.id });
+  return updated.length > 0;
+}
+
+/**
+ * Find every reminder that is due (scheduled_for <= now) and not yet
+ * sent. The caller (the monitor worker) is responsible for actually
+ * "sending" — for now that means writing an event row + marking sent.
+ * Production would hand off to commsService for real email delivery.
+ */
+export async function processDueReminders(now: Date = new Date()): Promise<{
+  processed: number;
+  skipped: number;
+}> {
+  const due = await db
+    .select({
+      reminder: lienWaiverReminders,
+      waiver: lienWaivers,
+    })
+    .from(lienWaiverReminders)
+    .innerJoin(lienWaivers, eq(lienWaivers.id, lienWaiverReminders.lienWaiverId))
+    .where(
+      and(
+        isNull(lienWaiverReminders.sentAt),
+        lte(lienWaiverReminders.scheduledFor, now),
+      ),
+    )
+    .limit(100);
+
+  let processed = 0;
+  let skipped = 0;
+  for (const { reminder, waiver } of due) {
+    // Only fire reminders for waivers that are still outstanding (sent
+    // but not signed). If the waiver has progressed past 'sent', skip
+    // and burn the reminder so it doesn't re-fire forever.
+    //
+    // `markReminderSent` is an atomic conditional UPDATE — if another
+    // overlapping tick already claimed this reminder, claimed === false
+    // and we skip without emitting a duplicate event.
+    const claimed = await markReminderSent(reminder.id);
+    if (!claimed) continue;
+    if (waiver.status !== "sent") {
+      skipped++;
+      continue;
+    }
+    await logEvent(
+      reminder.tenantId,
+      waiver.id,
+      "reminder_sent",
+      null,
+      "system",
+      {
+        reminderNumber: reminder.reminderNumber,
+        channel: reminder.channel,
+        scheduledFor: reminder.scheduledFor.toISOString(),
+        signerEmail: waiver.signerEmail,
+      },
+    );
+    processed++;
+  }
+  return { processed, skipped };
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// AUTOFILL — render the seeded statutory template into filledBody
+// ──────────────────────────────────────────────────────────────────────
+
+const SERVICE_TYPE_TO_TEMPLATE_KEY: Record<WaiverType, TemplateWaiverType> = {
+  conditional_partial: "conditional_progress",
+  unconditional_partial: "unconditional_progress",
+  conditional_final: "conditional_final",
+  unconditional_final: "unconditional_final",
+};
+
+export async function autofillWaiver(
+  tenantId: string,
+  waiverId: string,
+): Promise<{ filledBody: string; templateId: string | null; statutory: boolean }> {
+  const waiver = await getWaiver(tenantId, waiverId);
+  if (!waiver) throw new Error("waiver not found");
+  const stateCode = (waiver.state ?? "CA").toUpperCase();
+  const templateKey = SERVICE_TYPE_TO_TEMPLATE_KEY[waiver.waiverType as WaiverType];
+  const template = await findTemplate(stateCode, templateKey);
+  if (!template) {
+    throw Object.assign(
+      new Error(`no template seeded for state=${stateCode} type=${templateKey}`),
+      { statusCode: 404 },
+    );
+  }
+
+  const [vendor] = waiver.vendorId
+    ? await db
+        .select({ companyName: vendors.companyName })
+        .from(vendors)
+        .where(and(eq(vendors.tenantId, tenantId), eq(vendors.id, waiver.vendorId)))
+        .limit(1)
+    : [];
+  const [project] = await db
+    .select({ name: projects.name, projectNumber: projects.projectNumber })
+    .from(projects)
+    .where(and(eq(projects.tenantId, tenantId), eq(projects.id, waiver.projectId)))
+    .limit(1);
+
+  const exceptionsText =
+    Array.isArray(waiver.exceptionsJson) && waiver.exceptionsJson.length > 0
+      ? (waiver.exceptionsJson as WaiverException[])
+          .map((e) => `${e.description} ($${Number(e.amount).toFixed(2)})`)
+          .join("; ")
+      : "None";
+
+  const filledBody = fillTemplate(template.templateBody, {
+    claimantName: waiver.claimantName ?? vendor?.companyName ?? "",
+    claimantAddress: waiver.claimantAddress ?? "",
+    vendorName: waiver.vendorName ?? vendor?.companyName ?? "",
+    ownerName: waiver.ownerName ?? "",
+    projectDescription: waiver.projectDescription ?? project?.name ?? "",
+    propertyDescription: waiver.propertyDescription ?? "",
+    throughDate: waiver.throughDate.toISOString().slice(0, 10),
+    amount: Number(waiver.paymentAmount).toFixed(2),
+    exceptions: exceptionsText,
+    signerTitle: waiver.signerTitle ?? "",
+    signature: waiver.signerName ?? "",
+    signedDate: waiver.signedAt
+      ? waiver.signedAt.toISOString().slice(0, 10)
+      : "",
+  });
+
+  await db
+    .update(lienWaivers)
+    .set({ filledBody, updatedAt: new Date() } as never)
+    .where(and(eq(lienWaivers.tenantId, tenantId), eq(lienWaivers.id, waiverId)));
+
+  await logEvent(tenantId, waiverId, "autofilled", null, "system", {
+    templateId: template.id,
+    state: stateCode,
+    waiverType: templateKey,
+  });
+
+  return { filledBody, templateId: template.id, statutory: template.statutory };
+}
+
 const TYPE_TITLES: Record<WaiverType, string> = {
   conditional_partial:
     "CONDITIONAL WAIVER AND RELEASE ON PROGRESS PAYMENT",
@@ -414,12 +787,12 @@ export async function generateDocumentText(
   const [vendor] = await db
     .select({ companyName: vendors.companyName, contactName: vendors.contactName })
     .from(vendors)
-    .where(eq(vendors.id, waiver.vendorId))
+    .where(and(eq(vendors.tenantId, tenantId), eq(vendors.id, waiver.vendorId)))
     .limit(1);
   const [project] = await db
     .select({ name: projects.name, projectNumber: projects.projectNumber })
     .from(projects)
-    .where(eq(projects.id, waiver.projectId))
+    .where(and(eq(projects.tenantId, tenantId), eq(projects.id, waiver.projectId)))
     .limit(1);
 
   const conditional =
