@@ -273,11 +273,41 @@ const JOB_HANDLERS: Record<string, JobHandler> = {
   //      send (Phase 1: still human-gated — no auto-send).
   coi_expiry_monitor: async (payload) => {
     const tenantId = payload.tenantId as string;
-    const { getExpiringCOIs } = await import("../services/coi.service");
+    const { getExpiringCOIs, markExpired } = await import("../services/coi.service");
     const { db: workerDb } = await import("../db");
-    const { notifications, vendors, approvalRequests } = await import("@shared/schema");
-    const { and: andOp, eq: eqOp, gte: gteOp } = await import("drizzle-orm");
+    const { notifications, vendors, approvalRequests, agentActivities, coiCertificates } =
+      await import("@shared/schema");
+    const { and: andOp, eq: eqOp, gte: gteOp, lt: ltOp } = await import("drizzle-orm");
 
+    // Day window used for idempotency + the markExpired sweep cutoff.
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+
+    // ── markExpired sweep ─────────────────────────────────────────
+    // Any active COI whose expiry_date is already in the past gets
+    // flipped to status='expired' so subsequent listings/rollups
+    // reflect reality. This runs BEFORE the alert pass so we don't
+    // also send a "0 days left" alert on a row we just expired.
+    const pastDue = await workerDb
+      .select({ id: coiCertificates.id, vendorId: coiCertificates.vendorId })
+      .from(coiCertificates)
+      .where(andOp(
+        eqOp(coiCertificates.tenantId, tenantId),
+        eqOp(coiCertificates.status, "active"),
+        ltOp(coiCertificates.expiryDate, startOfToday),
+      ));
+    let expiredCount = 0;
+    for (const row of pastDue) {
+      const updated = await markExpired(tenantId, row.id);
+      if (updated) expiredCount++;
+    }
+    if (expiredCount > 0) {
+      console.log(
+        `[CoiMonitor] Marked ${expiredCount} past-due COIs as expired for tenant ${tenantId}`,
+      );
+    }
+
+    // ── Threshold-alert pass ──────────────────────────────────────
     const cois = await getExpiringCOIs(tenantId, 30);
     if (cois.length === 0) {
       console.log(`[CoiMonitor] No COIs expiring within 30 days for tenant ${tenantId}`);
@@ -297,6 +327,26 @@ const JOB_HANDLERS: Record<string, JobHandler> = {
       );
       if (!ALERT_THRESHOLDS.has(daysUntilExpiry)) continue;
 
+      // Idempotency (per spec): check agent_activities for a prior
+      // fire of monitor_id='coi-expiry' on this COI today. One log
+      // row covers BOTH the notification and the 14-day draft so the
+      // entire iteration is short-circuited if we've already run
+      // today. Marker lives in inputJson.monitor_id so we can grep
+      // historical activity without schema changes.
+      const priorFire = await workerDb
+        .select({ id: agentActivities.id })
+        .from(agentActivities)
+        .where(andOp(
+          eqOp(agentActivities.tenantId, tenantId),
+          eqOp(agentActivities.agentName, "herbie"),
+          eqOp(agentActivities.actionType, "monitor"),
+          eqOp(agentActivities.entityType, "coi_certificate"),
+          eqOp(agentActivities.entityId, coi.id),
+          gteOp(agentActivities.createdAt, startOfToday),
+        ))
+        .limit(1);
+      if (priorFire.length > 0) continue;
+
       // Resolve vendor display name + email (best-effort, tenant-scoped
       // to prevent cross-tenant lookup if vendorId ever collides).
       let vendorName = "Vendor";
@@ -312,23 +362,6 @@ const JOB_HANDLERS: Record<string, JobHandler> = {
           vendorEmail = v.email ?? vendorEmail;
         }
       }
-
-      // Same-day idempotency: don't fire a duplicate notification if
-      // we've already alerted on this COI today.
-      const startOfToday = new Date();
-      startOfToday.setHours(0, 0, 0, 0);
-      const existingToday = await workerDb
-        .select({ id: notifications.id })
-        .from(notifications)
-        .where(andOp(
-          eqOp(notifications.tenantId, tenantId),
-          eqOp(notifications.type, "coi_expiry_alert"),
-          eqOp(notifications.entityId, coi.id),
-          gteOp(notifications.createdAt, startOfToday),
-        ))
-        .limit(1);
-
-      if (existingToday.length > 0) continue;
 
       const message = `${vendorName} COI expires in ${daysUntilExpiry} ${daysUntilExpiry === 1 ? "day" : "days"}`;
       const priority = daysUntilExpiry <= 1 ? "urgent" : daysUntilExpiry <= 7 ? "high" : "normal";
@@ -348,23 +381,9 @@ const JOB_HANDLERS: Record<string, JobHandler> = {
       notificationsCreated++;
 
       // 14-day threshold: also draft a renewal email for the PM to send.
-      // Idempotency: don't queue a second draft if one already exists
-      // today for this same COI (prevents duplicate drafts in the
-      // approvals queue when the worker is re-run intra-day).
+      // Iteration-level agent_activities guard above already prevents
+      // intra-day duplicates, so no separate draft check is needed.
       if (daysUntilExpiry === 14) {
-        const existingDraft = await workerDb
-          .select({ id: approvalRequests.id })
-          .from(approvalRequests)
-          .where(andOp(
-            eqOp(approvalRequests.tenantId, tenantId),
-            eqOp(approvalRequests.actionType, "draft_external_message"),
-            eqOp(approvalRequests.entityType, "coi_certificate"),
-            eqOp(approvalRequests.entityId, coi.id),
-            gteOp(approvalRequests.createdAt, startOfToday),
-          ))
-          .limit(1);
-        if (existingDraft.length > 0) continue;
-
         const expiryHuman = new Date(coi.expiryDate).toLocaleDateString("en-US", {
           month: "long",
           day: "numeric",
@@ -405,10 +424,33 @@ const JOB_HANDLERS: Record<string, JobHandler> = {
         });
         approvalDraftsCreated++;
       }
+
+      // Mark this (coi, day) window as fired so the next intra-day
+      // worker pass short-circuits at the priorFire check above. The
+      // monitor_id marker lives in inputJson per spec.
+      await workerDb.insert(agentActivities).values({
+        tenantId,
+        agentName: "herbie",
+        actionType: "monitor",
+        entityType: "coi_certificate",
+        entityId: coi.id,
+        description: `coi-expiry monitor fired at ${daysUntilExpiry}d threshold`,
+        inputJson: {
+          monitor_id: "coi-expiry",
+          window_date: startOfToday.toISOString().slice(0, 10),
+          days_until_expiry: daysUntilExpiry,
+        },
+        outputJson: {
+          notification: true,
+          draft: daysUntilExpiry === 14,
+          vendor_name: vendorName,
+        },
+        status: "success",
+      });
     }
 
     console.log(
-      `[CoiMonitor] tenant=${tenantId} scanned=${cois.length} notifications=${notificationsCreated} drafts=${approvalDraftsCreated}`,
+      `[CoiMonitor] tenant=${tenantId} expired=${expiredCount} scanned=${cois.length} notifications=${notificationsCreated} drafts=${approvalDraftsCreated}`,
     );
   },
 
