@@ -1736,6 +1736,29 @@ export default function DesignSystems() {
                       </tr>
                     )}
                   </tbody>
+                  {sortedTakeoffs.length > 0 && (
+                    <tfoot className="bg-muted/50 border-t font-medium">
+                      <tr className="sticky bottom-0">
+                        <td colSpan={6} className="p-3 text-sm" data-testid="text-takeoff-footer-count">
+                          {sortedTakeoffs.length} {sortedTakeoffs.length === 1 ? "item" : "items"}
+                          {takeoffFilter !== "all" && <span className="text-muted-foreground font-normal"> · filtered</span>}
+                        </td>
+                        <td className="p-3 text-right text-sm" data-testid="text-takeoff-footer-total">
+                          Total:&nbsp;
+                          {(() => {
+                            const total = sortedTakeoffs.reduce((sum, item) => {
+                              const ext = item.extendedCost != null && item.extendedCost !== ""
+                                ? parseFloat(item.extendedCost)
+                                : (parseFloat(item.quantity || "0") * parseFloat(item.unitCost || "0"));
+                              return sum + (isFinite(ext) ? ext : 0);
+                            }, 0);
+                            return `$${total.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+                          })()}
+                        </td>
+                        <td colSpan={2} className="p-3" />
+                      </tr>
+                    </tfoot>
+                  )}
                 </table>
               </div>
             </CardContent>
