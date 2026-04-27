@@ -18384,6 +18384,93 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
     }
   });
 
+  // Takeoff: bulk-import from one or more blueprints.
+  // Body: { blueprintIds: string[], projectId?: string }
+  // For each blueprint, pulls its measured takeoff_items, maps each item's
+  // free-text `category` to a takeoff_categories row by case-insensitive name,
+  // and inserts into takeoff_quantities. Items with no matching category are
+  // reported as "skipped" so the client can surface what didn't come over.
+  app.post("/api/takeoffs/import-from-blueprints", async (req: Request, res: Response) => {
+    try {
+      const bodySchema = z.object({
+        blueprintIds: z.array(z.string().min(1)).min(1, "At least one blueprint is required"),
+        projectId: z.string().optional(),
+      });
+      const parsed = bodySchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Invalid request body", details: parsed.error.flatten() });
+      }
+      const { blueprintIds, projectId } = parsed.data;
+
+      // Pull category list once and key by lowercased name for case-insensitive match.
+      const cats = await db.select().from(takeoffCategories)
+        .where(eq(takeoffCategories.tenantId, DEFAULT_TENANT_ID));
+      const catByName = new Map(cats.map(c => [c.name.toLowerCase(), c]));
+
+      type PerBp = { blueprintId: string; blueprintTitle: string; created: number; skipped: string[]; failed: Array<{ name: string; error: string }> };
+      const perBlueprint: PerBp[] = [];
+      let totalCreated = 0;
+      const totalSkipped: string[] = [];
+      const totalFailed: Array<{ name: string; error: string }> = [];
+
+      for (const bpId of blueprintIds) {
+        const bp = await storage.getBlueprint(bpId);
+        // Tenant boundary: refuse to import items from a blueprint that
+        // doesn't belong to the caller's tenant. Treated identically to
+        // "not found" so we never leak blueprint existence across tenants.
+        if (!bp || bp.tenantId !== DEFAULT_TENANT_ID) {
+          perBlueprint.push({ blueprintId: bpId, blueprintTitle: "(missing)", created: 0, skipped: [], failed: [{ name: "(blueprint)", error: "Blueprint not found" }] });
+          totalFailed.push({ name: bpId, error: "Blueprint not found" });
+          continue;
+        }
+        const items = await storage.getTakeoffItems(bpId);
+        const entry: PerBp = { blueprintId: bpId, blueprintTitle: bp.title, created: 0, skipped: [], failed: [] };
+
+        for (const it of items) {
+          const cat = catByName.get((it.category || "").toLowerCase());
+          if (!cat) {
+            entry.skipped.push(`${it.name} (category: ${it.category})`);
+            totalSkipped.push(`${it.name} (category: ${it.category})`);
+            continue;
+          }
+          try {
+            const qty = String(it.quantity ?? "0");
+            const uc = String(it.unitCost ?? "0");
+            const ext = computeExtendedCost(qty, uc);
+            await db.insert(takeoffQuantities).values({
+              tenantId: DEFAULT_TENANT_ID,
+              projectId: projectId || it.bidProjectId || null,
+              categoryId: cat.id,
+              room: `${bp.title} — ${it.name}`,
+              quantity: qty,
+              unit: it.unit || "EA",
+              unitCost: uc,
+              extendedCost: ext,
+              notes: it.notes || null,
+            } as any);
+            entry.created += 1;
+            totalCreated += 1;
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            entry.failed.push({ name: it.name, error: msg });
+            totalFailed.push({ name: it.name, error: msg });
+          }
+        }
+        perBlueprint.push(entry);
+      }
+
+      res.json({
+        created: totalCreated,
+        skipped: totalSkipped,
+        failed: totalFailed,
+        perBlueprint,
+      });
+    } catch (error) {
+      console.error("Error importing takeoffs from blueprints:", error);
+      res.status(500).json({ error: "Failed to import takeoffs from blueprints" });
+    }
+  });
+
   // Takeoff PDF Export
   // GET /api/takeoffs/export/pdf[?projectId=...] — streams a Black Hawk-branded
   // PDF report with header, summary-by-category, and full line-item table.
