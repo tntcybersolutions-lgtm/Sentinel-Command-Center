@@ -10,6 +10,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogClose } from "@/components/ui/dialog";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Progress } from "@/components/ui/progress";
 import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -52,6 +53,7 @@ import {
   Package,
   Wand2,
   Bot,
+  Trash2,
 } from "lucide-react";
 
 const DISCIPLINES = [
@@ -205,6 +207,7 @@ export default function DesignSystems() {
   const [isEditSystemOpen, setIsEditSystemOpen] = useState(false);
   const [isViewSheetOpen, setIsViewSheetOpen] = useState(false);
   const [editingTakeoff, setEditingTakeoff] = useState<TakeoffQuantity | null>(null);
+  const [deletingTakeoff, setDeletingTakeoff] = useState<TakeoffQuantity | null>(null);
   const [editingSystem, setEditingSystem] = useState<BuildingSystem | null>(null);
   const [viewingSheet, setViewingSheet] = useState<DrawingSheet | null>(null);
   const [selectedSystemId, setSelectedSystemId] = useState<string | null>(null);
@@ -1415,6 +1418,35 @@ export default function DesignSystems() {
                   </form>
                 </DialogContent>
               </Dialog>
+              <AlertDialog open={!!deletingTakeoff} onOpenChange={(open) => { if (!open) setDeletingTakeoff(null); }}>
+                <AlertDialogContent data-testid="dialog-confirm-delete-takeoff">
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Delete this takeoff item?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      {(() => {
+                        const cat = deletingTakeoff ? takeoffCategories.find(c => c.id === deletingTakeoff.categoryId) : null;
+                        const label = deletingTakeoff?.room?.trim() || cat?.name || "this item";
+                        return `"${label}" will be permanently removed from the takeoff. This action cannot be undone.`;
+                      })()}
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel data-testid="button-cancel-delete-takeoff">Cancel</AlertDialogCancel>
+                    <AlertDialogAction
+                      onClick={() => {
+                        if (deletingTakeoff) {
+                          deleteTakeoffMutation.mutate(deletingTakeoff.id);
+                          setDeletingTakeoff(null);
+                        }
+                      }}
+                      className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                      data-testid="button-confirm-delete-takeoff"
+                    >
+                      Delete
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
               <Dialog open={isEditTakeoffOpen} onOpenChange={(open) => { setIsEditTakeoffOpen(open); if (!open) setEditingTakeoff(null); }}>
                 <DialogContent>
                   <DialogHeader>
@@ -1596,9 +1628,21 @@ export default function DesignSystems() {
                             </div>
                           </td>
                           <td className="p-3 text-right">
-                            <Button size="sm" variant="ghost" onClick={() => { setEditingTakeoff(item); setIsEditTakeoffOpen(true); }} data-testid={`button-edit-takeoff-${item.id}`}>
-                              Edit
-                            </Button>
+                            <div className="flex items-center justify-end gap-1">
+                              <Button size="sm" variant="ghost" onClick={() => { setEditingTakeoff(item); setIsEditTakeoffOpen(true); }} data-testid={`button-edit-takeoff-${item.id}`}>
+                                Edit
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                className="text-destructive hover:text-destructive"
+                                onClick={() => setDeletingTakeoff(item)}
+                                data-testid={`button-delete-takeoff-row-${item.id}`}
+                                aria-label="Delete takeoff item"
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </div>
                           </td>
                         </tr>
                       );
