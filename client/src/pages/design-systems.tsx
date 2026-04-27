@@ -613,25 +613,29 @@ export default function DesignSystems() {
         const s = v === null || v === undefined ? "" : String(v);
         return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
       };
-      // CSV column order locked to: Category, Trade, Item Name, Quantity,
-      // Unit, Unit Cost, Extended Cost, Notes. "Item Name" maps to the
-      // `room` field, which is what both the New Takeoff dialog and the
+      // CSV column order locked to: Item Name, Category, Trade, Quantity,
+      // Unit, Unit Cost, Extended Cost, Notes, Project. "Item Name" maps to
+      // the `room` field, which is what both the New Takeoff dialog and the
       // Import-from-Plans flow use as the human-readable line label.
-      const headers = ["Category", "Trade", "Item Name", "Quantity", "Unit", "Unit Cost", "Extended Cost", "Notes"];
+      // Project comes last so legacy importers reading the first 8 cols still work.
+      const projectById = new Map(projectsData.map(p => [p.id, p.name]));
+      const headers = ["Item Name", "Category", "Trade", "Quantity", "Unit", "Unit Cost", "Extended Cost", "Notes", "Project"];
       const rows = takeoffQuantities.map(tq => {
         const cat = takeoffCategories.find(c => c.id === tq.categoryId);
         const qty = Number(tq.quantity ?? 0);
         const unitCost = Number(tq.unitCost ?? 0);
         const extended = tq.extendedCost != null ? Number(tq.extendedCost) : qty * unitCost;
+        const projectName = tq.projectId ? (projectById.get(tq.projectId) || "") : "";
         return [
+          tq.room || "",
           cat?.name || "Unknown",
           cat?.trade || "Unknown",
-          tq.room || "",
           qty.toFixed(2),
           tq.unit,
           unitCost.toFixed(2),
           extended.toFixed(2),
           tq.notes || "",
+          projectName,
         ].map(esc).join(",");
       });
       const csv = "\ufeff" + [headers.join(","), ...rows].join("\n");

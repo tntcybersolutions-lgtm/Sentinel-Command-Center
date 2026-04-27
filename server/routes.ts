@@ -18400,15 +18400,19 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
             ? and(eq(takeoffQuantities.tenantId, DEFAULT_TENANT_ID), eq(takeoffQuantities.projectId, projectId))
             : eq(takeoffQuantities.tenantId, DEFAULT_TENANT_ID)
         );
-      const [items, categories, projectRow] = await Promise.all([
+      const [items, categories, projectRow, allProjects] = await Promise.all([
         qtyQuery.orderBy(asc(takeoffQuantities.categoryId), desc(takeoffQuantities.createdAt)),
         db.select().from(takeoffCategories).where(eq(takeoffCategories.tenantId, DEFAULT_TENANT_ID)),
         projectId
           ? db.select().from(projects).where(eq(projects.id, projectId)).limit(1).then(r => r[0])
           : Promise.resolve(undefined as any),
+        // Pull all projects so we can show per-row project names in the PDF
+        // when the export covers multiple projects (no projectId filter).
+        db.select({ id: projects.id, name: projects.name }).from(projects),
       ]);
 
       const catById = new Map(categories.map(c => [c.id, c]));
+      const projectNameById = new Map<string, string>(allProjects.map(p => [p.id, p.name]));
       const projectName = projectRow?.name || (projectId ? `Project ${projectId.slice(0, 8)}` : "All Projects");
       const generatedAt = new Date();
       const fmtDate = generatedAt.toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
@@ -18552,17 +18556,20 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
       );
 
       // ── Line Items ───────────────────────────────────────────────────────
+      // Column order matches the CSV export: Item Name, Category, Trade, Qty,
+      // Unit, Unit Cost, Extended, Notes, Project.
       drawTable(
         "Line Items",
         [
-          { label: "Category", key: "category", w: 18 },
-          { label: "Trade", key: "trade", w: 14 },
-          { label: "Item Name", key: "name", w: 28 },
-          { label: "Qty", key: "qty", w: 10, align: "right" },
-          { label: "Unit", key: "unit", w: 8 },
-          { label: "Unit Cost", key: "uc", w: 12, align: "right" },
-          { label: "Extended", key: "ext", w: 14, align: "right" },
-          { label: "Notes", key: "notes", w: 26 },
+          { label: "Item Name", key: "name", w: 24 },
+          { label: "Category", key: "category", w: 16 },
+          { label: "Trade", key: "trade", w: 12 },
+          { label: "Qty", key: "qty", w: 9, align: "right" },
+          { label: "Unit", key: "unit", w: 7 },
+          { label: "Unit Cost", key: "uc", w: 11, align: "right" },
+          { label: "Extended", key: "ext", w: 13, align: "right" },
+          { label: "Notes", key: "notes", w: 20 },
+          { label: "Project", key: "project", w: 16 },
         ],
         items.map(it => {
           const cat = it.categoryId ? catById.get(it.categoryId) : undefined;
@@ -18570,14 +18577,15 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
           const uc = Number(it.unitCost ?? 0) || 0;
           const ext = it.extendedCost != null ? Number(it.extendedCost) : qty * uc;
           return {
+            name: it.room || "—",
             category: cat?.name || "Uncategorized",
             trade: cat?.trade || "—",
-            name: it.room || "—",
             qty: fmtNum(qty),
             unit: it.unit || "",
             uc: uc ? fmtMoney(uc) : "—",
             ext: isFinite(ext) ? fmtMoney(ext) : "—",
             notes: it.notes || "",
+            project: it.projectId ? (projectNameById.get(it.projectId) || "") : "",
           };
         }),
       );
