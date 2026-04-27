@@ -7,7 +7,15 @@ import {
   FileQuestion, FileCheck, ArrowLeftRight, ClipboardList, ListChecks, Bot,
   Loader2, Play, ChevronDown, ChevronRight, AlertTriangle, Clock, CheckCircle2,
   XCircle, ArrowUp, ArrowRight, Minus, Brain, Lightbulb, GitBranch, Zap,
+  Plus, Shield, ExternalLink,
 } from "lucide-react";
+import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Button } from "@/components/ui/button";
+import { useToast } from "@/hooks/use-toast";
 
 type TabId = "rfis" | "submittals" | "change-orders" | "daily-logs" | "tasks" | "agent-reports" | "herbie-memory";
 
@@ -206,55 +214,247 @@ function CoiRollupBadge({ rollup }: { rollup?: CoiRollup }) {
   );
 }
 
-// Phase B — COI Status card. Calls GET /api/coi/expiring/365 (the broadest
-// window the endpoint allows), filters to the current project client-side
-// (the endpoint is tenant-scoped), and bins each row into Red/Yellow/Green
-// using the row.tier the server already computed:
-//   Red    = expired
-//   Yellow = expiring within 30 days (critical_1d/7d, warning_14d/30d)
-//   Green  = current (tier === "ok")
-// Whole card links to the COI Tracker filtered to this project.
-interface ExpiringCoiRow {
+// Roadmap Feature 3 — COI Status card with click-to-open slide-over.
+//
+// The card itself is a button that opens a Sheet (slide-over) showing
+// every active COI for this project pulled from
+// GET /api/projects/:projectId/coi (the spec-mandated endpoint —
+// non-expired only). The card surface still shows Red/Yellow/Green
+// counts so the PM can read severity at a glance:
+//   Red    = expired (count from rollup, even though the spec'd GET
+//            filters them out — kept for the rollup-tile contract)
+//   Yellow = expiring within 30 days
+//   Green  = current
+//
+// Inside the Sheet:
+//   - One row per COI with vendor name, policy type, carrier,
+//     expiry date, days-until-expiry, and a status/tier badge.
+//   - "Add COI" button opens a small Dialog that POSTs to
+//     /api/projects/:projectId/coi.
+//   - Footer link punts to the full /coi tracker filtered to project.
+interface ProjectCoiRow {
   id: string;
   projectId: string | null;
   vendorId: string | null;
   policyType: string;
+  carrier: string | null;
+  policyNumber: string | null;
   expiryDate: string;
+  effectiveDate: string | null;
+  status: string;
   tier: "expired" | "critical_1d" | "critical_7d" | "warning_14d" | "warning_30d" | "ok";
   severity?: string;
 }
-interface ExpiringCoiPayload {
-  windowDays: number;
-  rows: ExpiringCoiRow[];
+interface ProjectCoiPayload {
+  rows: ProjectCoiRow[];
+  rollup: {
+    total: number;
+    expired: number;
+    critical_1d: number;
+    critical_7d: number;
+    warning_14d: number;
+    warning_30d: number;
+    ok: number;
+  };
 }
-function CoiStatusCard({ projectId }: { projectId: string }) {
-  const { data, isLoading } = useQuery<ExpiringCoiPayload>({
-    queryKey: ["/api/coi/expiring", 365],
-    queryFn: () => fetch("/api/coi/expiring/365").then((r) => r.json()),
-  });
-  const rows = (data?.rows ?? []).filter((r) => r.projectId === projectId);
-  const expired = rows.filter((r) => r.tier === "expired").length;
-  const expiringSoon = rows.filter((r) =>
-    ["critical_1d", "critical_7d", "warning_14d", "warning_30d"].includes(r.tier),
-  ).length;
-  const current = rows.filter((r) => r.tier === "ok").length;
-  const total = rows.length;
+interface VendorRow {
+  id: string;
+  companyName: string;
+}
 
-  // Outer band color follows the worst bucket so the PM can read the card
-  // from across the room.
+const POLICY_TYPE_OPTIONS: { value: string; label: string }[] = [
+  { value: "gl", label: "General Liability" },
+  { value: "wc", label: "Workers Comp" },
+  { value: "auto", label: "Auto" },
+  { value: "umbrella", label: "Umbrella" },
+  { value: "professional", label: "Professional Liability" },
+  { value: "pollution", label: "Pollution" },
+  { value: "builders_risk", label: "Builder's Risk" },
+];
+const POLICY_TYPE_LABELS: Record<string, string> = Object.fromEntries(
+  POLICY_TYPE_OPTIONS.map((o) => [o.value, o.label]),
+);
+
+const TIER_BADGE: Record<string, { label: string; className: string }> = {
+  expired:      { label: "EXPIRED",  className: "text-red-300 border-red-500/40 bg-red-500/10" },
+  critical_1d:  { label: "<1 DAY",   className: "text-red-300 border-red-500/40 bg-red-500/10" },
+  critical_7d:  { label: "<7 DAYS",  className: "text-orange-300 border-orange-500/40 bg-orange-500/10" },
+  warning_14d:  { label: "<14 DAYS", className: "text-amber-300 border-amber-500/40 bg-amber-500/10" },
+  warning_30d:  { label: "<30 DAYS", className: "text-yellow-300 border-yellow-500/40 bg-yellow-500/10" },
+  ok:           { label: "CURRENT",  className: "text-emerald-300 border-emerald-500/40 bg-emerald-500/10" },
+};
+
+function daysUntil(d: string | Date | null | undefined): number | null {
+  if (!d) return null;
+  const ms = new Date(d).getTime() - Date.now();
+  return Math.ceil(ms / (1000 * 60 * 60 * 24));
+}
+
+function AddCoiDialog({
+  open,
+  onOpenChange,
+  projectId,
+  vendors,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  projectId: string;
+  vendors: VendorRow[];
+}) {
+  const { toast } = useToast();
+  const qc = useQueryClient();
+  const [policyType, setPolicyType] = useState("gl");
+  const [vendorId, setVendorId] = useState<string>("none");
+  const [carrier, setCarrier] = useState("");
+  const [policyNumber, setPolicyNumber] = useState("");
+  const [effectiveDate, setEffectiveDate] = useState("");
+  const [expiryDate, setExpiryDate] = useState("");
+
+  const createCoi = useMutation({
+    mutationFn: async () => {
+      const resp = await apiRequest("POST", `/api/projects/${projectId}/coi`, {
+        policyType,
+        vendorId: vendorId === "none" ? null : vendorId,
+        carrier: carrier || null,
+        policyNumber: policyNumber || null,
+        effectiveDate: effectiveDate || null,
+        expiryDate,
+      });
+      return resp.json();
+    },
+    onSuccess: () => {
+      toast({ title: "COI added", description: "Certificate saved to project file." });
+      qc.invalidateQueries({ queryKey: ["/api/projects", projectId, "coi"] });
+      qc.invalidateQueries({ queryKey: ["/api/coi/expiring", 365] });
+      qc.invalidateQueries({ queryKey: ["/api/projects", projectId, "cockpit"] });
+      onOpenChange(false);
+      setCarrier("");
+      setPolicyNumber("");
+      setEffectiveDate("");
+      setExpiryDate("");
+      setVendorId("none");
+      setPolicyType("gl");
+    },
+    onError: (err: any) => {
+      toast({ title: "Failed to add COI", description: err?.message ?? "Server error", variant: "destructive" });
+    },
+  });
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent data-testid="dialog-add-coi" className="bg-[#0f0f17] border-white/10 text-white">
+        <DialogHeader>
+          <DialogTitle className="font-mono text-sm">Add Certificate of Insurance</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3 py-2">
+          <div>
+            <Label htmlFor="coi-vendor" className="text-[10px] uppercase tracking-wider text-zinc-500 font-mono">Vendor</Label>
+            <Select value={vendorId} onValueChange={setVendorId}>
+              <SelectTrigger id="coi-vendor" data-testid="select-vendor" className="bg-black/40 border-white/10">
+                <SelectValue placeholder="Select vendor (optional)" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">— No vendor —</SelectItem>
+                {vendors.map((v) => (
+                  <SelectItem key={v.id} value={v.id}>{v.companyName}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            <Label htmlFor="coi-policy-type" className="text-[10px] uppercase tracking-wider text-zinc-500 font-mono">Policy Type *</Label>
+            <Select value={policyType} onValueChange={setPolicyType}>
+              <SelectTrigger id="coi-policy-type" data-testid="select-policy-type" className="bg-black/40 border-white/10">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {POLICY_TYPE_OPTIONS.map((o) => (
+                  <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Label htmlFor="coi-carrier" className="text-[10px] uppercase tracking-wider text-zinc-500 font-mono">Carrier</Label>
+              <Input id="coi-carrier" data-testid="input-carrier" value={carrier} onChange={(e) => setCarrier(e.target.value)} className="bg-black/40 border-white/10" />
+            </div>
+            <div>
+              <Label htmlFor="coi-policy-number" className="text-[10px] uppercase tracking-wider text-zinc-500 font-mono">Policy #</Label>
+              <Input id="coi-policy-number" data-testid="input-policy-number" value={policyNumber} onChange={(e) => setPolicyNumber(e.target.value)} className="bg-black/40 border-white/10" />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Label htmlFor="coi-effective" className="text-[10px] uppercase tracking-wider text-zinc-500 font-mono">Effective</Label>
+              <Input id="coi-effective" data-testid="input-effective-date" type="date" value={effectiveDate} onChange={(e) => setEffectiveDate(e.target.value)} className="bg-black/40 border-white/10" />
+            </div>
+            <div>
+              <Label htmlFor="coi-expiry" className="text-[10px] uppercase tracking-wider text-zinc-500 font-mono">Expiry *</Label>
+              <Input id="coi-expiry" data-testid="input-expiry-date" type="date" value={expiryDate} onChange={(e) => setExpiryDate(e.target.value)} className="bg-black/40 border-white/10" />
+            </div>
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="ghost" data-testid="btn-cancel-add-coi" onClick={() => onOpenChange(false)}>Cancel</Button>
+          <Button
+            data-testid="btn-submit-add-coi"
+            disabled={!expiryDate || createCoi.isPending}
+            onClick={() => createCoi.mutate()}
+          >
+            {createCoi.isPending && <Loader2 className="w-3 h-3 mr-1.5 animate-spin" />}
+            Save COI
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function CoiStatusCard({ projectId }: { projectId: string }) {
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
+
+  const { data, isLoading } = useQuery<ProjectCoiPayload>({
+    queryKey: ["/api/projects", projectId, "coi"],
+    queryFn: () => fetch(`/api/projects/${projectId}/coi`).then((r) => r.json()),
+    enabled: !!projectId,
+  });
+  const { data: vendorsData } = useQuery<VendorRow[]>({
+    queryKey: ["/api/vendors"],
+    queryFn: () => fetch("/api/vendors").then((r) => r.ok ? r.json() : []),
+  });
+  const vendors = Array.isArray(vendorsData) ? vendorsData : [];
+  const vendorById = new Map(vendors.map((v) => [v.id, v.companyName]));
+
+  const rows = data?.rows ?? [];
+  const rollup = data?.rollup ?? { total: 0, expired: 0, critical_1d: 0, critical_7d: 0, warning_14d: 0, warning_30d: 0, ok: 0 };
+  // Spec'd traffic-light rollup:
+  //   Red    = <14 days OR expired (rollup.expired is always 0 here
+  //            since GET filters them — but include defensively).
+  //   Yellow = 14-30 days (warning_14d + warning_30d).
+  //   Green  = >30 days (ok).
+  const red = rollup.expired + rollup.critical_1d + rollup.critical_7d;
+  const yellow = rollup.warning_14d + rollup.warning_30d;
+  const green = rollup.ok;
+  const total = rollup.total;
+
   const band =
-    expired > 0
+    red > 0
       ? "border-red-500/30 bg-red-500/5"
-      : expiringSoon > 0
+      : yellow > 0
         ? "border-amber-500/30 bg-amber-500/5"
         : "border-emerald-500/20 bg-emerald-500/5";
 
   return (
-    <Link
-      href={`/coi?projectId=${projectId}`}
-      data-testid="card-coi-status"
-      className={`mx-6 my-3 border ${band} px-4 py-3 flex items-center gap-4 hover:bg-white/5 transition-colors cursor-pointer`}
-    >
+    <>
+      <button
+        type="button"
+        onClick={() => setSheetOpen(true)}
+        data-testid="card-coi-status"
+        className={`mx-6 my-3 w-[calc(100%-3rem)] border ${band} px-4 py-3 flex items-center gap-4 hover:bg-white/5 transition-colors text-left`}
+      >
+        <Shield className="w-4 h-4 text-zinc-400" />
         <div className="flex flex-col">
           <span className="text-[10px] uppercase tracking-wider text-zinc-500 font-mono">
             COI Status
@@ -264,24 +464,134 @@ function CoiStatusCard({ projectId }: { projectId: string }) {
           </span>
         </div>
         <div className="flex items-center gap-4 ml-auto">
-          <div data-testid="coi-bucket-expired" className="flex items-center gap-2">
+          <div data-testid="coi-bucket-red" className="flex items-center gap-2">
             <span className="w-2.5 h-2.5 rounded-full bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.6)]" />
-            <span className="text-[10px] font-mono uppercase tracking-wider text-zinc-500">Expired</span>
-            <span className={`text-sm font-mono font-bold ${expired > 0 ? "text-red-400" : "text-zinc-600"}`}>{expired}</span>
+            <span className="text-[10px] font-mono uppercase tracking-wider text-zinc-500">Red</span>
+            <span className={`text-sm font-mono font-bold ${red > 0 ? "text-red-400" : "text-zinc-600"}`}>{red}</span>
           </div>
-          <div data-testid="coi-bucket-expiring" className="flex items-center gap-2">
+          <div data-testid="coi-bucket-yellow" className="flex items-center gap-2">
             <span className="w-2.5 h-2.5 rounded-full bg-amber-400 shadow-[0_0_6px_rgba(251,191,36,0.6)]" />
-            <span className="text-[10px] font-mono uppercase tracking-wider text-zinc-500">&lt;30d</span>
-            <span className={`text-sm font-mono font-bold ${expiringSoon > 0 ? "text-amber-400" : "text-zinc-600"}`}>{expiringSoon}</span>
+            <span className="text-[10px] font-mono uppercase tracking-wider text-zinc-500">Yellow</span>
+            <span className={`text-sm font-mono font-bold ${yellow > 0 ? "text-amber-400" : "text-zinc-600"}`}>{yellow}</span>
           </div>
-          <div data-testid="coi-bucket-current" className="flex items-center gap-2">
+          <div data-testid="coi-bucket-green" className="flex items-center gap-2">
             <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.6)]" />
-            <span className="text-[10px] font-mono uppercase tracking-wider text-zinc-500">Current</span>
-            <span className={`text-sm font-mono font-bold ${current > 0 ? "text-emerald-400" : "text-zinc-600"}`}>{current}</span>
+            <span className="text-[10px] font-mono uppercase tracking-wider text-zinc-500">Green</span>
+            <span className={`text-sm font-mono font-bold ${green > 0 ? "text-emerald-400" : "text-zinc-600"}`}>{green}</span>
           </div>
-        <ChevronRight className="w-3.5 h-3.5 text-zinc-500" />
-      </div>
-    </Link>
+          <ChevronRight className="w-3.5 h-3.5 text-zinc-500" />
+        </div>
+      </button>
+
+      <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
+        <SheetContent
+          side="right"
+          data-testid="sheet-coi-list"
+          className="bg-[#0a0a0f] border-l border-white/10 text-white sm:max-w-2xl w-full overflow-y-auto"
+        >
+          <SheetHeader>
+            <SheetTitle className="font-mono text-sm flex items-center gap-2">
+              <Shield className="w-4 h-4" /> Project COI File
+            </SheetTitle>
+            <SheetDescription className="font-mono text-[11px] text-zinc-500">
+              Active certificates for this project. Expired policies are
+              excluded — see the COI Tracker for the full archive.
+            </SheetDescription>
+          </SheetHeader>
+
+          <div className="flex items-center justify-between mt-4 mb-3">
+            <div className="flex items-center gap-3 text-[11px] font-mono text-zinc-500">
+              <span><span className="text-red-400">{red}</span> red</span>
+              <span><span className="text-amber-400">{yellow}</span> yellow</span>
+              <span><span className="text-emerald-400">{green}</span> green</span>
+            </div>
+            <Button
+              size="sm"
+              data-testid="btn-add-coi"
+              onClick={() => setAddOpen(true)}
+              className="h-8 text-xs"
+            >
+              <Plus className="w-3 h-3 mr-1" /> Add COI
+            </Button>
+          </div>
+
+          {isLoading ? (
+            <div className="py-8 flex items-center justify-center">
+              <Loader2 className="w-4 h-4 animate-spin text-zinc-500" />
+            </div>
+          ) : rows.length === 0 ? (
+            <div data-testid="empty-coi-list" className="py-12 text-center text-xs font-mono text-zinc-500">
+              No active certificates on file.
+              <div className="mt-2 text-zinc-600">Click <strong className="text-zinc-300">Add COI</strong> to upload one.</div>
+            </div>
+          ) : (
+            <div className="overflow-x-auto border border-white/5">
+              <table className="w-full text-xs" data-testid="table-project-cois">
+                <thead>
+                  <tr className="border-b border-white/10 text-left text-zinc-500 text-[10px] uppercase tracking-wider font-mono">
+                    <th className="py-2 px-3">Vendor</th>
+                    <th className="py-2 px-3">Policy</th>
+                    <th className="py-2 px-3">Carrier</th>
+                    <th className="py-2 px-3">Expiry</th>
+                    <th className="py-2 px-3">Days</th>
+                    <th className="py-2 px-3">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((r) => {
+                    const tierCfg = TIER_BADGE[r.tier] ?? TIER_BADGE.ok;
+                    const days = daysUntil(r.expiryDate);
+                    const vendorName = r.vendorId ? (vendorById.get(r.vendorId) ?? "—") : "—";
+                    return (
+                      <tr
+                        key={r.id}
+                        data-testid={`row-coi-${r.id}`}
+                        className="border-b border-white/5 hover:bg-white/[0.02] transition-colors"
+                      >
+                        <td className="py-2 px-3 text-white max-w-[160px] truncate">{vendorName}</td>
+                        <td className="py-2 px-3 font-mono text-zinc-300">
+                          {POLICY_TYPE_LABELS[r.policyType] ?? r.policyType}
+                        </td>
+                        <td className="py-2 px-3 text-zinc-400">{r.carrier ?? "—"}</td>
+                        <td className="py-2 px-3 text-zinc-400 font-mono">{formatDate(r.expiryDate)}</td>
+                        <td className="py-2 px-3 font-mono text-zinc-300">
+                          {days === null ? "—" : days < 0 ? `${Math.abs(days)}d ago` : `${days}d`}
+                        </td>
+                        <td className="py-2 px-3">
+                          <span
+                            data-testid={`badge-coi-tier-${r.id}`}
+                            className={`inline-block px-2 py-0.5 text-[10px] font-mono border ${tierCfg.className}`}
+                          >
+                            {tierCfg.label}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          <div className="mt-4 pt-3 border-t border-white/10 flex justify-end">
+            <Link
+              href={`/coi?projectId=${projectId}`}
+              data-testid="link-coi-tracker"
+              className="text-[11px] font-mono text-cyan-400 hover:text-cyan-300 inline-flex items-center gap-1"
+            >
+              Open full COI Tracker <ExternalLink className="w-3 h-3" />
+            </Link>
+          </div>
+        </SheetContent>
+      </Sheet>
+
+      <AddCoiDialog
+        open={addOpen}
+        onOpenChange={setAddOpen}
+        projectId={projectId}
+        vendors={vendors}
+      />
+    </>
   );
 }
 

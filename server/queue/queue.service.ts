@@ -25,7 +25,8 @@ export type JobType =
   | "storage_orphan_sweep"
   | "document_ingestion"
   | "document_ingestion_retry"
-  | "document_ingestion_cycle";
+  | "document_ingestion_cycle"
+  | "coi_expiry_monitor";
 
 export interface JobPayload {
   [key: string]: unknown;
