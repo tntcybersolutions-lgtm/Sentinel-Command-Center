@@ -1555,6 +1555,7 @@ export default function DesignSystems() {
                       <th className="text-left p-3 font-medium">Unit</th>
                       <th className="text-right p-3 font-medium">Unit Cost</th>
                       <th className="text-right p-3 font-medium">Extended</th>
+                      <th className="text-left p-3 font-medium">Notes</th>
                       <th className="text-right p-3 font-medium">Actions</th>
                     </tr>
                   </thead>
@@ -1589,6 +1590,11 @@ export default function DesignSystems() {
                                 : "—";
                             })()}
                           </td>
+                          <td className="p-3 max-w-xs">
+                            <div className="truncate text-sm text-muted-foreground" title={item.notes || ""} data-testid={`text-takeoff-notes-${item.id}`}>
+                              {item.notes || <span className="text-muted-foreground/60">—</span>}
+                            </div>
+                          </td>
                           <td className="p-3 text-right">
                             <Button size="sm" variant="ghost" onClick={() => { setEditingTakeoff(item); setIsEditTakeoffOpen(true); }} data-testid={`button-edit-takeoff-${item.id}`}>
                               Edit
@@ -1598,7 +1604,7 @@ export default function DesignSystems() {
                       );
                     }) : (
                       <tr className="border-t">
-                        <td colSpan={8} className="p-6 text-center text-muted-foreground">
+                        <td colSpan={9} className="p-6 text-center text-muted-foreground">
                           No takeoff items yet. Click "New Takeoff Item" to add quantities.
                         </td>
                       </tr>
