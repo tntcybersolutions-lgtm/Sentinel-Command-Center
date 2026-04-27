@@ -762,6 +762,14 @@ export default function DesignSystems() {
     });
   })();
 
+  // Most-recent modification timestamp across all loaded takeoff items.
+  // Uses updatedAt when present, falling back to createdAt. Returns 0 when
+  // no items exist or no parseable timestamps are found.
+  const lastTakeoffUpdate = takeoffQuantities.reduce<number>((max, item) => {
+    const ts = Date.parse(item.updatedAt || item.createdAt || "");
+    return isFinite(ts) && ts > max ? ts : max;
+  }, 0);
+
   const takeoffSummary = takeoffCategories.map(cat => {
     const items = takeoffQuantities.filter(t => t.categoryId === cat.id);
     const totalQty = items.reduce((sum, i) => sum + parseFloat(i.quantity || "0"), 0);
@@ -1324,8 +1332,15 @@ export default function DesignSystems() {
         </TabsContent>
 
         <TabsContent value="takeoff" className="space-y-6">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
+          {/* Last-modified hint just under the page subtitle, scoped to takeoff data. */}
+          <div className="text-xs text-muted-foreground -mt-2" data-testid="text-takeoff-last-updated">
+            {lastTakeoffUpdate > 0
+              ? `Last updated ${new Date(lastTakeoffUpdate).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}`
+              : "Last updated: never — no takeoff items yet"}
+          </div>
+          {/* Responsive toolbar: actions on the left, search/filter/export on the right. */}
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex flex-wrap items-center gap-2">
               <Dialog open={isNewTakeoffOpen} onOpenChange={(open) => {
                 setIsNewTakeoffOpen(open);
                 if (!open) { setNewTakeoffForm(emptyNewTakeoff); setNewTakeoffErrors({}); }
@@ -1755,7 +1770,29 @@ export default function DesignSystems() {
                 </DialogContent>
               </Dialog>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="relative flex-1 min-w-[200px] lg:flex-none lg:w-72">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Input
+                  type="text"
+                  placeholder="Search by item name, category, or trade..."
+                  className="pl-9 pr-9"
+                  value={takeoffSearch}
+                  onChange={(e) => setTakeoffSearch(e.target.value)}
+                  data-testid="input-takeoff-search"
+                />
+                {takeoffSearch && (
+                  <button
+                    type="button"
+                    onClick={() => setTakeoffSearch("")}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground rounded-md p-1 hover-elevate active-elevate-2"
+                    aria-label="Clear search"
+                    data-testid="button-clear-takeoff-search"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                )}
+              </div>
               <Select value={takeoffFilter} onValueChange={setTakeoffFilter}>
                 <SelectTrigger className="w-40" data-testid="select-takeoff-filter">
                   <SelectValue placeholder="Filter by..." />
@@ -1788,29 +1825,6 @@ export default function DesignSystems() {
                 Export PDF
               </Button>
             </div>
-          </div>
-
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-            <Input
-              type="text"
-              placeholder="Search by item name, category, or trade..."
-              className="pl-9 pr-9"
-              value={takeoffSearch}
-              onChange={(e) => setTakeoffSearch(e.target.value)}
-              data-testid="input-takeoff-search"
-            />
-            {takeoffSearch && (
-              <button
-                type="button"
-                onClick={() => setTakeoffSearch("")}
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground rounded-md p-1 hover-elevate active-elevate-2"
-                aria-label="Clear search"
-                data-testid="button-clear-takeoff-search"
-              >
-                <X className="h-3.5 w-3.5" />
-              </button>
-            )}
           </div>
 
           <div className="grid grid-cols-5 gap-4">
