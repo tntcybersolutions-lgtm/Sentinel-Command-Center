@@ -365,25 +365,12 @@ const JOB_HANDLERS: Record<string, JobHandler> = {
 
       const message = `${vendorName} COI expires in ${daysUntilExpiry} ${daysUntilExpiry === 1 ? "day" : "days"}`;
       const priority = daysUntilExpiry <= 1 ? "urgent" : daysUntilExpiry <= 7 ? "high" : "normal";
+      const draftEnabled = daysUntilExpiry === 14;
 
-      await workerDb.insert(notifications).values({
-        tenantId,
-        userId: null,
-        type: "coi_expiry_alert",
-        title: `COI expiring in ${daysUntilExpiry} ${daysUntilExpiry === 1 ? "day" : "days"}`,
-        message,
-        entityType: "coi_certificate",
-        entityId: coi.id,
-        priority,
-        read: false,
-        actionUrl: coi.projectId ? `/projects/${coi.projectId}/cockpit` : `/coi`,
-      });
-      notificationsCreated++;
-
-      // 14-day threshold: also draft a renewal email for the PM to send.
-      // Iteration-level agent_activities guard above already prevents
-      // intra-day duplicates, so no separate draft check is needed.
-      if (daysUntilExpiry === 14) {
+      // Build the 14-day renewal draft payload up-front so the
+      // transaction body stays linear.
+      let approvalValues: typeof approvalRequests.$inferInsert | null = null;
+      if (draftEnabled) {
         const expiryHuman = new Date(coi.expiryDate).toLocaleDateString("en-US", {
           month: "long",
           day: "numeric",
@@ -399,7 +386,7 @@ const JOB_HANDLERS: Record<string, JobHandler> = {
           `Reply to this email or upload directly to our vendor portal.\n\n` +
           `Thanks,\nBlackHawk PM`;
 
-        await workerDb.insert(approvalRequests).values({
+        approvalValues = {
           tenantId,
           entityType: "coi_certificate",
           entityId: coi.id,
@@ -421,32 +408,66 @@ const JOB_HANDLERS: Record<string, JobHandler> = {
             triggeredBy: "coi_expiry_monitor",
             daysUntilExpiry,
           },
-        });
-        approvalDraftsCreated++;
+        };
       }
 
-      // Mark this (coi, day) window as fired so the next intra-day
-      // worker pass short-circuits at the priorFire check above. The
-      // monitor_id marker lives in inputJson per spec.
-      await workerDb.insert(agentActivities).values({
-        tenantId,
-        agentName: "herbie",
-        actionType: "monitor",
-        entityType: "coi_certificate",
-        entityId: coi.id,
-        description: `coi-expiry monitor fired at ${daysUntilExpiry}d threshold`,
-        inputJson: {
-          monitor_id: "coi-expiry",
-          window_date: startOfToday.toISOString().slice(0, 10),
-          days_until_expiry: daysUntilExpiry,
-        },
-        outputJson: {
-          notification: true,
-          draft: daysUntilExpiry === 14,
-          vendor_name: vendorName,
-        },
-        status: "success",
-      });
+      // Atomic per-COI commit: notification + (optional) approval +
+      // ledger row all succeed or all roll back. If the worker is
+      // retried mid-iteration, the priorFire check above will only
+      // short-circuit once a complete iteration has been persisted —
+      // partial writes can no longer create orphan notifications.
+      try {
+        await workerDb.transaction(async (tx) => {
+          await tx.insert(notifications).values({
+            tenantId,
+            userId: null,
+            type: "coi_expiry_alert",
+            title: `COI expiring in ${daysUntilExpiry} ${daysUntilExpiry === 1 ? "day" : "days"}`,
+            message,
+            entityType: "coi_certificate",
+            entityId: coi.id,
+            priority,
+            read: false,
+            actionUrl: coi.projectId ? `/projects/${coi.projectId}/cockpit` : `/coi`,
+          });
+
+          if (approvalValues) {
+            await tx.insert(approvalRequests).values(approvalValues);
+          }
+
+          // Mark this (coi, day) window as fired so the next intra-day
+          // worker pass short-circuits at the priorFire check above.
+          // The monitor_id marker lives in inputJson per spec.
+          await tx.insert(agentActivities).values({
+            tenantId,
+            agentName: "herbie",
+            actionType: "monitor",
+            entityType: "coi_certificate",
+            entityId: coi.id,
+            description: `coi-expiry monitor fired at ${daysUntilExpiry}d threshold`,
+            inputJson: {
+              monitor_id: "coi-expiry",
+              window_date: startOfToday.toISOString().slice(0, 10),
+              days_until_expiry: daysUntilExpiry,
+            },
+            outputJson: {
+              notification: true,
+              draft: draftEnabled,
+              vendor_name: vendorName,
+            },
+            status: "success",
+          });
+        });
+        notificationsCreated++;
+        if (draftEnabled) approvalDraftsCreated++;
+      } catch (txErr) {
+        console.error(
+          `[CoiMonitor] tenant=${tenantId} coi=${coi.id} transaction failed; will retry next run:`,
+          txErr instanceof Error ? txErr.message : txErr,
+        );
+        // Don't rethrow — keep iterating other COIs. The job-queue
+        // retry semantics + tomorrow's run will pick this one up.
+      }
     }
 
     console.log(
