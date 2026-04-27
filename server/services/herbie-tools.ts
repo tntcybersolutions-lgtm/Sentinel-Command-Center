@@ -14,6 +14,7 @@
 // feature ticket that should land them.
 
 import { recordFact, recordDecision } from "./herbie-facts.service";
+import { writeFact, writeDecision } from "./herbie-memory.service";
 import { draftRfi } from "./rfi-draft.service";
 import { draftSubmittal } from "./submittal-draft.service";
 import { db } from "../db";
@@ -297,33 +298,41 @@ export async function executeHerbieTool(
       case "record_fact":
         return {
           success: true,
-          data: await recordFact({
-            tenantId: ctx.tenantId,
-            projectId: call.args.projectId ?? ctx.projectId ?? null,
-            subjectType: call.args.subjectType,
-            subjectId: call.args.subjectId ?? null,
-            predicate: call.args.predicate,
-            object: call.args.object ?? null,
-            objectJson: call.args.objectJson ?? null,
-            sourceType: call.args.sourceType,
-            sourceId: call.args.sourceId ?? null,
-            confidence: Number(call.args.confidence),
-            extractedAt: call.args.extractedAt ? new Date(call.args.extractedAt) : undefined,
-          }),
+          data: await writeFact(
+            {
+              tenantId: ctx.tenantId,
+              projectId: call.args.projectId ?? ctx.projectId ?? null,
+            },
+            {
+              subjectType: call.args.subjectType,
+              subjectId: call.args.subjectId ?? null,
+              predicate: call.args.predicate,
+              object: call.args.object ?? null,
+              objectJson: call.args.objectJson ?? null,
+              sourceType: call.args.sourceType,
+              sourceId: call.args.sourceId ?? null,
+              confidence: Number(call.args.confidence),
+              extractedAt: call.args.extractedAt ? new Date(call.args.extractedAt) : undefined,
+            },
+          ),
         };
       case "record_decision":
         return {
           success: true,
-          data: await recordDecision({
-            tenantId: ctx.tenantId,
-            projectId: call.args.projectId ?? ctx.projectId ?? null,
-            summary: call.args.summary,
-            rationale: call.args.rationale ?? null,
-            decidedBy: call.args.decidedBy,
-            relatedEntityType: call.args.relatedEntityType ?? null,
-            relatedEntityId: call.args.relatedEntityId ?? null,
-            metadataJson: call.args.metadataJson ?? null,
-          }),
+          data: await writeDecision(
+            {
+              tenantId: ctx.tenantId,
+              projectId: call.args.projectId ?? ctx.projectId ?? null,
+            },
+            {
+              summary: call.args.summary,
+              rationale: call.args.rationale ?? null,
+              decidedBy: call.args.decidedBy,
+              relatedEntityType: call.args.relatedEntityType ?? null,
+              relatedEntityId: call.args.relatedEntityId ?? null,
+              metadataJson: call.args.metadataJson ?? null,
+            },
+          ),
         };
       case "create_rfi":
         return {
