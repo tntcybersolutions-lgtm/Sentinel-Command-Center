@@ -24123,6 +24123,71 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
   registerSimpleProjectModuleRoutes(projectDailyLogs, "daily-logs");
   registerSimpleProjectModuleRoutes(projectTimesheets, "timesheets");
 
+  // ── COI Tracker: Project-scoped routes (Roadmap Feature 3) ─────
+  // These are aliases over server/services/coi.service.ts. The /api/coi/*
+  // surface in routes/coi.routes.ts handles tenant-wide and vendor-scoped
+  // queries; these routes give the project workspace a clean
+  // /api/projects/:projectId/coi shape.
+  app.get("/api/projects/:projectId/coi", async (req: Request, res: Response) => {
+    try {
+      const projectId = p(req.params.projectId);
+      const { listForProject, partitionByTier, expiryTier, tierSeverity } =
+        await import("./services/coi.service");
+      const rows = await listForProject(DEFAULT_TENANT_ID, projectId);
+      const rollup = partitionByTier(rows);
+      res.json({
+        rows: rows.map((r) => {
+          const tier = expiryTier(r);
+          return { ...r, tier, severity: tierSeverity(tier) };
+        }),
+        rollup: {
+          total: rows.length,
+          expired: rollup.expired.length,
+          critical_1d: rollup.critical_1d.length,
+          critical_7d: rollup.critical_7d.length,
+          warning_14d: rollup.warning_14d.length,
+          warning_30d: rollup.warning_30d.length,
+          ok: rollup.ok.length,
+        },
+      });
+    } catch (error: any) {
+      console.error("GET /api/projects/:projectId/coi error:", error);
+      res.status(500).json({ error: error?.message ?? "Failed to list project COIs" });
+    }
+  });
+
+  app.post("/api/projects/:projectId/coi", async (req: Request, res: Response) => {
+    try {
+      const projectId = p(req.params.projectId);
+      const { upsertCoi } = await import("./services/coi.service");
+      const body = req.body ?? {};
+      if (!body.policyType || typeof body.policyType !== "string") {
+        return res.status(400).json({ error: "policyType required" });
+      }
+      if (!body.expiryDate) {
+        return res.status(400).json({ error: "expiryDate required" });
+      }
+      const row = await upsertCoi({
+        tenantId: DEFAULT_TENANT_ID,
+        projectId,
+        vendorId: body.vendorId ?? null,
+        policyType: body.policyType,
+        carrier: body.carrier ?? null,
+        policyNumber: body.policyNumber ?? null,
+        limitsJson: body.limitsJson ?? null,
+        effectiveDate: body.effectiveDate ? new Date(body.effectiveDate) : null,
+        expiryDate: new Date(body.expiryDate),
+        documentId: body.documentId ?? null,
+        status: body.status ?? "active",
+        notes: body.notes ?? null,
+      } as any);
+      res.status(201).json(row);
+    } catch (error: any) {
+      console.error("POST /api/projects/:projectId/coi error:", error);
+      res.status(500).json({ error: error?.message ?? "Failed to create COI" });
+    }
+  });
+
   // ── Documents Center: Folders ──────────────────────────────────
   app.get("/api/projects/:projectId/doc-folders", async (req: Request, res: Response) => {
     try {
