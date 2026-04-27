@@ -18384,6 +18384,216 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
     }
   });
 
+  // Takeoff PDF Export
+  // GET /api/takeoffs/export/pdf[?projectId=...] — streams a Black Hawk-branded
+  // PDF report with header, summary-by-category, and full line-item table.
+  app.get("/api/takeoffs/export/pdf", async (req: Request, res: Response) => {
+    try {
+      const PDFDocument = (await import("pdfkit")).default;
+      const projectId = typeof req.query.projectId === "string" ? req.query.projectId : undefined;
+
+      // Pull data: takeoff items (optionally filtered by project), categories,
+      // and the project name for the header.
+      let qtyQuery = db.select().from(takeoffQuantities)
+        .where(
+          projectId
+            ? and(eq(takeoffQuantities.tenantId, DEFAULT_TENANT_ID), eq(takeoffQuantities.projectId, projectId))
+            : eq(takeoffQuantities.tenantId, DEFAULT_TENANT_ID)
+        );
+      const [items, categories, projectRow] = await Promise.all([
+        qtyQuery.orderBy(asc(takeoffQuantities.categoryId), desc(takeoffQuantities.createdAt)),
+        db.select().from(takeoffCategories).where(eq(takeoffCategories.tenantId, DEFAULT_TENANT_ID)),
+        projectId
+          ? db.select().from(projects).where(eq(projects.id, projectId)).limit(1).then(r => r[0])
+          : Promise.resolve(undefined as any),
+      ]);
+
+      const catById = new Map(categories.map(c => [c.id, c]));
+      const projectName = projectRow?.name || (projectId ? `Project ${projectId.slice(0, 8)}` : "All Projects");
+      const generatedAt = new Date();
+      const fmtDate = generatedAt.toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
+      const fmtMoney = (n: number) => `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+      const fmtNum = (n: number) => n.toLocaleString(undefined, { maximumFractionDigits: 2 });
+
+      // Build per-category aggregates for the summary table.
+      type Agg = { name: string; trade: string; itemCount: number; totalQty: number; unit: string; totalCost: number };
+      const aggByCat = new Map<string, Agg>();
+      let grandQty = 0;
+      let grandCost = 0;
+      for (const it of items) {
+        const cat = it.categoryId ? catById.get(it.categoryId) : undefined;
+        const key = it.categoryId || "__uncat__";
+        const qty = Number(it.quantity ?? 0) || 0;
+        const ext = it.extendedCost != null ? Number(it.extendedCost) : qty * (Number(it.unitCost ?? 0) || 0);
+        const agg = aggByCat.get(key) ?? { name: cat?.name || "Uncategorized", trade: cat?.trade || "—", itemCount: 0, totalQty: 0, unit: it.unit || "", totalCost: 0 };
+        agg.itemCount += 1;
+        agg.totalQty += qty;
+        agg.totalCost += isFinite(ext) ? ext : 0;
+        aggByCat.set(key, agg);
+        grandQty += qty;
+        grandCost += isFinite(ext) ? ext : 0;
+      }
+      const summaryRows = Array.from(aggByCat.values()).sort((a, b) => a.name.localeCompare(b.name));
+
+      // Stream PDF to response.
+      const filename = `takeoff-report-${generatedAt.toISOString().slice(0, 10)}.pdf`;
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+
+      const doc = new PDFDocument({ size: "LETTER", layout: "landscape", margin: 36 });
+      doc.on("error", (err: Error) => {
+        console.error("PDFKit error:", err);
+        try { res.end(); } catch {}
+      });
+      doc.pipe(res);
+
+      // ── Header ───────────────────────────────────────────────────────────
+      doc.fontSize(18).font("Helvetica-Bold").fillColor("#000").text("BLACK HAWK CONSTRUCTION LLC", { align: "left" });
+      doc.fontSize(11).font("Helvetica").fillColor("#444").text("Takeoff Report", { align: "left" });
+      doc.moveDown(0.4);
+      doc.fontSize(10).fillColor("#000")
+        .text(`Project: ${projectName}`, { continued: true })
+        .text(`     Generated: ${fmtDate}`, { align: "left" });
+      doc.moveTo(doc.page.margins.left, doc.y + 6).lineTo(doc.page.width - doc.page.margins.right, doc.y + 6).strokeColor("#000").lineWidth(0.8).stroke();
+      doc.moveDown(0.8);
+
+      // Helper: draw a single table (header row + body rows) with paging.
+      // Columns are pre-measured (x positions and widths) by the caller.
+      const drawTable = (
+        title: string,
+        cols: Array<{ label: string; key: string; w: number; align?: "left" | "right" }>,
+        rows: Array<Record<string, string>>,
+      ) => {
+        const left = doc.page.margins.left;
+        const right = doc.page.width - doc.page.margins.right;
+        const tableWidth = right - left;
+        // Scale column widths so they sum to tableWidth.
+        const declared = cols.reduce((s, c) => s + c.w, 0);
+        const scale = tableWidth / declared;
+        const xs: number[] = [];
+        let cx = left;
+        for (const c of cols) { xs.push(cx); cx += c.w * scale; }
+        const widths = cols.map(c => c.w * scale);
+
+        const rowH = 16;
+        const headerH = 18;
+
+        const newPageIfNeeded = (need: number) => {
+          if (doc.y + need > doc.page.height - doc.page.margins.bottom) {
+            doc.addPage();
+          }
+        };
+
+        // Title
+        doc.fontSize(12).font("Helvetica-Bold").fillColor("#000").text(title, left, doc.y);
+        doc.moveDown(0.3);
+
+        // Header row
+        newPageIfNeeded(headerH + rowH);
+        const drawHeader = () => {
+          const y = doc.y;
+          doc.rect(left, y, tableWidth, headerH).fillColor("#1f2937").fill();
+          doc.fillColor("#fff").font("Helvetica-Bold").fontSize(9);
+          for (let i = 0; i < cols.length; i++) {
+            doc.text(cols[i].label, xs[i] + 4, y + 5, { width: widths[i] - 8, align: cols[i].align || "left", lineBreak: false });
+          }
+          doc.fillColor("#000").font("Helvetica").fontSize(9);
+          doc.y = y + headerH;
+        };
+        drawHeader();
+
+        let zebra = false;
+        for (const row of rows) {
+          newPageIfNeeded(rowH);
+          // If we just paged, redraw the header on the new page.
+          if (doc.y === doc.page.margins.top) drawHeader();
+          const y = doc.y;
+          if (zebra) { doc.rect(left, y, tableWidth, rowH).fillColor("#f3f4f6").fill().fillColor("#000"); }
+          zebra = !zebra;
+          for (let i = 0; i < cols.length; i++) {
+            doc.text(row[cols[i].key] ?? "", xs[i] + 4, y + 4, { width: widths[i] - 8, align: cols[i].align || "left", lineBreak: false, ellipsis: true });
+          }
+          doc.y = y + rowH;
+        }
+        // Bottom border
+        doc.moveTo(left, doc.y).lineTo(right, doc.y).strokeColor("#999").lineWidth(0.5).stroke();
+        doc.moveDown(0.6);
+      };
+
+      // ── Summary by Category ──────────────────────────────────────────────
+      drawTable(
+        "Summary by Category",
+        [
+          { label: "Category", key: "name", w: 28 },
+          { label: "Trade", key: "trade", w: 20 },
+          { label: "Items", key: "items", w: 12, align: "right" },
+          { label: "Total Qty", key: "qty", w: 16, align: "right" },
+          { label: "Total Cost", key: "cost", w: 18, align: "right" },
+          { label: "% of Project", key: "pct", w: 14, align: "right" },
+        ],
+        [
+          ...summaryRows.map(r => ({
+            name: r.name,
+            trade: r.trade,
+            items: String(r.itemCount),
+            qty: `${fmtNum(r.totalQty)} ${r.unit}`,
+            cost: fmtMoney(r.totalCost),
+            pct: grandCost > 0 ? `${((r.totalCost / grandCost) * 100).toFixed(1)}%` : "—",
+          })),
+          {
+            name: "GRAND TOTAL",
+            trade: "",
+            items: String(items.length),
+            qty: fmtNum(grandQty),
+            cost: fmtMoney(grandCost),
+            pct: "100%",
+          },
+        ],
+      );
+
+      // ── Line Items ───────────────────────────────────────────────────────
+      drawTable(
+        "Line Items",
+        [
+          { label: "Category", key: "category", w: 18 },
+          { label: "Trade", key: "trade", w: 14 },
+          { label: "Item Name", key: "name", w: 28 },
+          { label: "Qty", key: "qty", w: 10, align: "right" },
+          { label: "Unit", key: "unit", w: 8 },
+          { label: "Unit Cost", key: "uc", w: 12, align: "right" },
+          { label: "Extended", key: "ext", w: 14, align: "right" },
+          { label: "Notes", key: "notes", w: 26 },
+        ],
+        items.map(it => {
+          const cat = it.categoryId ? catById.get(it.categoryId) : undefined;
+          const qty = Number(it.quantity ?? 0) || 0;
+          const uc = Number(it.unitCost ?? 0) || 0;
+          const ext = it.extendedCost != null ? Number(it.extendedCost) : qty * uc;
+          return {
+            category: cat?.name || "Uncategorized",
+            trade: cat?.trade || "—",
+            name: it.room || "—",
+            qty: fmtNum(qty),
+            unit: it.unit || "",
+            uc: uc ? fmtMoney(uc) : "—",
+            ext: isFinite(ext) ? fmtMoney(ext) : "—",
+            notes: it.notes || "",
+          };
+        }),
+      );
+
+      // Footer note
+      doc.moveDown(0.5);
+      doc.fontSize(8).fillColor("#666").text(`Generated by BLACKHAWK SENTINEL · ${generatedAt.toISOString()}`, { align: "right" });
+
+      doc.end();
+    } catch (error) {
+      console.error("Error generating takeoff PDF:", error);
+      if (!res.headersSent) res.status(500).json({ error: "Failed to generate PDF" });
+      else try { res.end(); } catch {}
+    }
+  });
+
   // Takeoff Quantities
   app.get("/api/takeoff-quantities", async (req: Request, res: Response) => {
     try {

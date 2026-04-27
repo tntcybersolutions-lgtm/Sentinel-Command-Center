@@ -1748,6 +1748,22 @@ export default function DesignSystems() {
                 <Download className="h-4 w-4 mr-2" />
                 Export CSV
               </Button>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  if (!takeoffQuantities || takeoffQuantities.length === 0) {
+                    toast({ title: "Nothing to export", description: "No takeoff items found.", variant: "destructive" });
+                    return;
+                  }
+                  // The PDF route is server-side; trigger a navigation so the
+                  // browser handles the download via Content-Disposition.
+                  window.location.href = "/api/takeoffs/export/pdf";
+                }}
+                data-testid="button-export-takeoff-pdf"
+              >
+                <Download className="h-4 w-4 mr-2" />
+                Export PDF
+              </Button>
             </div>
           </div>
 
