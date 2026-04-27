@@ -57,6 +57,7 @@ import {
   ChevronUp,
   ChevronDown,
   ChevronsUpDown,
+  X,
 } from "lucide-react";
 
 const DISCIPLINES = [
@@ -216,6 +217,7 @@ export default function DesignSystems() {
   // sort key and toggles direction.
   const [takeoffSortBy, setTakeoffSortBy] = useState<null | "category" | "trade" | "name" | "quantity" | "unit" | "unitCost" | "extended" | "notes">(null);
   const [takeoffSortDir, setTakeoffSortDir] = useState<"asc" | "desc">("asc");
+  const [takeoffSearch, setTakeoffSearch] = useState("");
   const [editingSystem, setEditingSystem] = useState<BuildingSystem | null>(null);
   const [viewingSheet, setViewingSheet] = useState<DrawingSheet | null>(null);
   const [selectedSystemId, setSelectedSystemId] = useState<string | null>(null);
@@ -687,9 +689,21 @@ export default function DesignSystems() {
     return acc;
   }, {} as Record<string, DrawingSheet[]>);
 
-  const filteredTakeoffs = takeoffFilter === "all" 
-    ? takeoffQuantities 
-    : takeoffQuantities.filter(t => t.categoryId === takeoffFilter);
+  const filteredTakeoffs = (() => {
+    const byCategory = takeoffFilter === "all"
+      ? takeoffQuantities
+      : takeoffQuantities.filter(t => t.categoryId === takeoffFilter);
+    const q = takeoffSearch.trim().toLocaleLowerCase();
+    if (!q) return byCategory;
+    return byCategory.filter(t => {
+      const cat = takeoffCategories.find(c => c.id === t.categoryId);
+      return (
+        (t.room ?? "").toLocaleLowerCase().includes(q) ||
+        (cat?.name ?? "").toLocaleLowerCase().includes(q) ||
+        (cat?.trade ?? "").toLocaleLowerCase().includes(q)
+      );
+    });
+  })();
 
   // Toggle helper: same column flips direction; new column resets to asc.
   const handleSortTakeoff = (key: NonNullable<typeof takeoffSortBy>) => {
@@ -1609,6 +1623,29 @@ export default function DesignSystems() {
                 Export CSV
               </Button>
             </div>
+          </div>
+
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Input
+              type="text"
+              placeholder="Search by item name, category, or trade..."
+              className="pl-9 pr-9"
+              value={takeoffSearch}
+              onChange={(e) => setTakeoffSearch(e.target.value)}
+              data-testid="input-takeoff-search"
+            />
+            {takeoffSearch && (
+              <button
+                type="button"
+                onClick={() => setTakeoffSearch("")}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground rounded-md p-1 hover-elevate active-elevate-2"
+                aria-label="Clear search"
+                data-testid="button-clear-takeoff-search"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
           </div>
 
           <div className="grid grid-cols-4 gap-4">
