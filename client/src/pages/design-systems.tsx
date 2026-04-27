@@ -54,6 +54,9 @@ import {
   Wand2,
   Bot,
   Trash2,
+  ChevronUp,
+  ChevronDown,
+  ChevronsUpDown,
 } from "lucide-react";
 
 const DISCIPLINES = [
@@ -208,6 +211,11 @@ export default function DesignSystems() {
   const [isViewSheetOpen, setIsViewSheetOpen] = useState(false);
   const [editingTakeoff, setEditingTakeoff] = useState<TakeoffQuantity | null>(null);
   const [deletingTakeoff, setDeletingTakeoff] = useState<TakeoffQuantity | null>(null);
+  // Sort state for takeoff table. `sortBy === null` means use the default sort
+  // (Category asc, then Trade asc as tiebreaker). Clicking a header sets the
+  // sort key and toggles direction.
+  const [takeoffSortBy, setTakeoffSortBy] = useState<null | "category" | "trade" | "name" | "quantity" | "unit" | "unitCost" | "extended" | "notes">(null);
+  const [takeoffSortDir, setTakeoffSortDir] = useState<"asc" | "desc">("asc");
   const [editingSystem, setEditingSystem] = useState<BuildingSystem | null>(null);
   const [viewingSheet, setViewingSheet] = useState<DrawingSheet | null>(null);
   const [selectedSystemId, setSelectedSystemId] = useState<string | null>(null);
@@ -682,6 +690,56 @@ export default function DesignSystems() {
   const filteredTakeoffs = takeoffFilter === "all" 
     ? takeoffQuantities 
     : takeoffQuantities.filter(t => t.categoryId === takeoffFilter);
+
+  // Toggle helper: same column flips direction; new column resets to asc.
+  const handleSortTakeoff = (key: NonNullable<typeof takeoffSortBy>) => {
+    if (takeoffSortBy === key) {
+      setTakeoffSortDir(d => d === "asc" ? "desc" : "asc");
+    } else {
+      setTakeoffSortBy(key);
+      setTakeoffSortDir("asc");
+    }
+  };
+
+  // Sort derivation. Default (`sortBy === null`) → Category asc, then Trade asc.
+  // Otherwise sort by the chosen column then fall back to Category/Trade for
+  // stable ordering within ties.
+  const sortedTakeoffs = (() => {
+    const cmp = (a: TakeoffQuantity, b: TakeoffQuantity, key: NonNullable<typeof takeoffSortBy>): number => {
+      const catA = takeoffCategories.find(c => c.id === a.categoryId);
+      const catB = takeoffCategories.find(c => c.id === b.categoryId);
+      const num = (v: string | undefined | null) => {
+        const n = parseFloat(v ?? "");
+        return isFinite(n) ? n : -Infinity;
+      };
+      const str = (v: string | undefined | null) => (v ?? "").toLocaleLowerCase();
+      switch (key) {
+        case "category": return str(catA?.name).localeCompare(str(catB?.name));
+        case "trade": return str(catA?.trade).localeCompare(str(catB?.trade));
+        case "name": return str(a.room).localeCompare(str(b.room));
+        case "quantity": return num(a.quantity) - num(b.quantity);
+        case "unit": return str(a.unit).localeCompare(str(b.unit));
+        case "unitCost": return num(a.unitCost) - num(b.unitCost);
+        case "extended": {
+          const extA = a.extendedCost != null && a.extendedCost !== "" ? num(a.extendedCost) : num(a.quantity) * num(a.unitCost);
+          const extB = b.extendedCost != null && b.extendedCost !== "" ? num(b.extendedCost) : num(b.quantity) * num(b.unitCost);
+          return extA - extB;
+        }
+        case "notes": return str(a.notes).localeCompare(str(b.notes));
+      }
+    };
+    const dirMul = takeoffSortDir === "asc" ? 1 : -1;
+    return [...filteredTakeoffs].sort((a, b) => {
+      if (takeoffSortBy) {
+        const primary = cmp(a, b, takeoffSortBy) * dirMul;
+        if (primary !== 0) return primary;
+      }
+      // Default tiebreakers: Category asc, then Trade asc.
+      const catTie = cmp(a, b, "category");
+      if (catTie !== 0) return catTie;
+      return cmp(a, b, "trade");
+    });
+  })();
 
   const takeoffSummary = takeoffCategories.map(cat => {
     const items = takeoffQuantities.filter(t => t.categoryId === cat.id);
@@ -1580,19 +1638,43 @@ export default function DesignSystems() {
                 <table className="w-full">
                   <thead className="bg-muted/50">
                     <tr>
-                      <th className="text-left p-3 font-medium">Category</th>
-                      <th className="text-left p-3 font-medium">Trade</th>
-                      <th className="text-left p-3 font-medium">Item Name</th>
-                      <th className="text-right p-3 font-medium">Quantity</th>
-                      <th className="text-left p-3 font-medium">Unit</th>
-                      <th className="text-right p-3 font-medium">Unit Cost</th>
-                      <th className="text-right p-3 font-medium">Extended</th>
-                      <th className="text-left p-3 font-medium">Notes</th>
+                      {([
+                        { key: "category", label: "Category", align: "left" },
+                        { key: "trade", label: "Trade", align: "left" },
+                        { key: "name", label: "Item Name", align: "left" },
+                        { key: "quantity", label: "Quantity", align: "right" },
+                        { key: "unit", label: "Unit", align: "left" },
+                        { key: "unitCost", label: "Unit Cost", align: "right" },
+                        { key: "extended", label: "Extended", align: "right" },
+                        { key: "notes", label: "Notes", align: "left" },
+                      ] as const).map(col => {
+                        const active = takeoffSortBy === col.key;
+                        const Indicator = active
+                          ? (takeoffSortDir === "asc" ? ChevronUp : ChevronDown)
+                          : ChevronsUpDown;
+                        return (
+                          <th
+                            key={col.key}
+                            className={`p-3 font-medium ${col.align === "right" ? "text-right" : "text-left"}`}
+                          >
+                            <button
+                              type="button"
+                              className={`inline-flex items-center gap-1 ${col.align === "right" ? "ml-auto" : ""} hover-elevate active-elevate-2 px-1.5 py-0.5 rounded select-none`}
+                              onClick={() => handleSortTakeoff(col.key)}
+                              aria-sort={active ? (takeoffSortDir === "asc" ? "ascending" : "descending") : "none"}
+                              data-testid={`sort-takeoff-${col.key}`}
+                            >
+                              <span>{col.label}</span>
+                              <Indicator className={`h-3.5 w-3.5 ${active ? "text-foreground" : "text-muted-foreground/60"}`} />
+                            </button>
+                          </th>
+                        );
+                      })}
                       <th className="text-right p-3 font-medium">Actions</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredTakeoffs.length > 0 ? filteredTakeoffs.map(item => {
+                    {sortedTakeoffs.length > 0 ? sortedTakeoffs.map(item => {
                       const cat = takeoffCategories.find(c => c.id === item.categoryId);
                       return (
                         <tr key={item.id} className="border-t">
