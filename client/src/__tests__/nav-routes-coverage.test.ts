@@ -67,8 +67,8 @@ describe("navConfig → App.tsx route coverage", () => {
     ).toEqual([]);
   });
 
-  it("covers all 44 known navConfig routes", () => {
+  it("covers all 45 known navConfig routes", () => {
     // Snapshot the count so adding/removing nav items is a deliberate change.
-    expect(navRoutes.length).toBe(44);
+    expect(navRoutes.length).toBe(45);
   });
 });

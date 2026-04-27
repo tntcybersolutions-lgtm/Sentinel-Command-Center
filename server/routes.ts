@@ -5,6 +5,7 @@ import { registerChatRoutes } from "./replit_integrations/chat";
 import { registerObjectStorageRoutes } from "./replit_integrations/object_storage";
 import { herbieToolsRouter } from "./routes/herbie-tools.routes";
 import { registerSentinelPhase1Routes } from "./routes-sentinel-phase1";
+import { registerLienWaiverRoutes } from "./routes-lien-waiver";
 import * as ReplitObjectStorage from "@replit/object-storage";
 import { Readable } from "node:stream";
 import OpenAI from "openai";
@@ -24811,6 +24812,7 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
   //  PATCH approve/reject aliases, Portal share links.)
   // ============================================================
   registerSentinelPhase1Routes(app);
+  registerLienWaiverRoutes(app);
 
   app.use((err: Error, _req: Request, res: Response, next: Function) => {
     if (err instanceof ParamError) {

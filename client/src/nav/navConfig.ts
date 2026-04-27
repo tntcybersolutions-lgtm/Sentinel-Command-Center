@@ -129,6 +129,7 @@ export const navConfig: NavGroupConfig[] = [
       { id: "fin.invoices", label: "Invoices (AR)", icon: FileText, route: "/financial/invoices", badgeKey: "unpaidInvoiceCount" },
       { id: "fin.bills", label: "Bills (AP)", icon: Receipt, route: "/financial/bills" },
       { id: "fin.compliance", label: "Compliance", icon: Shield, route: "/financial/compliance" },
+      { id: "fin.lienWaivers", label: "Lien Waivers", icon: FileCheck, route: "/lien-waivers" },
     ],
   },
   {

@@ -1688,6 +1688,78 @@ export const subcontracts = pgTable("subcontracts", {
 }));
 
 // ============================================================================
+// LIEN WAIVERS (215_lien_waivers.sql)
+// ============================================================================
+// Construction lien waivers signed by subs/vendors to release lien rights in
+// exchange for payment. Four canonical types per US convention:
+//   - conditional_partial   (lien released for partial payment, contingent on
+//                            payment clearing)
+//   - unconditional_partial (lien released for partial payment, no contingency)
+//   - conditional_final     (lien released for final payment, contingent)
+//   - unconditional_final   (lien released for final payment, no contingency)
+// State machine: draft → sent → signed → received → (final). Terminal: voided.
+export const lienWaivers = pgTable("lien_waivers", {
+  id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id", { length: 36 }).notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  projectId: varchar("project_id", { length: 36 }).notNull().references(() => projects.id, { onDelete: "cascade" }),
+  vendorId: varchar("vendor_id", { length: 36 }).notNull().references(() => vendors.id, { onDelete: "cascade" }),
+  subcontractId: varchar("subcontract_id", { length: 36 }).references(() => subcontracts.id, { onDelete: "set null" }),
+  payAppId: varchar("pay_app_id", { length: 36 }).references(() => payApplications.id, { onDelete: "set null" }),
+  waiverNumber: text("waiver_number").notNull(),
+  waiverType: text("waiver_type").notNull(), // conditional_partial | unconditional_partial | conditional_final | unconditional_final
+  status: text("status").notNull().default("draft"), // draft | sent | signed | received | voided
+  throughDate: timestamp("through_date").notNull(),
+  paymentAmount: decimal("payment_amount", { precision: 15, scale: 2 }).notNull(),
+  exceptionsJson: jsonb("exceptions_json"), // [{description, amount}] for unpaid items
+  signerName: text("signer_name"),
+  signerTitle: text("signer_title"),
+  signerEmail: text("signer_email"),
+  sentAt: timestamp("sent_at"),
+  signedAt: timestamp("signed_at"),
+  receivedAt: timestamp("received_at"),
+  voidedAt: timestamp("voided_at"),
+  expiresAt: timestamp("expires_at"),
+  documentId: varchar("document_id", { length: 36 }).references(() => projectDocuments.id, { onDelete: "set null" }),
+  notesText: text("notes_text"),
+  createdByUserId: varchar("created_by_user_id", { length: 36 }).references(() => users.id),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  waiverNumberIdx: unique().on(table.tenantId, table.waiverNumber),
+  projectStatusIdx: index("lw_project_status_idx").on(table.projectId, table.status),
+  vendorIdx: index("lw_vendor_idx").on(table.vendorId),
+  payAppIdx: index("lw_pay_app_idx").on(table.payAppId),
+}));
+
+export const insertLienWaiverSchema = createInsertSchema(lienWaivers).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export type InsertLienWaiver = z.infer<typeof insertLienWaiverSchema>;
+export type LienWaiver = typeof lienWaivers.$inferSelect;
+
+export const lienWaiverEvents = pgTable("lien_waiver_events", {
+  id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id", { length: 36 }).notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  waiverId: varchar("waiver_id", { length: 36 }).notNull().references(() => lienWaivers.id, { onDelete: "cascade" }),
+  eventType: text("event_type").notNull(), // created | sent | signed | received | voided | document_generated | updated
+  actorUserId: varchar("actor_user_id", { length: 36 }).references(() => users.id),
+  actorName: text("actor_name"),
+  payloadJson: jsonb("payload_json"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  waiverEventIdx: index("lwe_waiver_idx").on(table.waiverId, table.createdAt),
+}));
+
+export const insertLienWaiverEventSchema = createInsertSchema(lienWaiverEvents).omit({
+  id: true,
+  createdAt: true,
+});
+export type InsertLienWaiverEvent = z.infer<typeof insertLienWaiverEventSchema>;
+export type LienWaiverEvent = typeof lienWaiverEvents.$inferSelect;
+
+// ============================================================================
 // DAILY PLANNER & BRIEFINGS (220_planner.sql)
 // ============================================================================
 
