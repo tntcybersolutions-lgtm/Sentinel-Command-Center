@@ -1919,8 +1919,19 @@ export default function DesignSystems() {
                   <tbody>
                     {sortedTakeoffs.length > 0 ? sortedTakeoffs.map(item => {
                       const cat = takeoffCategories.find(c => c.id === item.categoryId);
+                      // A row is "incomplete" when its unit cost is missing or
+                      // not a positive number — highlight in soft amber so
+                      // estimators can spot lines that still need pricing.
+                      const ucNum = parseFloat(item.unitCost ?? "");
+                      const missingUnitCost = !isFinite(ucNum) || ucNum <= 0;
                       return (
-                        <tr key={item.id} className="border-t">
+                        <tr
+                          key={item.id}
+                          className={`border-t ${missingUnitCost ? "bg-amber-50/70 hover:bg-amber-100/70 dark:bg-amber-950/30 dark:hover:bg-amber-950/50" : ""}`}
+                          data-testid={`row-takeoff-${item.id}`}
+                          data-incomplete={missingUnitCost ? "true" : "false"}
+                          title={missingUnitCost ? "Missing unit cost — line item is incomplete" : undefined}
+                        >
                           <td className="p-3">
                             <span
                               className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium ${categoryBadgeClass(cat?.name)}`}
