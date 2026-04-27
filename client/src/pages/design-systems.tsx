@@ -138,6 +138,7 @@ interface TakeoffQuantity {
   unit: string;
   unitCost?: string;
   extendedCost?: string;
+  notes?: string;
 }
 
 interface BuildingSystem {
@@ -591,7 +592,11 @@ export default function DesignSystems() {
         const s = v === null || v === undefined ? "" : String(v);
         return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
       };
-      const headers = ["Category", "Trade", "Room", "Floor", "Quantity", "Unit", "Unit Cost", "Extended Cost"];
+      // CSV column order locked to: Category, Trade, Item Name, Quantity,
+      // Unit, Unit Cost, Extended Cost, Notes. "Item Name" maps to the
+      // `room` field, which is what both the New Takeoff dialog and the
+      // Import-from-Plans flow use as the human-readable line label.
+      const headers = ["Category", "Trade", "Item Name", "Quantity", "Unit", "Unit Cost", "Extended Cost", "Notes"];
       const rows = takeoffQuantities.map(tq => {
         const cat = takeoffCategories.find(c => c.id === tq.categoryId);
         const qty = Number(tq.quantity ?? 0);
@@ -601,11 +606,11 @@ export default function DesignSystems() {
           cat?.name || "Unknown",
           cat?.trade || "Unknown",
           tq.room || "",
-          tq.floor || "",
           qty.toFixed(2),
           tq.unit,
           unitCost.toFixed(2),
           extended.toFixed(2),
+          tq.notes || "",
         ].map(esc).join(",");
       });
       const csv = "\ufeff" + [headers.join(","), ...rows].join("\n");
