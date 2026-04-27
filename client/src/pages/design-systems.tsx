@@ -335,7 +335,7 @@ export default function DesignSystems() {
   });
 
   const updateTakeoffMutation = useMutation({
-    mutationFn: async (data: { id: string; categoryId: string; room: string; floor: string; quantity: string; unit: string; unitCost: string }) => {
+    mutationFn: async (data: { id: string; categoryId: string; room: string; floor: string; quantity: string; unit: string; unitCost: string; notes: string }) => {
       const extendedCost = (parseFloat(data.quantity) * parseFloat(data.unitCost || "0")).toFixed(2);
       return apiRequest("PATCH", `/api/takeoff-quantities/${data.id}`, { ...data, extendedCost });
     },
@@ -1433,6 +1433,7 @@ export default function DesignSystems() {
                         quantity: formData.get("quantity") as string,
                         unit: formData.get("unit") as string,
                         unitCost: formData.get("unitCost") as string,
+                        notes: (formData.get("notes") as string) || "",
                       });
                     }} className="space-y-4">
                       <div className="grid grid-cols-2 gap-4">
@@ -1483,6 +1484,10 @@ export default function DesignSystems() {
                           <Label htmlFor="edit-unitCost">Unit Cost ($)</Label>
                           <Input id="edit-unitCost" name="unitCost" type="number" step="0.01" defaultValue={editingTakeoff.unitCost || ""} placeholder="0.00" data-testid="input-edit-takeoff-cost" />
                         </div>
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="edit-notes">Notes</Label>
+                        <Textarea id="edit-notes" name="notes" defaultValue={editingTakeoff.notes || ""} placeholder="Optional notes for this line item" rows={2} data-testid="input-edit-takeoff-notes" />
                       </div>
                       <div className="flex gap-2">
                         <Button type="submit" className="flex-1" disabled={updateTakeoffMutation.isPending} data-testid="button-update-takeoff">
