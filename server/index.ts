@@ -8,6 +8,7 @@ import { websocketService } from "./services/websocket.service";
 import { validateBidJacketTaxonomy } from "@shared/schema";
 import { sql } from "drizzle-orm";
 import { lienWaiverRouter } from "./lien-waiver-routes";
+import { takeoffItemsRouter } from "./takeoff-items-routes";
 
 validateBidJacketTaxonomy();
 
@@ -70,6 +71,7 @@ app.use((req, res, next) => {
 (async () => {
   await registerRoutes(httpServer, app);
     app.use("/api/lien-waivers", lienWaiverRouter);
+        app.use(takeoffItemsRouter);
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
