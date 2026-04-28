@@ -14,9 +14,6 @@ import { storage } from "./storage";
 //
 // Also exposes the updated GET /api/project-deliverables and
 // GET /api/estimate/deliverables that return real persisted rows.
-//
-// And exposes GET /api/jackets/bid/:bidId/documents/:documentId/content
-// for streaming bid jacket document content (Fix 4).
 
 export const deliverableGeneratorRouter = Router();
 
@@ -624,90 +621,6 @@ deliverableGeneratorRouter.get(
       const msg = err instanceof Error ? err.message : "Failed to fetch deliverables";
       if (msg.includes("does not exist")) return res.json([]);
       console.error("[estimate/deliverables] GET error:", msg);
-      return jsonError(res, 500, msg);
-    }
-  }
-);
-
-// ─── GET /api/jackets/bid/:bidId/documents/:documentId/content ────────────────
-// Fix 4: Stream bid jacket document content with correct headers.
-// Auth-gated: validates the bid project belongs to the requesting tenant.
-// Supports both HERBIE-generated text/markdown payloads and uploaded binary files.
-// Does NOT alter the in-app modal viewer path — this is the download/stream path.
-deliverableGeneratorRouter.get(
-  "/api/jackets/bid/:bidId/documents/:documentId/content",
-  async (req: Request, res: Response) => {
-    try {
-      const { bidId, documentId } = req.params;
-
-      // Auth gate: verify bid project exists (tenant isolation)
-      const bidRows = await db.execute(
-        sql`SELECT id, tenant_id FROM bid_projects WHERE id = ${bidId} LIMIT 1`
-      );
-      const bid = (bidRows as any).rows?.[0];
-      if (!bid) {
-        return jsonError(res, 404, "Bid project not found");
-      }
-
-      // Fetch the document from project_documents
-      const docRows = await db.execute(
-        sql`SELECT id, title, content_type, storage_key, file_size_bytes, source_content, project_id
-             FROM project_documents
-             WHERE id = ${documentId}
-             LIMIT 1`
-      );
-      const doc = (docRows as any).rows?.[0];
-
-      if (!doc) {
-        // Fall back to bid_jacket_artifacts
-        const artRows = await db.execute(
-          sql`SELECT id, artifact_code, title, content_markdown, file_size_bytes, mime_type, storage_key
-               FROM bid_jacket_artifacts
-               WHERE id = ${documentId}
-               AND bid_project_id = ${bidId}
-               LIMIT 1`
-        );
-        const art = (artRows as any).rows?.[0];
-
-        if (!art) {
-          return jsonError(res, 404, "Document not found");
-        }
-
-        const markdown = art.content_markdown || "";
-        const filename = `${(art.title || art.artifact_code || "document").replace(/[^a-z0-9_-]/gi, "_")}.md`;
-        res.setHeader("Content-Type", "text/markdown; charset=utf-8");
-        res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
-        res.setHeader("Content-Length", Buffer.byteLength(markdown, "utf8").toString());
-        res.setHeader("Cache-Control", "no-store");
-        return res.send(markdown);
-      }
-
-      // Determine content type
-      const contentType = doc.content_type || "text/plain";
-      const isText = contentType.startsWith("text/") || contentType.includes("markdown") || contentType.includes("json");
-      const filename = `${(doc.title || "document").replace(/[^a-z0-9_-]/gi, "_")}${isText ? ".md" : ""}`;
-
-      if (doc.source_content) {
-        // Text content stored inline (HERBIE-generated Markdown)
-        const body: string = doc.source_content;
-        res.setHeader("Content-Type", "text/markdown; charset=utf-8");
-        res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
-        res.setHeader("Content-Length", Buffer.byteLength(body, "utf8").toString());
-        res.setHeader("Cache-Control", "no-store");
-        return res.send(body);
-      }
-
-      // Binary or external storage — return 501 with clear message
-      // (S3 streaming can be added here when storage layer is connected)
-      return res.status(501).json({
-        error: "Binary file streaming not yet implemented. File is in external storage.",
-        storageKey: doc.storage_key,
-        documentId,
-        hint: "Implement S3/object-storage streaming here using the storageKey field",
-      });
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Failed to retrieve document content";
-      console.error("[jackets/bid/documents/content] GET error:", msg);
       return jsonError(res, 500, msg);
     }
   }
