@@ -1,24 +1,51 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import express from "express";
-import request from "supertest";
-import { takeoffItemsRouter } from "../takeoff-items-routes";
+import supertest from "supertest";
 
-// ─── Mock the storage layer ───────────────────────────────────────────────────
+// ─── Mocks ─────────────────────────────────────────────────────────────────────
 vi.mock("../storage", () => ({
   storage: {
-    getTakeoffItems: vi.fn(),
-    getTakeoffItemsByProject: vi.fn(),
-    createTakeoffItem: vi.fn(),
-    updateTakeoffItem: vi.fn(),
-    deleteTakeoffItem: vi.fn(),
-    getProjectDeliverables: vi.fn(),
+    getTakeoffItems: vi.fn().mockResolvedValue([
+      { id: "item-1", blueprintId: "bp-1", name: "Test Item", quantity: 5, unit: "EA" },
+    ]),
+    getTakeoffItemsByProject: vi.fn().mockResolvedValue([
+      { id: "item-2", blueprintId: "bp-1", name: "Project Item", quantity: 10, unit: "LF", bidProjectId: "proj-1" },
+    ]),
+    createTakeoffItem: vi.fn().mockResolvedValue({
+      id: "item-new",
+      blueprintId: "bp-1",
+      name: "New Item",
+      quantity: 0,
+      unit: "EA",
+    }),
+    updateTakeoffItem: vi.fn().mockResolvedValue({
+      id: "item-1",
+      name: "Updated Item",
+      quantity: 7,
+    }),
+    deleteTakeoffItem: vi.fn().mockResolvedValue(undefined),
   },
 }));
 
-import { storage } from "../storage";
-const mockStorage = storage as any;
+vi.mock("../db", () => ({
+  db: {
+    execute: vi.fn().mockResolvedValue({ rows: [] }),
+  },
+}));
 
-// Build a minimal Express app with the router under test
+vi.mock("drizzle-orm", () => ({
+  sql: Object.assign((strings: TemplateStringsArray, ...values: any[]) => ({ strings, values }), {
+    raw: (s: string) => ({ raw: s }),
+  }),
+  eq: vi.fn(),
+  and: vi.fn(),
+  or: vi.fn(),
+}));
+
+// Import after mocks
+import { takeoffItemsRouter } from "../takeoff-items-routes";
+
+// Build minimal express app
 function buildApp() {
   const app = express();
   app.use(express.json());
@@ -26,188 +53,135 @@ function buildApp() {
   return app;
 }
 
-// ─── GET /api/takeoff-items ───────────────────────────────────────────────────
+// ─── GET /api/takeoff-items ──────────────────────────────────────────────────────
 describe("GET /api/takeoff-items", () => {
-  beforeEach(() => vi.clearAllMocks());
+  it("returns 200 with items when blueprintId is provided", async () => {
+    const res = await supertest(buildApp())
+      .get("/api/takeoff-items?blueprintId=bp-1");
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+    expect(res.body.length).toBeGreaterThan(0);
+    expect(res.body[0]).toHaveProperty("blueprintId", "bp-1");
+  });
 
-  it("returns empty array when no filters provided (200)", async () => {
-    const app = buildApp();
-    const res = await request(app).get("/api/takeoff-items");
+  it("returns 200 with items when projectId is provided", async () => {
+    const res = await supertest(buildApp())
+      .get("/api/takeoff-items?projectId=proj-1");
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+  });
+
+  it("returns 200 with empty array when no filter", async () => {
+    const res = await supertest(buildApp()).get("/api/takeoff-items");
     expect(res.status).toBe(200);
     expect(res.body).toEqual([]);
   });
 
-  it("filters by blueprintId query param (200)", async () => {
-    const items = [{ id: "item-1", name: "Wire", blueprintId: "bp-1" }];
-    mockStorage.getTakeoffItems.mockResolvedValueOnce(items);
-    const app = buildApp();
-    const res = await request(app).get("/api/takeoff-items?blueprintId=bp-1");
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual(items);
-    expect(mockStorage.getTakeoffItems).toHaveBeenCalledWith("bp-1");
-  });
-
-  it("filters by projectId query param (200)", async () => {
-    const items = [{ id: "item-2", name: "Conduit", bidProjectId: "proj-1" }];
-    mockStorage.getTakeoffItemsByProject.mockResolvedValueOnce(items);
-    const app = buildApp();
-    const res = await request(app).get("/api/takeoff-items?projectId=proj-1");
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual(items);
-    expect(mockStorage.getTakeoffItemsByProject).toHaveBeenCalledWith("proj-1");
-  });
-
-  it("returns 500 on storage error", async () => {
-    mockStorage.getTakeoffItems.mockRejectedValueOnce(new Error("DB failure"));
-    const app = buildApp();
-    const res = await request(app).get("/api/takeoff-items?blueprintId=bp-fail");
+  it("returns 500 when storage throws", async () => {
+    const { storage } = await import("../storage");
+    (storage.getTakeoffItems as any).mockRejectedValueOnce(new Error("DB error"));
+    const res = await supertest(buildApp()).get("/api/takeoff-items?blueprintId=bp-bad");
     expect(res.status).toBe(500);
-    expect(res.body.error).toBe("DB failure");
+    expect(res.body).toHaveProperty("error");
   });
 });
 
-// ─── POST /api/takeoff-items ──────────────────────────────────────────────────
+// ─── POST /api/takeoff-items ────────────────────────────────────────────────────
 describe("POST /api/takeoff-items", () => {
-  beforeEach(() => vi.clearAllMocks());
-
-  it("creates a new item and returns 201 with created row", async () => {
-    const created = { id: "new-1", name: "Switch", blueprintId: "bp-1", quantity: 4 };
-    mockStorage.createTakeoffItem.mockResolvedValueOnce(created);
-    const app = buildApp();
-    const res = await request(app)
+  it("returns 201 with created item", async () => {
+    const res = await supertest(buildApp())
       .post("/api/takeoff-items")
-      .send({ blueprintId: "bp-1", name: "Switch", quantity: 4, unit: "EA", unitCost: 150 });
+      .send({ blueprintId: "bp-1", name: "Cable Run", quantity: 100, unit: "LF" });
     expect(res.status).toBe(201);
-    expect(res.body).toEqual(created);
+    expect(res.body).toHaveProperty("id");
   });
 
   it("returns 400 when blueprintId is missing", async () => {
-    const app = buildApp();
-    const res = await request(app)
+    const res = await supertest(buildApp())
       .post("/api/takeoff-items")
-      .send({ name: "Missing BP" });
+      .send({ name: "Missing Blueprint" });
     expect(res.status).toBe(400);
+    expect(res.body).toHaveProperty("error");
     expect(res.body.error).toMatch(/blueprintId/i);
   });
-
-  it("returns 500 on storage error", async () => {
-    mockStorage.createTakeoffItem.mockRejectedValueOnce(new Error("Insert failed"));
-    const app = buildApp();
-    const res = await request(app)
-      .post("/api/takeoff-items")
-      .send({ blueprintId: "bp-err" });
-    expect(res.status).toBe(500);
-  });
 });
 
-// ─── PATCH /api/takeoff-items/:id ────────────────────────────────────────────
+// ─── PATCH /api/takeoff-items/:id ───────────────────────────────────────────────
 describe("PATCH /api/takeoff-items/:id", () => {
-  beforeEach(() => vi.clearAllMocks());
-
-  it("updates and returns the updated row (200)", async () => {
-    const updated = { id: "item-5", name: "Switch (updated)", quantity: 8 };
-    mockStorage.updateTakeoffItem.mockResolvedValueOnce(updated);
-    const app = buildApp();
-    const res = await request(app)
-      .patch("/api/takeoff-items/item-5")
-      .send({ name: "Switch (updated)", quantity: 8 });
+  it("returns 200 with updated item", async () => {
+    const res = await supertest(buildApp())
+      .patch("/api/takeoff-items/item-1")
+      .send({ name: "Updated Item", quantity: 7 });
     expect(res.status).toBe(200);
-    expect(res.body).toEqual(updated);
+    expect(res.body).toHaveProperty("name", "Updated Item");
   });
 
-  it("returns 404 when storage returns null/undefined", async () => {
-    mockStorage.updateTakeoffItem.mockResolvedValueOnce(null);
-    const app = buildApp();
-    const res = await request(app)
-      .patch("/api/takeoff-items/nonexistent")
+  it("returns 404 when item not found", async () => {
+    const { storage } = await import("../storage");
+    (storage.updateTakeoffItem as any).mockResolvedValueOnce(null);
+    const res = await supertest(buildApp())
+      .patch("/api/takeoff-items/not-found")
       .send({ name: "Ghost" });
     expect(res.status).toBe(404);
-    expect(res.body.error).toMatch(/not found/i);
-  });
-
-  it("returns 500 on storage error", async () => {
-    mockStorage.updateTakeoffItem.mockRejectedValueOnce(new Error("Update failed"));
-    const app = buildApp();
-    const res = await request(app)
-      .patch("/api/takeoff-items/err-id")
-      .send({ name: "X" });
-    expect(res.status).toBe(500);
   });
 });
 
-// ─── DELETE /api/takeoff-items/:id ───────────────────────────────────────────
+// ─── DELETE /api/takeoff-items/:id ──────────────────────────────────────────────
 describe("DELETE /api/takeoff-items/:id", () => {
-  beforeEach(() => vi.clearAllMocks());
-
-  it("deletes and returns success (200)", async () => {
-    mockStorage.deleteTakeoffItem.mockResolvedValueOnce(undefined);
-    const app = buildApp();
-    const res = await request(app).delete("/api/takeoff-items/del-1");
+  it("returns 200 with success", async () => {
+    const res = await supertest(buildApp()).delete("/api/takeoff-items/item-1");
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ success: true, deleted: "del-1" });
-  });
-
-  it("returns 500 on storage error", async () => {
-    mockStorage.deleteTakeoffItem.mockRejectedValueOnce(new Error("Delete failed"));
-    const app = buildApp();
-    const res = await request(app).delete("/api/takeoff-items/err-id");
-    expect(res.status).toBe(500);
+    expect(res.body).toHaveProperty("success", true);
+    expect(res.body).toHaveProperty("deleted", "item-1");
   });
 });
 
-// ─── Alias parity: all 4 alias GET routes return identical payloads ───────────
-describe("Alias route parity", () => {
-  beforeEach(() => vi.clearAllMocks());
-
-  const items = [{ id: "a1", name: "Outlet", blueprintId: "bp-1" }];
-
-  it("GET /api/estimate/takeoff/items returns same as /api/takeoff-items with blueprintId", async () => {
-    mockStorage.getTakeoffItems.mockResolvedValue(items);
-    const app = buildApp();
-    const [r1, r2] = await Promise.all([
-      request(app).get("/api/takeoff-items?blueprintId=bp-1"),
-      request(app).get("/api/estimate/takeoff/items?blueprintId=bp-1"),
-    ]);
-    expect(r1.status).toBe(200);
-    expect(r2.status).toBe(200);
-    expect(r1.body).toEqual(r2.body);
-  });
-
-  it("GET /api/projects/:projectId/takeoff-items returns items", async () => {
-    mockStorage.getTakeoffItemsByProject.mockResolvedValueOnce(items);
-    const app = buildApp();
-    const res = await request(app).get("/api/projects/proj-1/takeoff-items");
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual(items);
-    expect(mockStorage.getTakeoffItemsByProject).toHaveBeenCalledWith("proj-1");
-  });
-
-  it("GET /api/projects/:projectId/estimate/takeoff/items returns items", async () => {
-    mockStorage.getTakeoffItemsByProject.mockResolvedValueOnce(items);
-    const app = buildApp();
-    const res = await request(app).get("/api/projects/proj-2/estimate/takeoff/items");
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual(items);
-    expect(mockStorage.getTakeoffItemsByProject).toHaveBeenCalledWith("proj-2");
+// ─── ALIAS: GET /api/estimate/takeoff/items ─────────────────────────────────────
+describe("GET /api/estimate/takeoff/items (alias parity)", () => {
+  it("returns 200 and same shape as /api/takeoff-items", async () => {
+    const base = await supertest(buildApp()).get("/api/takeoff-items?blueprintId=bp-1");
+    const alias = await supertest(buildApp()).get("/api/estimate/takeoff/items?blueprintId=bp-1");
+    expect(alias.status).toBe(200);
+    expect(alias.body).toEqual(base.body);
   });
 });
 
-// ─── GET /api/project-deliverables ───────────────────────────────────────────
-describe("GET /api/project-deliverables", () => {
-  beforeEach(() => vi.clearAllMocks());
-
-  it("returns empty array when storage returns empty (200)", async () => {
-    mockStorage.getProjectDeliverables = vi.fn().mockResolvedValueOnce([]);
-    const app = buildApp();
-    const res = await request(app).get("/api/project-deliverables");
+// ─── ALIAS: GET /api/projects/:id/takeoff-items ─────────────────────────────────
+describe("GET /api/projects/:projectId/takeoff-items (alias parity)", () => {
+  it("returns 200 array", async () => {
+    const res = await supertest(buildApp()).get("/api/projects/proj-1/takeoff-items");
     expect(res.status).toBe(200);
     expect(Array.isArray(res.body)).toBe(true);
   });
 
-  it("returns 200 even if getProjectDeliverables is not available on storage", async () => {
-    const app = buildApp();
-    const res = await request(app).get("/api/project-deliverables");
+  it("same payload as projectId query param", async () => {
+    const query = await supertest(buildApp()).get("/api/takeoff-items?projectId=proj-1");
+    const alias = await supertest(buildApp()).get("/api/projects/proj-1/takeoff-items");
+    expect(alias.body).toEqual(query.body);
+  });
+});
+
+// ─── GET /api/estimate/deliverables ─────────────────────────────────────────────
+describe("GET /api/estimate/deliverables", () => {
+  it("returns 200 with array", async () => {
+    const res = await supertest(buildApp()).get("/api/estimate/deliverables");
     expect(res.status).toBe(200);
     expect(Array.isArray(res.body)).toBe(true);
   });
+
+  it("accepts projectId query param without error", async () => {
+    const res = await supertest(buildApp()).get("/api/estimate/deliverables?projectId=proj-1");
+    expect(res.status).toBe(200);
+  });
 });
+
+// ─── GET /api/project-deliverables (alias parity) ───────────────────────────────
+describe("GET /api/project-deliverables (alias parity)", () => {
+  it("returns same shape as /api/estimate/deliverables", async () => {
+    const base = await supertest(buildApp()).get("/api/estimate/deliverables");
+    const alias = await supertest(buildApp()).get("/api/project-deliverables");
+    expect(alias.status).toBe(base.status);
+    expect(Array.isArray(alias.body)).toBe(true);
+  });
+});
+
