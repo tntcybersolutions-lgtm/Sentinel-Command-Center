@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import express from "express";
 import supertest from "supertest";
 
-// ─── Mocks ─────────────────────────────────────────────────────────────────────
+// ─── Mocks ───────────────────────────────────────────────────────────────────
 vi.mock("../storage", () => ({
   storage: {
     getTakeoffItems: vi.fn().mockResolvedValue([
@@ -34,9 +34,10 @@ vi.mock("../db", () => ({
 }));
 
 vi.mock("drizzle-orm", () => ({
-  sql: Object.assign((strings: TemplateStringsArray, ...values: any[]) => ({ strings, values }), {
-    raw: (s: string) => ({ raw: s }),
-  }),
+  sql: Object.assign(
+    (strings: TemplateStringsArray, ...values: any[]) => ({ strings, values }),
+    { raw: (s: string) => ({ raw: s }) }
+  ),
   eq: vi.fn(),
   and: vi.fn(),
   or: vi.fn(),
@@ -53,7 +54,7 @@ function buildApp() {
   return app;
 }
 
-// ─── GET /api/takeoff-items ──────────────────────────────────────────────────────
+// ─── GET /api/takeoff-items ──────────────────────────────────────────────────
 describe("GET /api/takeoff-items", () => {
   it("returns 200 with items when blueprintId is provided", async () => {
     const res = await supertest(buildApp())
@@ -86,7 +87,7 @@ describe("GET /api/takeoff-items", () => {
   });
 });
 
-// ─── POST /api/takeoff-items ────────────────────────────────────────────────────
+// ─── POST /api/takeoff-items ─────────────────────────────────────────────────
 describe("POST /api/takeoff-items", () => {
   it("returns 201 with created item", async () => {
     const res = await supertest(buildApp())
@@ -106,7 +107,7 @@ describe("POST /api/takeoff-items", () => {
   });
 });
 
-// ─── PATCH /api/takeoff-items/:id ───────────────────────────────────────────────
+// ─── PATCH /api/takeoff-items/:id ────────────────────────────────────────────
 describe("PATCH /api/takeoff-items/:id", () => {
   it("returns 200 with updated item", async () => {
     const res = await supertest(buildApp())
@@ -126,7 +127,7 @@ describe("PATCH /api/takeoff-items/:id", () => {
   });
 });
 
-// ─── DELETE /api/takeoff-items/:id ──────────────────────────────────────────────
+// ─── DELETE /api/takeoff-items/:id ───────────────────────────────────────────
 describe("DELETE /api/takeoff-items/:id", () => {
   it("returns 200 with success", async () => {
     const res = await supertest(buildApp()).delete("/api/takeoff-items/item-1");
@@ -136,7 +137,7 @@ describe("DELETE /api/takeoff-items/:id", () => {
   });
 });
 
-// ─── ALIAS: GET /api/estimate/takeoff/items ─────────────────────────────────────
+// ─── ALIAS: GET /api/estimate/takeoff/items ───────────────────────────────────
 describe("GET /api/estimate/takeoff/items (alias parity)", () => {
   it("returns 200 and same shape as /api/takeoff-items", async () => {
     const base = await supertest(buildApp()).get("/api/takeoff-items?blueprintId=bp-1");
@@ -146,7 +147,7 @@ describe("GET /api/estimate/takeoff/items (alias parity)", () => {
   });
 });
 
-// ─── ALIAS: GET /api/projects/:id/takeoff-items ─────────────────────────────────
+// ─── ALIAS: GET /api/projects/:projectId/takeoff-items ───────────────────────
 describe("GET /api/projects/:projectId/takeoff-items (alias parity)", () => {
   it("returns 200 array", async () => {
     const res = await supertest(buildApp()).get("/api/projects/proj-1/takeoff-items");
@@ -161,7 +162,23 @@ describe("GET /api/projects/:projectId/takeoff-items (alias parity)", () => {
   });
 });
 
-// ─── GET /api/estimate/deliverables ─────────────────────────────────────────────
+// ─── ALIAS: GET /api/projects/:projectId/estimate/takeoff/items ─────────────
+describe("GET /api/projects/:projectId/estimate/takeoff/items (alias parity)", () => {
+  it("returns 200 array", async () => {
+    const res = await supertest(buildApp()).get("/api/projects/proj-1/estimate/takeoff/items");
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+  });
+
+  it("returns same payload as /api/projects/:projectId/takeoff-items", async () => {
+    const base = await supertest(buildApp()).get("/api/projects/proj-1/takeoff-items");
+    const alias = await supertest(buildApp()).get("/api/projects/proj-1/estimate/takeoff/items");
+    expect(alias.status).toBe(200);
+    expect(alias.body).toEqual(base.body);
+  });
+});
+
+// ─── GET /api/estimate/deliverables ──────────────────────────────────────────
 describe("GET /api/estimate/deliverables", () => {
   it("returns 200 with array", async () => {
     const res = await supertest(buildApp()).get("/api/estimate/deliverables");
@@ -175,7 +192,7 @@ describe("GET /api/estimate/deliverables", () => {
   });
 });
 
-// ─── GET /api/project-deliverables (alias parity) ───────────────────────────────
+// ─── GET /api/project-deliverables (alias parity) ────────────────────────────
 describe("GET /api/project-deliverables (alias parity)", () => {
   it("returns same shape as /api/estimate/deliverables", async () => {
     const base = await supertest(buildApp()).get("/api/estimate/deliverables");
@@ -185,3 +202,34 @@ describe("GET /api/project-deliverables (alias parity)", () => {
   });
 });
 
+// ─── GET /api/projects/:projectId/deliverables ───────────────────────────────
+describe("GET /api/projects/:projectId/deliverables", () => {
+  it("returns 200 array", async () => {
+    const res = await supertest(buildApp()).get("/api/projects/proj-1/deliverables");
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+  });
+
+  it("returns same shape as /api/estimate/deliverables with projectId", async () => {
+    const base = await supertest(buildApp()).get("/api/estimate/deliverables?projectId=proj-1");
+    const alias = await supertest(buildApp()).get("/api/projects/proj-1/deliverables");
+    expect(alias.status).toBe(200);
+    expect(alias.body).toEqual(base.body);
+  });
+});
+
+// ─── GET /api/projects/:projectId/estimate/deliverables ─────────────────────
+describe("GET /api/projects/:projectId/estimate/deliverables", () => {
+  it("returns 200 array", async () => {
+    const res = await supertest(buildApp()).get("/api/projects/proj-1/estimate/deliverables");
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+  });
+
+  it("returns same payload as /api/projects/:projectId/deliverables", async () => {
+    const base = await supertest(buildApp()).get("/api/projects/proj-1/deliverables");
+    const alias = await supertest(buildApp()).get("/api/projects/proj-1/estimate/deliverables");
+    expect(alias.status).toBe(200);
+    expect(alias.body).toEqual(base.body);
+  });
+});
