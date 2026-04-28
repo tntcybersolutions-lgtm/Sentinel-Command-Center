@@ -10,7 +10,7 @@ import { sql } from "drizzle-orm";
 import { lienWaiverRouter } from "./lien-waiver-routes";
 import { takeoffItemsRouter } from "./takeoff-items-routes";
 import { deliverableGeneratorRouter } from "./deliverable-generator-routes";
-
+import { documentContentRouter } from "./document-content-routes";
 validateBidJacketTaxonomy();
 
 const app = express();
@@ -74,6 +74,7 @@ app.use((req, res, next) => {
     app.use("/api/lien-waivers", lienWaiverRouter);
         app.use(takeoffItemsRouter);
     app.use(deliverableGeneratorRouter);
+  app.use(documentContentRouter);
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
