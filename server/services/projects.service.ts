@@ -7,6 +7,7 @@ import { eq, and, sql, desc, gte, lte, count } from "drizzle-orm";
 import { auditService } from "./audit.service";
 import { ensureDefaultProjectFolders } from "./project-documents.seed";
 import { importBidJacketArtifactsToProjectDocuments } from "./bid-jacket-to-project-documents.service";
+import { createProjectLienWaivers, seedLienWaiverTemplates } from "../lien-waivers";
 
 class ProjectsService {
   async listProjects(tenantId: string, filters?: {
@@ -77,6 +78,18 @@ class ProjectsService {
     });
 
     await ensureDefaultProjectFolders(tenantId, project.id);
+    
+        // Auto-populate 50-state lien waivers for new project (idempotent)
+        try {
+          await seedLienWaiverTemplates(tenantId);
+          const stateCode: string =
+            (project.addressJson as any)?.state ||
+            (project.addressJson as any)?.stateCode ||
+            "TX";
+          await createProjectLienWaivers(tenantId, project.id, stateCode);
+        } catch (lienErr) {
+          console.error("Failed to auto-create lien waivers for project:", lienErr);
+        }
 
     if (project.bidProjectId) {
       await importBidJacketArtifactsToProjectDocuments({
