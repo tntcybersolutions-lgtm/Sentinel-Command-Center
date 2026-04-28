@@ -28,8 +28,8 @@ vi.mock("drizzle-orm", () => ({
   and: vi.fn(),
 }));
 
-// Import the router under test (the deliverable-generator-routes exports deliverableGeneratorRouter)
-import { deliverableGeneratorRouter } from "../deliverable-generator-routes";
+// Import the router under test (the deliverable-generator-routes exports documentContentRouter)
+import { documentContentRouter } from "../document-content-routes";
 
 function buildApp() {
   const app = express();
@@ -39,7 +39,7 @@ function buildApp() {
     req.user = { tenantId: "tenant-1", id: "user-1" };
     next();
   });
-  app.use(deliverableGeneratorRouter);
+  app.use(documentContentRouter);
   return app;
 }
 
