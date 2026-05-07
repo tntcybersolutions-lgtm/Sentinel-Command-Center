@@ -534,6 +534,47 @@ function parseObjectPath(path: string): { bucketName: string; objectName: string
   };
 }
 
+async function enrichScopeExtractWithLLM(
+  docs: GeneratedDocument[],
+  opp: OpportunityData,
+  jobId: string,
+): Promise<void> {
+  const target = docs.find((d) => d.generatedType === "ScopeExtractRiskFlags");
+  if (!target) return;
+
+  try {
+    const { extractSolicitationScope, renderScopeExtractionMarkdown } = await import(
+      "./herbie-scope-extractor.service"
+    );
+    const solicitationNumber = opp.sourceSystemId || null;
+    const extraction = await extractSolicitationScope({
+      title: opp.title,
+      solicitationNumber,
+      agency: null,
+      setAside: opp.setAside || null,
+      contractValue: opp.contractValue ? Number(opp.contractValue) : null,
+      naics: opp.naicsCodes || null,
+      solicitationText: [opp.description, opp.synopsis].filter(Boolean).join("\n\n"),
+    });
+    const markdown = renderScopeExtractionMarkdown(
+      {
+        title: opp.title,
+        solicitationNumber,
+        solicitationText: "",
+      },
+      extraction,
+    );
+    target.content = markdown;
+    target.fileName = target.fileName.replace(/\.txt$/, ".md");
+    target.mimeType = "text/markdown";
+    console.log(
+      `[HERBIE-JACKET-BUILDER] Job ${jobId}: scope extraction (${extraction.source}, conf=${extraction.confidence.toFixed(2)})`,
+    );
+  } catch (err: any) {
+    console.error(`[HERBIE-JACKET-BUILDER] Job ${jobId}: scope enrichment failed (keeping template): ${err?.message}`);
+  }
+}
+
 export async function buildBidJacket(bidProjectId: string, mode: "build" | "repair" = "build"): Promise<{
   success: boolean;
   documentsCreated: number;
@@ -667,6 +708,11 @@ export async function buildBidJacket(bidProjectId: string, mode: "build" | "repa
   }
 
   const generatedDocs = generateDocumentsFromOpportunity(oppData, bidProjectId);
+
+  // Enrich the ScopeExtractRiskFlags doc with real LLM-driven extraction
+  // when an Anthropic key is configured. The extractor degrades to a
+  // deterministic fallback in stub mode, so this never blocks the build.
+  await enrichScopeExtractWithLLM(generatedDocs, oppData, jobId);
 
   let documentsCreated = 0;
   let documentsSkipped = 0;
