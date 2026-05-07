@@ -456,9 +456,9 @@ export class SamGovIngestionService {
 }
 
 export async function createSamGovIngestionService(tenantId: string): Promise<SamGovIngestionService | null> {
-  const apiKey = process.env.SAMGOV_API_KEY;
+  const apiKey = process.env.SAM_GOV_API_KEY;
   if (!apiKey) {
-    console.warn("SAMGOV_API_KEY not configured");
+    console.warn("SAM_GOV_API_KEY not configured");
     return null;
   }
 
