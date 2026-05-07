@@ -38,6 +38,8 @@ import {
   cancelPendingReminders,
   processDueReminders,
   autofillWaiver,
+  ensureLienWaiverFolder,
+  backfillLienWaiverFoldersForAllProjects,
   WAIVER_TYPES,
   WAIVER_STATUSES,
   type WaiverStatus,
@@ -87,6 +89,20 @@ function handleError(res: Response, err: unknown, fallback = "request failed") {
 }
 
 export function registerLienWaiverRoutes(app: Express): void {
+  app.post("/api/lien-waivers/folders/backfill", async (_req: Request, res: Response) => {
+    try {
+      const result = await backfillLienWaiverFoldersForAllProjects(DEFAULT_TENANT_ID);
+      res.json({ ok: true, ...result });
+    } catch (err) { handleError(res, err); }
+  });
+
+  app.post("/api/lien-waivers/folders/ensure/:projectId", async (req: Request, res: Response) => {
+    try {
+      const result = await ensureLienWaiverFolder(DEFAULT_TENANT_ID, String(req.params.projectId));
+      res.json({ ok: true, ...result });
+    } catch (err) { handleError(res, err); }
+  });
+
   app.get("/api/lien-waivers", async (req: Request, res: Response) => {
     try {
       const { projectId, vendorId, payAppId, status, waiverType } = req.query;
