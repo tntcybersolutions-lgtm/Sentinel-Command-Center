@@ -1,24 +1,13 @@
-// Phase 2 v2 — concrete production deps for jacket-auto-fill.service.v2.
+// Phase 2 v2.1 — concrete production deps for jacket-auto-fill.service.v2.
 //
 // This file is the "wiring" layer. The orchestrator stays pure (everything
 // behind the JacketAutoFillDeps interface). Here we hook each interface
 // method to a real db query / storage call.
 //
-// All the source service functions referenced below already exist in the
-// codebase as of feature/phase-1-herbie:
-//   - bid-jacket-filing.service: folderResolver, objectStorageWriter,
-//     httpArtifactDownloader
-//   - shared/schema: takeoffQuantities, blueprints, complianceItems,
-//     jacketDocuments, BID_JACKET_FOLDERS, bidJacketFolderDisplayName
-//   - replit_integrations/object_storage: objectStorageClient
-//
-// Folder seeding requirement: jacket folders must exist for the bid project
-// (run seedFolderSectionsFromConstants + ensureCanonicalFolders before this
-// service runs). If folders aren't seeded, fileX paths return "no_folders"
-// in the AutoFillResult.skipped array.
+// v2.1 change: PDF renderers via jacket-pdf-renderer.ts (pdf-lib).
 
 import { db } from "../db";
-import { and, eq, desc } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import {
   takeoffQuantities,
   blueprints,
@@ -39,13 +28,13 @@ import type {
   BlueprintRef,
   SubcontractorDocRef,
 } from "./jacket-auto-fill.service.v2";
+import {
+  renderTakeoffPdf as renderTakeoffPdfImpl,
+  renderScopePdf as renderScopePdfImpl,
+} from "./jacket-pdf-renderer";
 
 // ─── DB adapters ─────────────────────────────────────────────────────────────
 
-/**
- * Build a TakeoffSnapshot from takeoffQuantities rows for the bid project.
- * Returns null if no quantities exist.
- */
 async function getTakeoffSnapshot(
   tenantId: string,
   bidProjectId: string,
@@ -59,7 +48,6 @@ async function getTakeoffSnapshot(
     ));
   if (rows.length === 0) return null;
 
-  // Find the project for the name. Best-effort.
   const [project] = await db
     .select({ id: bidProjects.id, title: bidProjects.title })
     .from(bidProjects)
@@ -80,7 +68,6 @@ async function getTakeoffSnapshot(
   });
 
   const totalCost = items.reduce((sum, it) => sum + (it.extendedCost || 0), 0);
-  // Use the most-recent updatedAt across rows so re-finalize replaces the doc.
   const updatedAtMs = rows.reduce((max, r) => {
     const t = r.updatedAt ? new Date(r.updatedAt as any).getTime() : 0;
     return Math.max(max, t);
@@ -97,12 +84,6 @@ async function getTakeoffSnapshot(
   };
 }
 
-/**
- * Build a ScopeExtractionSummary from compliance_items + bid_project rows.
- * Phase 1 doesn't ship a dedicated scope-extraction table; we synthesize one
- * from the compliance matrix that handleSolicitationParsed already populates.
- * If a future PR adds a real scope-extractor output table, swap this out.
- */
 async function getScopeExtraction(
   tenantId: string,
   bidProjectId: string,
@@ -116,26 +97,18 @@ async function getScopeExtraction(
     ));
   if (rows.length === 0) return null;
 
-  const [project] = await db
-    .select({ id: bidProjects.id, title: bidProjects.title, description: bidProjects.description })
-    .from(bidProjects)
-    .where(eq(bidProjects.id, bidProjectId));
-
   const scopeItems = rows.map((r) => `${r.clauseRef}: ${r.title}`);
   const divisionsSet = new Set<string>(
     rows.map((r) => (r.clauseRef || "").split(" ")[0] || "FAR").filter(Boolean),
   );
-
-  // Hash from solicitation refs so re-runs on the same compliance matrix
-  // replace the same scope summary doc.
   const sourceHash = simpleHash(scopeItems.join("|"));
 
   return {
     bidProjectId,
     scopeItems,
     divisions: Array.from(divisionsSet),
-    exclusions: [],   // populated when scope-extractor lands
-    assumptions: [],  // populated when scope-extractor lands
+    exclusions: [],
+    assumptions: [],
     sourceHash,
   };
 }
@@ -161,20 +134,10 @@ async function listBlueprints(
     }));
 }
 
-/**
- * Subcontractor docs come from compliance_items rows whose clauseRef tags
- * them as W-9 / COI / lien_waiver. Real wiring depends on whichever table
- * the project uses for vendor docs — this is a safe Phase 2 default.
- *
- * If the codebase has a dedicated `vendor_documents` table, swap the source
- * here. The orchestrator interface is stable.
- */
 async function listSubcontractorDocs(
   tenantId: string,
   bidProjectId: string,
 ): Promise<SubcontractorDocRef[]> {
-  // For now: treat any complianceItem with documentRef + matching tag as a
-  // subcontractor doc. When a real vendor_documents table lands, replace.
   const rows = await db
     .select()
     .from(complianceItems)
@@ -207,70 +170,8 @@ async function listSubcontractorDocs(
   return docs;
 }
 
-// ─── Markdown renderers (produce buffers; matches what the existing
-// deliverable-generator emits for other types) ──────────────────────────────
-
-function renderTakeoffMarkdown(snapshot: TakeoffSnapshot): Buffer {
-  const itemRows = snapshot.items.map((it) =>
-    `| ${escapeMd(it.division)} | ${escapeMd(it.description)} | ${it.quantity} ${escapeMd(it.unit)} | $${it.unitCost.toFixed(2)} | $${it.extendedCost.toFixed(2)} |`
-  ).join("\n");
-
-  const md = `# Takeoff Summary — ${escapeMd(snapshot.projectName)}
-
-**Bid Project ID:** \`${snapshot.bidProjectId}\`
-**Generated:** ${new Date().toISOString()}
-**Last Takeoff Update:** ${snapshot.updatedAt}
-**Items:** ${snapshot.itemCount}
-**Total Cost:** $${snapshot.totalCost.toFixed(2)}
-
-## Line Items
-
-| Division | Description | Quantity | Unit Cost | Extended |
-|---|---|---|---|---|
-${itemRows || "| — | (no line items) | — | — | — |"}
-
----
-*Auto-generated by jacket-auto-fill. Idempotent: a future re-finalize replaces this in place.*
-`;
-  return Buffer.from(md, "utf8");
-}
-
-function renderScopeMarkdown(scope: ScopeExtractionSummary): Buffer {
-  const sectionList = (lst: string[], heading: string) =>
-    lst.length === 0 ? `_None._` : lst.map((s) => `- ${escapeMd(s)}`).join("\n");
-
-  const md = `# Scope Summary
-
-**Bid Project ID:** \`${scope.bidProjectId}\`
-**Source Hash:** \`${scope.sourceHash}\`
-**Generated:** ${new Date().toISOString()}
-
-## Scope Items
-${sectionList(scope.scopeItems, "Scope Items")}
-
-## Divisions
-${sectionList(scope.divisions, "Divisions")}
-
-## Exclusions
-${sectionList(scope.exclusions, "Exclusions")}
-
-## Assumptions
-${sectionList(scope.assumptions, "Assumptions")}
-
----
-*Auto-generated by jacket-auto-fill from the compliance matrix. Idempotent.*
-`;
-  return Buffer.from(md, "utf8");
-}
-
 // ─── Filing primitives ───────────────────────────────────────────────────────
 
-/**
- * Upsert a jacketDocuments row by autoFillKey (stored in tagsJson.autoFillKey).
- * If a row exists, update it in place; else insert.
- *
- * Returns { documentId, replaced }.
- */
 async function fileBufferIntoJacket(args: {
   tenantId: string;
   bidProjectId: string;
@@ -290,18 +191,6 @@ async function fileBufferIntoJacket(args: {
     fileName: safeName,
   });
 
-  // Find existing row by autoFillKey within the same folder
-  const existing = await db
-    .select({ id: jacketDocuments.id })
-    .from(jacketDocuments)
-    .where(and(
-      eq(jacketDocuments.tenantId, args.tenantId),
-      eq(jacketDocuments.folderId, args.folderId),
-    ));
-
-  // Drizzle doesn't yet have a typed JSON-key match; filter in memory by tag.
-  // jacketDocuments rows are scoped per bid project's folder so the set
-  // is small.
   const allInFolder = await db
     .select()
     .from(jacketDocuments)
@@ -351,14 +240,6 @@ async function fileBufferIntoJacket(args: {
   return { documentId: doc.id, replaced: false };
 }
 
-/**
- * Read bytes from object storage at sourceStoragePath, then file via
- * fileBufferIntoJacket. The source bytes stay in their original location;
- * we make a copy in the jacket folder.
- *
- * sourceStoragePath is the storageKey style produced by objectStorageWriter
- * (e.g. "/objects/<entityId>"). We translate that to a bucket+name read.
- */
 async function copyStorageFileIntoJacket(args: {
   tenantId: string;
   bidProjectId: string;
@@ -368,7 +249,6 @@ async function copyStorageFileIntoJacket(args: {
   documentType: string;
   autoFillKey: string;
 }): Promise<{ documentId: string; replaced: boolean }> {
-  // Translate "/objects/<entityId>" → bucket + name
   const entityId = args.sourceStoragePath.replace(/^\/objects\//, "");
   const privateDir = process.env.PRIVATE_OBJECT_DIR || "";
   const fullPath = `${privateDir}/${entityId}`.replace(/\/+/g, "/");
@@ -410,12 +290,7 @@ function inferFileType(fileName: string, mimeType: string): string {
   return "bin";
 }
 
-function escapeMd(s: unknown): string {
-  return String(s ?? "").replace(/\|/g, "\\|");
-}
-
 function shortHash(s: string): string {
-  // Quick non-cryptographic hash for dedupe key in object name
   let h = 0;
   for (let i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0;
   return Math.abs(h).toString(36);
@@ -429,10 +304,6 @@ function simpleHash(s: string): string {
 
 // ─── Public factory ─────────────────────────────────────────────────────────
 
-/**
- * Build the production deps object.  Used by the route handler and the
- * post-takeoff-update event handler.
- */
 export function buildProductionAutoFillDeps(): JacketAutoFillDeps {
   return {
     getTakeoffSnapshot,
@@ -443,8 +314,8 @@ export function buildProductionAutoFillDeps(): JacketAutoFillDeps {
     resolveFolderId: (tenantId, bidProjectId, code) =>
       folderResolver(tenantId, bidProjectId, code),
 
-    renderTakeoffMarkdown: async (snapshot) => renderTakeoffMarkdown(snapshot),
-    renderScopeMarkdown: async (scope) => renderScopeMarkdown(scope),
+    renderTakeoffPdf: async (snapshot) => renderTakeoffPdfImpl(snapshot),
+    renderScopePdf: async (scope) => renderScopePdfImpl(scope),
 
     fileBufferIntoJacket,
     copyStorageFileIntoJacket,
