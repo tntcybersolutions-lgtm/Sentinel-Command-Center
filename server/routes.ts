@@ -18120,6 +18120,46 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
     }
   });
 
+  // AI takeoff assistant: suggest line items from a scope blurb.
+  app.post("/api/takeoff/suggest", async (req: Request, res: Response) => {
+    try {
+      const { projectTitle, scopeText, existingItemNames, maxItems } = req.body ?? {};
+      if (typeof projectTitle !== "string" || typeof scopeText !== "string") {
+        return res.status(400).json({ error: "projectTitle (string) and scopeText (string) are required" });
+      }
+      const { suggestTakeoffItems } = await import("./services/takeoff-assistant.service");
+      const result = await suggestTakeoffItems({
+        projectTitle,
+        scopeText,
+        existingItemNames: Array.isArray(existingItemNames) ? existingItemNames.filter((n) => typeof n === "string") : undefined,
+        maxItems: typeof maxItems === "number" && maxItems > 0 ? Math.min(maxItems, 30) : undefined,
+      });
+      res.json(result);
+    } catch (error: any) {
+      console.error("[Takeoff] Suggest error:", error);
+      res.status(500).json({ error: "Failed to suggest takeoff items", message: error.message });
+    }
+  });
+
+  // AI takeoff assistant: classify a single item into a trade.
+  app.post("/api/takeoff/categorize", async (req: Request, res: Response) => {
+    try {
+      const { name, description } = req.body ?? {};
+      if (typeof name !== "string" || name.trim().length === 0) {
+        return res.status(400).json({ error: "name (string) is required" });
+      }
+      const { categorizeTakeoffItem } = await import("./services/takeoff-assistant.service");
+      const result = await categorizeTakeoffItem({
+        name: name.trim(),
+        description: typeof description === "string" ? description : undefined,
+      });
+      res.json(result);
+    } catch (error: any) {
+      console.error("[Takeoff] Categorize error:", error);
+      res.status(500).json({ error: "Failed to categorize takeoff item", message: error.message });
+    }
+  });
+
   app.delete("/api/takeoff-quantities/:id", async (req: Request, res: Response) => {
     try {
       await db.delete(takeoffQuantities)
