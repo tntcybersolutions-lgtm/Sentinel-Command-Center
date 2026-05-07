@@ -25,6 +25,7 @@ import {
 } from "lucide-react";
 import "react-pdf/dist/Page/AnnotationLayer.css";
 import "react-pdf/dist/Page/TextLayer.css";
+import { BuildBidJacketButton } from "@/components/smart-takeoff/jacket-button";
 
 pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
 
@@ -59,6 +60,7 @@ interface BlueprintRow {
   storageKey: string;
   pageCount: number | null;
   pixelsPerFootByPage: Record<string, number> | null;
+  bidProjectId: string | null;
 }
 
 const VISION_TARGETS = [
@@ -483,6 +485,18 @@ export default function SmartTakeoffPage() {
 
       {/* Measurement history */}
       <aside className="w-80 border-l p-4 overflow-y-auto bg-white">
+        {/* Phase 2 v2.1 — Build Bid Jacket button: rendered when this blueprint
+            is tied to a bidProject. Clicking pulls takeoff PDF, blueprints,
+            scope, and subcontractor docs into the jacket folders idempotently. */}
+        {blueprint.bidProjectId && (
+          <div className="mb-4 pb-4 border-b">
+            <h3 className="font-semibold text-sm tracking-wide uppercase text-muted-foreground mb-2">
+              Bid Jacket
+            </h3>
+            <BuildBidJacketButton bidProjectId={blueprint.bidProjectId} fullWidth />
+          </div>
+        )}
+
         <h3 className="font-semibold text-sm tracking-wide uppercase text-muted-foreground mb-3">Measurements ({measurements.length})</h3>
         {measurements.length === 0 ? (
           <p className="text-xs text-muted-foreground">No measurements yet. Pick a tool and start clicking.</p>
