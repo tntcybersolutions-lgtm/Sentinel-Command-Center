@@ -1,10 +1,11 @@
-// Phase 2 v2.1 — concrete production deps for jacket-auto-fill.service.v2.
+// Phase 2 v2.2 — concrete production deps for jacket-auto-fill.service.v2.
 //
-// This file is the "wiring" layer. The orchestrator stays pure (everything
-// behind the JacketAutoFillDeps interface). Here we hook each interface
-// method to a real db query / storage call.
-//
-// v2.1 change: PDF renderers via jacket-pdf-renderer.ts (pdf-lib).
+// Schema-correct version. Earlier v2.1 had assumed column names that
+// don't match the real schema. This version queries:
+//   - projects (not bidProjects) for the project name + projectId mapping
+//   - takeoffQuantities.projectId (not bidProjectId)
+//   - blueprints.fileName (not filename)
+//   - falls back gracefully when there's no post-award project yet
 
 import { db } from "../db";
 import { and, eq } from "drizzle-orm";
@@ -14,6 +15,8 @@ import {
   complianceItems,
   jacketDocuments,
   bidProjects,
+  projects,
+  opportunities,
   bidJacketFolderDisplayName,
 } from "@shared/schema";
 import {
@@ -35,31 +38,75 @@ import {
 
 // ─── DB adapters ─────────────────────────────────────────────────────────────
 
+/**
+ * Resolve the post-award project + name for a bidProjectId.
+ * Returns null if no project has been created yet (pre-award bid projects
+ * won't have takeoff data).
+ */
+async function resolveProjectForBidProject(
+  tenantId: string,
+  bidProjectId: string,
+): Promise<{ projectId: string; projectName: string } | null> {
+  const [proj] = await db
+    .select({ id: projects.id, name: projects.name })
+    .from(projects)
+    .where(and(
+      eq(projects.tenantId, tenantId),
+      eq(projects.bidProjectId, bidProjectId),
+    ));
+
+  if (proj) {
+    return { projectId: proj.id, projectName: proj.name || "Bid Project" };
+  }
+
+  // No post-award project yet — try to derive a friendly name from the
+  // linked opportunity so PDFs aren't completely anonymous.
+  const [bp] = await db
+    .select({ opportunityId: bidProjects.opportunityId })
+    .from(bidProjects)
+    .where(eq(bidProjects.id, bidProjectId));
+  if (!bp?.opportunityId) return null;
+
+  const [opp] = await db
+    .select({ title: opportunities.title })
+    .from(opportunities)
+    .where(eq(opportunities.id, bp.opportunityId));
+  if (!opp) return null;
+
+  // No project yet, but we have an opportunity. We can't pull takeoff
+  // (which is keyed on projectId), so signal "no takeoff" by returning
+  // null. The orchestrator will skip the takeoff section gracefully.
+  return null;
+}
+
 async function getTakeoffSnapshot(
   tenantId: string,
   bidProjectId: string,
 ): Promise<TakeoffSnapshot | null> {
+  const projInfo = await resolveProjectForBidProject(tenantId, bidProjectId);
+  if (!projInfo) return null;
+
   const rows = await db
     .select()
     .from(takeoffQuantities)
     .where(and(
       eq(takeoffQuantities.tenantId, tenantId),
-      eq(takeoffQuantities.bidProjectId, bidProjectId),
+      eq(takeoffQuantities.projectId, projInfo.projectId),
     ));
   if (rows.length === 0) return null;
-
-  const [project] = await db
-    .select({ id: bidProjects.id, title: bidProjects.title })
-    .from(bidProjects)
-    .where(eq(bidProjects.id, bidProjectId));
 
   const items = rows.map((r) => {
     const quantity = parseFloat(String(r.quantity ?? "0")) || 0;
     const unitCost = parseFloat(String(r.unitCost ?? "0")) || 0;
     const extendedCost = parseFloat(String(r.extendedCost ?? "0")) || 0;
+    const locationParts = [r.room, r.floor, r.zone].filter(Boolean) as string[];
+    const description =
+      (r.notes && r.notes.trim()) ||
+      (locationParts.length > 0 ? locationParts.join(" / ") : "Takeoff line");
+    const division = r.categoryId ? `Cat ${String(r.categoryId).slice(0, 8)}` : "General";
     return {
-      division: (r as any).category || "General",
-      description: (r as any).name || (r as any).description || "Item",
+      division,
+      description,
       quantity,
       unit: r.unit || "ea",
       unitCost,
@@ -80,7 +127,7 @@ async function getTakeoffSnapshot(
     itemCount: items.length,
     items,
     updatedAt,
-    projectName: project?.title || "Bid Project",
+    projectName: projInfo.projectName,
   };
 }
 
@@ -97,9 +144,11 @@ async function getScopeExtraction(
     ));
   if (rows.length === 0) return null;
 
-  const scopeItems = rows.map((r) => `${r.clauseRef}: ${r.title}`);
+  const scopeItems = rows.map((r) => `${r.clauseRef ?? ""}: ${r.title}`.trim());
   const divisionsSet = new Set<string>(
-    rows.map((r) => (r.clauseRef || "").split(" ")[0] || "FAR").filter(Boolean),
+    rows
+      .map((r) => (r.clauseRef || "").split(" ")[0] || "")
+      .filter(Boolean),
   );
   const sourceHash = simpleHash(scopeItems.join("|"));
 
@@ -128,46 +177,22 @@ async function listBlueprints(
     .filter((r) => !!r.storageKey)
     .map((r) => ({
       blueprintId: r.id,
-      filename: r.filename || `blueprint-${r.id}.pdf`,
-      storagePath: r.storageKey || "",
-      pageCount: (r as any).pageCount ?? 0,
+      filename: r.fileName || r.title || `blueprint-${r.id}.pdf`,
+      storagePath: r.storageKey,
+      pageCount: r.pageCount ?? 0,
     }));
 }
 
+/**
+ * Subcontractor docs: returns [] until a dedicated vendor_documents table
+ * lands. The orchestrator will skip the W-9/COI/lien sections cleanly with
+ * reason "no_subcontractor_docs", keeping the rest of auto-fill working.
+ */
 async function listSubcontractorDocs(
-  tenantId: string,
-  bidProjectId: string,
+  _tenantId: string,
+  _bidProjectId: string,
 ): Promise<SubcontractorDocRef[]> {
-  const rows = await db
-    .select()
-    .from(complianceItems)
-    .where(and(
-      eq(complianceItems.tenantId, tenantId),
-      eq(complianceItems.bidProjectId, bidProjectId),
-    ));
-
-  const docs: SubcontractorDocRef[] = [];
-  for (const r of rows) {
-    const ref = String((r as any).documentRef || "");
-    const storageKey = String((r as any).storageKey || "");
-    if (!storageKey) continue;
-    const refLower = (r.title || "").toLowerCase() + " " + ref.toLowerCase();
-    let kind: SubcontractorDocRef["kind"] | null = null;
-    if (refLower.includes("w-9") || refLower.includes("w9")) kind = "w9";
-    else if (refLower.includes("coi") || refLower.includes("insurance")) kind = "coi";
-    else if (refLower.includes("lien")) kind = "lien_waiver";
-    if (!kind) continue;
-    docs.push({
-      docId: r.id,
-      vendorId: (r as any).vendorId || ref || r.id,
-      vendorName: (r as any).vendorName || ref || "Vendor",
-      kind,
-      filename: (r as any).filename || `${ref}.pdf`,
-      storagePath: storageKey,
-      expiresAt: (r as any).expiresAt ?? null,
-    });
-  }
-  return docs;
+  return [];
 }
 
 // ─── Filing primitives ───────────────────────────────────────────────────────
