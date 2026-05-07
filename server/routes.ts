@@ -4119,7 +4119,7 @@ export async function registerRoutes(
   app.patch("/api/bid-projects/:bidProjectId/jacket-checklist/:itemId", async (req: Request, res: Response) => {
     try {
       const itemId = p(req.params.itemId);
-      const { status, ownerUserId, dueAt, blockedReason } = req.body;
+      const { status, ownerUserId, dueAt, blockedReason, force } = req.body;
       const updates: Record<string, any> = { updatedAt: new Date() };
       if (status) {
         updates.status = status;
@@ -4131,6 +4131,32 @@ export async function registerRoutes(
       if (ownerUserId !== undefined) updates.ownerUserId = ownerUserId;
       if (dueAt !== undefined) updates.dueAt = dueAt ? new Date(dueAt) : null;
       if (blockedReason !== undefined) updates.blockedReason = blockedReason;
+
+      // Gate: cannot transition to "done" while required artifacts are missing.
+      if (status === "done" && force !== true) {
+        const [item] = await db.select().from(bidJacketChecklistItems)
+          .where(eq(bidJacketChecklistItems.id, itemId));
+        if (!item) return res.status(404).json({ error: "Checklist item not found" });
+
+        const artifacts = await db.select({
+          templateCode: bidJacketArtifacts.templateCode,
+          status: bidJacketArtifacts.status,
+        }).from(bidJacketArtifacts)
+          .where(eq(bidJacketArtifacts.bidProjectId, item.bidProjectId));
+
+        const { evaluateChecklistArtifactGate } = await import("./services/checklist-gate.service");
+        const gate = evaluateChecklistArtifactGate({
+          requiredArtifactCodes: item.requiredArtifactCodes,
+          bidArtifacts: artifacts,
+        });
+        if (gate.blocked) {
+          return res.status(409).json({
+            error: "Required artifacts are not ready",
+            missingArtifactCodes: gate.missingCodes,
+            hint: "Mark the missing artifacts ready/approved, or pass { force: true } to override.",
+          });
+        }
+      }
 
       const [updated] = await db
         .update(bidJacketChecklistItems)
@@ -15644,6 +15670,22 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
         : `inline; filename="${fileName}"`;
       res.setHeader("Content-Disposition", cd);
 
+      try {
+        await storage.createAuditLogEntry({
+          tenantId: DEFAULT_TENANT_ID,
+          action: disposition === "attachment" ? "download" : "view",
+          documentId: doc.id,
+          actorType: "user",
+          detailsJson: {
+            fileName: doc.fileName,
+            ip: req.ip || req.socket?.remoteAddress || "unknown",
+            userAgent: req.headers["user-agent"] || "unknown",
+          },
+        });
+      } catch (auditErr) {
+        console.error("[doc-content] audit log write failed:", auditErr);
+      }
+
       stream.pipe(res);
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : "Stream failed";
@@ -20318,15 +20360,22 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
 
   // ============================================================================
   // HERBIE AUTO-BUILD JACKET / AUTOPOPULATE
+  // Both routes call the same handler. /autopopulate is the canonical path
+  // used by the bid-jacket UI; /auto-build is kept for API compatibility.
   // ============================================================================
+  async function handleJacketAutoBuild(bidProjectId: string, modeRaw: unknown, res: Response) {
+    const mode = (modeRaw === "repair" ? "repair" : "build") as "build" | "repair";
+    const { buildBidJacket } = await import("./services/herbie-jacket-builder.service");
+    const result = await buildBidJacket(bidProjectId, mode);
+    if (!result.success) {
+      return res.status(400).json(result);
+    }
+    res.json(result);
+  }
+
   app.post("/api/jackets/bid/:bidProjectId/auto-build", async (req: Request, res: Response) => {
     try {
-      const { buildBidJacket } = await import("./services/herbie-jacket-builder.service");
-      const result = await buildBidJacket(p(req.params.bidProjectId));
-      if (!result.success) {
-        return res.status(400).json(result);
-      }
-      res.json(result);
+      await handleJacketAutoBuild(p(req.params.bidProjectId), req.query.mode, res);
     } catch (error: any) {
       console.error("[Jackets] Error auto-building jacket:", error);
       res.status(500).json({ error: "Failed to auto-build jacket", message: error.message });
@@ -20335,14 +20384,7 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
 
   app.post("/api/bids/:id/jacket/autopopulate", async (req: Request, res: Response) => {
     try {
-      const bidProjectId = p(req.params.id);
-      const mode = (req.query.mode === "repair" ? "repair" : "build") as "build" | "repair";
-      const { buildBidJacket } = await import("./services/herbie-jacket-builder.service");
-      const result = await buildBidJacket(bidProjectId, mode);
-      if (!result.success) {
-        return res.status(400).json(result);
-      }
-      res.json(result);
+      await handleJacketAutoBuild(p(req.params.id), req.query.mode, res);
     } catch (error: any) {
       console.error("[Autopopulate] Error:", error);
       res.status(500).json({ error: "Failed to autopopulate jacket", message: error.message });
