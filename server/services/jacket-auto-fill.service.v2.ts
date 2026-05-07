@@ -1,19 +1,15 @@
-// Phase 2 v2 — bid jacket auto-fill orchestrator (rewritten to fit the real
-// codebase architecture).
+// Phase 2 v2.1 — bid jacket auto-fill orchestrator (PDF outputs).
 //
-// Differences from v1 placeholder:
-//   - Keys are (tenantId, bidProjectId) — not arbitrary jacketIds. Bid jackets
-//     are 1:1 with bidProjects in this codebase.
+// Architecture (from v2):
+//   - Keys are (tenantId, bidProjectId) — bid jackets are 1:1 with bidProjects.
 //   - Folders are addressed by canonical CODE ("00".."18") from
-//     shared/schema.ts BID_JACKET_FOLDERS, resolved via folderResolver
-//     from bid-jacket-filing.service.
-//   - Filing flow uses the existing storage primitives: objectStorageWriter
-//     to put a buffer/markdown to object storage, then jacketDocuments insert.
-//   - Idempotency tag is stored on jacketDocuments.tagsJson.autoFillKey.
-//     Re-running the orchestrator finds a prior row by that key and overwrites
-//     the storage object + updates the row, never duplicates.
-//   - Outputs are markdown (.md) — matches what deliverable-generator-routes
-//     emits today. PDF rendering is a follow-up.
+//     shared/schema.ts BID_JACKET_FOLDERS via folderResolver.
+//   - Filing flow uses objectStorageWriter + jacketDocuments insert.
+//   - Idempotency tag is on jacketDocuments.tagsJson.autoFillKey.
+//
+// v2.1 change: renderXxxMarkdown → renderXxxPdf. Outputs are real PDFs
+// generated via pdf-lib in jacket-pdf-renderer.ts. ContentType is
+// application/pdf, file extensions are .pdf.
 //
 // The orchestrator is dependency-injected so tests can stub every external
 // call. Concrete production wiring lives in jacket-auto-fill.deps.ts.
@@ -107,13 +103,12 @@ export interface JacketAutoFillDeps {
   resolveFolderId(tenantId: string, bidProjectId: string, folderCode: string): Promise<string | null>;
 
   /**
-   * Render a takeoff snapshot to a markdown buffer. Reuses the deliverable-
-   * generator's bid-package generator pattern (or trade-scope, configurable).
+   * Render a takeoff snapshot to a PDF buffer.
    */
-  renderTakeoffMarkdown(snapshot: TakeoffSnapshot): Promise<Buffer>;
+  renderTakeoffPdf(snapshot: TakeoffSnapshot): Promise<Buffer>;
 
-  /** Render a scope extraction summary to markdown. */
-  renderScopeMarkdown(scope: ScopeExtractionSummary): Promise<Buffer>;
+  /** Render a scope extraction summary to PDF. */
+  renderScopePdf(scope: ScopeExtractionSummary): Promise<Buffer>;
 
   /**
    * File a buffer (we have the bytes already) into a jacket folder.
@@ -270,21 +265,21 @@ async function fileTakeoff(args: SectionArgs): Promise<void> {
 
   let buffer: Buffer;
   try {
-    buffer = await args.deps.renderTakeoffMarkdown(snapshot);
+    buffer = await args.deps.renderTakeoffPdf(snapshot);
   } catch (err: any) {
     args.skipped.push({ kind: "takeoff", reason: "render_failed", detail: err?.message ?? String(err) });
     args.deps.log("warn", "auto-fill: takeoff render failed", { bidProjectId: args.bidProjectId, err: err?.message });
     return;
   }
 
-  const fileName = `takeoff-summary-${slugDate(snapshot.updatedAt)}.md`;
+  const fileName = `takeoff-summary-${slugDate(snapshot.updatedAt)}.pdf`;
   const autoFillKey = formatAutoFillKey({ kind: "takeoff", suffix: `v=${snapshot.updatedAt}` });
   const result = await args.deps.fileBufferIntoJacket({
     tenantId: args.tenantId,
     bidProjectId: args.bidProjectId,
     folderId,
     fileName,
-    contentType: "text/markdown",
+    contentType: "application/pdf",
     buffer,
     documentType: "takeoff_summary",
     autoFillKey,
@@ -354,20 +349,20 @@ async function fileScope(args: SectionArgs): Promise<void> {
 
   let buffer: Buffer;
   try {
-    buffer = await args.deps.renderScopeMarkdown(scope);
+    buffer = await args.deps.renderScopePdf(scope);
   } catch (err: any) {
     args.skipped.push({ kind: "scope", reason: "render_failed", detail: err?.message ?? String(err) });
     return;
   }
 
-  const fileName = `scope-summary-${shortHash(scope.sourceHash)}.md`;
+  const fileName = `scope-summary-${shortHash(scope.sourceHash)}.pdf`;
   const autoFillKey = formatAutoFillKey({ kind: "scope", suffix: `v=${scope.sourceHash}` });
   const result = await args.deps.fileBufferIntoJacket({
     tenantId: args.tenantId,
     bidProjectId: args.bidProjectId,
     folderId,
     fileName,
-    contentType: "text/markdown",
+    contentType: "application/pdf",
     buffer,
     documentType: "scope_summary",
     autoFillKey,
