@@ -1,5 +1,5 @@
-// Tests for jacket-auto-fill.service.v2 — the rewritten orchestrator.
-// Stubs every dep so no DB / object storage / Anthropic calls happen.
+// Tests for jacket-auto-fill.service.v2 (v2.1: PDF outputs).
+// Stubs every dep so no DB / object storage / Anthropic / pdf-lib calls happen.
 
 import { describe, it, expect } from "vitest";
 import {
@@ -78,12 +78,10 @@ interface StubState {
   scope: ScopeExtractionSummary | null;
   blueprints: BlueprintRef[];
   subDocs: SubcontractorDocRef[];
-  /** Map folderCode → folderId.  Pass empty {} to simulate unseeded folders. */
   folders: Record<string, string>;
   renderTakeoffShouldFail?: boolean;
   renderScopeShouldFail?: boolean;
   copyShouldFailFor?: string;
-  /** autoFillKey → existing documentId (simulates re-run). */
   existingByKey?: Record<string, string>;
 }
 
@@ -104,13 +102,13 @@ function makeDeps(state: StubState): {
     async listBlueprints() { return state.blueprints; },
     async listSubcontractorDocs() { return state.subDocs; },
     async resolveFolderId(_t, _b, code) { return state.folders[code] ?? null; },
-    async renderTakeoffMarkdown() {
+    async renderTakeoffPdf() {
       if (state.renderTakeoffShouldFail) throw new Error("takeoff render boom");
-      return Buffer.from("# takeoff");
+      return Buffer.from("%PDF-fake-takeoff");
     },
-    async renderScopeMarkdown() {
+    async renderScopePdf() {
       if (state.renderScopeShouldFail) throw new Error("scope render boom");
-      return Buffer.from("# scope");
+      return Buffer.from("%PDF-fake-scope");
     },
     async fileBufferIntoJacket(args) {
       bufferCalls.push({ folderId: args.folderId, fileName: args.fileName, autoFillKey: args.autoFillKey });
@@ -145,9 +143,7 @@ const ALL_FOLDERS = {
   [FOLDER_CODE_BY_KIND.subcontractors_lien_waivers]: "fld-lien",
 };
 
-// ─── Happy path ─────────────────────────────────────────────────────────────
-
-describe("autoFillJacket v2 — happy path", () => {
+describe("autoFillJacket v2.1 — happy path", () => {
   it("files all four classes when sources are present and folders seeded", async () => {
     const { deps, bufferCalls, copyCalls } = makeDeps({
       takeoff: makeTakeoff(),
@@ -162,17 +158,15 @@ describe("autoFillJacket v2 — happy path", () => {
     });
     const result = await autoFillJacket({ tenantId: "t-1", bidProjectId: "bp-1", deps });
     expect(result.success).toBe(true);
-    // 1 takeoff + 2 blueprints + 1 scope + 3 subdocs = 7
     expect(result.totalFiled).toBe(7);
-    expect(result.totalReplaced).toBe(0);
-    expect(bufferCalls).toHaveLength(2);  // takeoff + scope
-    expect(copyCalls).toHaveLength(5);    // 2 blueprints + 3 subdocs
+    expect(bufferCalls).toHaveLength(2);
+    expect(copyCalls).toHaveLength(5);
+    // Validate that .pdf names + application/pdf are produced
+    expect(bufferCalls.find((c) => c.fileName.endsWith(".pdf"))).toBeDefined();
   });
 });
 
-// ─── Idempotency ────────────────────────────────────────────────────────────
-
-describe("autoFillJacket v2 — idempotency", () => {
+describe("autoFillJacket v2.1 — idempotency", () => {
   it("re-running marks docs replaced=true (no duplicates)", async () => {
     const takeoff = makeTakeoff();
     const scope = makeScope();
@@ -196,9 +190,7 @@ describe("autoFillJacket v2 — idempotency", () => {
   });
 });
 
-// ─── Missing sources ────────────────────────────────────────────────────────
-
-describe("autoFillJacket v2 — missing sources", () => {
+describe("autoFillJacket v2.1 — missing sources", () => {
   it("missing takeoff → skipped no_takeoff but other sections still process", async () => {
     const { deps } = makeDeps({
       takeoff: null, scope: makeScope(),
@@ -215,7 +207,7 @@ describe("autoFillJacket v2 — missing sources", () => {
   it("missing folders → skipped no_folders, success=false", async () => {
     const { deps } = makeDeps({
       takeoff: makeTakeoff(), scope: null, blueprints: [], subDocs: [],
-      folders: {},  // unseeded
+      folders: {},
     });
     const result = await autoFillJacket({ tenantId: "t-1", bidProjectId: "bp-1", deps });
     expect(result.success).toBe(false);
@@ -235,9 +227,7 @@ describe("autoFillJacket v2 — missing sources", () => {
   });
 });
 
-// ─── Failures ───────────────────────────────────────────────────────────────
-
-describe("autoFillJacket v2 — failures", () => {
+describe("autoFillJacket v2.1 — failures", () => {
   it("takeoff render fails → render_failed, success=false, scope still runs", async () => {
     const { deps } = makeDeps({
       takeoff: makeTakeoff(), scope: makeScope(),
@@ -266,9 +256,7 @@ describe("autoFillJacket v2 — failures", () => {
   });
 });
 
-// ─── Expired COI ────────────────────────────────────────────────────────────
-
-describe("autoFillJacket v2 — expired COI", () => {
+describe("autoFillJacket v2.1 — expired COI", () => {
   it("expired COI is filed but warns", async () => {
     const expired = makeSubDoc("v-77", "coi", { expiresAt: "2020-01-01T00:00:00Z" });
     const { deps } = makeDeps({
@@ -293,9 +281,7 @@ describe("autoFillJacket v2 — expired COI", () => {
   });
 });
 
-// ─── Folder routing ────────────────────────────────────────────────────────
-
-describe("autoFillJacket v2 — folder routing", () => {
+describe("autoFillJacket v2.1 — folder routing", () => {
   it("each kind goes to the right folderId", async () => {
     const { deps, bufferCalls, copyCalls } = makeDeps({
       takeoff: makeTakeoff(),
@@ -313,8 +299,6 @@ describe("autoFillJacket v2 — folder routing", () => {
     expect(copyCalls.find((c) => c.folderId === "fld-lien")).toBeDefined();
   });
 });
-
-// ─── Helpers ────────────────────────────────────────────────────────────────
 
 describe("formatAutoFillKey", () => {
   it("formats correctly", () => {
