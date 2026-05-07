@@ -6,7 +6,7 @@ import crypto from "crypto";
 
 const DEFAULT_TENANT_ID = "blackhawk-default";
 
-interface OpportunityData {
+export interface OpportunityData {
   id: string;
   title: string;
   sourceSystemId: string | null;
@@ -19,7 +19,7 @@ interface OpportunityData {
   status: string | null;
 }
 
-interface GeneratedDocument {
+export interface GeneratedDocument {
   folderCode: string;
   title: string;
   fileName: string;
@@ -534,20 +534,34 @@ function parseObjectPath(path: string): { bucketName: string; objectName: string
   };
 }
 
-async function enrichScopeExtractWithLLM(
+export interface ScopeEnrichmentDeps {
+  extract: (
+    input: import("./herbie-scope-extractor.service").ScopeExtractionInput,
+  ) => Promise<import("./herbie-scope-extractor.service").ScopeExtraction>;
+  render: (
+    input: import("./herbie-scope-extractor.service").ScopeExtractionInput,
+    extraction: import("./herbie-scope-extractor.service").ScopeExtraction,
+  ) => string;
+}
+
+async function defaultEnrichmentDeps(): Promise<ScopeEnrichmentDeps> {
+  const mod = await import("./herbie-scope-extractor.service");
+  return { extract: mod.extractSolicitationScope, render: mod.renderScopeExtractionMarkdown };
+}
+
+export async function enrichScopeExtractWithLLM(
   docs: GeneratedDocument[],
   opp: OpportunityData,
   jobId: string,
+  depsOverride?: ScopeEnrichmentDeps,
 ): Promise<void> {
   const target = docs.find((d) => d.generatedType === "ScopeExtractRiskFlags");
   if (!target) return;
 
   try {
-    const { extractSolicitationScope, renderScopeExtractionMarkdown } = await import(
-      "./herbie-scope-extractor.service"
-    );
+    const deps = depsOverride ?? (await defaultEnrichmentDeps());
     const solicitationNumber = opp.sourceSystemId || null;
-    const extraction = await extractSolicitationScope({
+    const extraction = await deps.extract({
       title: opp.title,
       solicitationNumber,
       agency: null,
@@ -556,7 +570,7 @@ async function enrichScopeExtractWithLLM(
       naics: opp.naicsCodes || null,
       solicitationText: [opp.description, opp.synopsis].filter(Boolean).join("\n\n"),
     });
-    const markdown = renderScopeExtractionMarkdown(
+    const markdown = deps.render(
       {
         title: opp.title,
         solicitationNumber,

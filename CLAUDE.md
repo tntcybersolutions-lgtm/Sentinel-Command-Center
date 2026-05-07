@@ -182,11 +182,35 @@ Likewise: `.env`, `.env.*`, `*.pem`, `*.key`, and all `*.tar.gz` archives are gi
 - **Feature 9 (proactive monitor) — COI slice landed.** `monitorExpiringCois` runs alongside the other monitors in `runAllMonitors`.
 - **Feature 10 (approval queue) — end-to-end landed.** Backend: `registerApprovalDispatcher(actionType, fn)` registry, `draft_external_message` / `draft_rfi` / `draft_submittal` / `draft_coi_renewal` action types, idempotent `processDecision` with dispatcher hook + error swallowing. Frontend: `approvals.tsx` renders Herbie-drafted items with action-specific labels, verbs, glyphs, and PM-facing summary copy.
 
+### Takeoff & Bid Jacket — full audit + completion (PR #10, Batches 1–8)
+
+A full audit of the takeoff and bid-jacket flows ran on `claude/sentinel-command-q2VfW` (PR #10) and shipped 8 PR-sized batches. Every real gap is now fixed and tested:
+
+1. **Takeoff bug fixes** — `/api/takeoff-quantities` filters now apply (`projectId/categoryId/sheetId`); `extendedCost` computed and persisted server-side via `takeoff-cost.service.ts`; structured `takeoff_quantities.triggers_procurement` column replaces fragile `notes` substring matching in `unified-workflows.handleTakeoffUpdated`.
+2. **Bid jacket route cleanup** — `/api/jackets/bid/:id/auto-build` and `/api/bids/:id/jacket/autopopulate` share a single handler. View endpoints now write to `documentAuditLog`. `checklist-gate.service.ts` enforces server-side artifact-blocking on checklist completion (PATCH returns 409 with `missingArtifactCodes` unless `force: true`).
+3. **SAM/HigherGov artifact auto-filing** — `bid-jacket-filing.service.ts` downloads each unfiled `bid_jacket_artifacts` row, writes the blob to object storage, files it under the canonical folder per `ARTIFACT_CODE_TO_FOLDER`. Idempotent. Endpoint: `POST /api/jackets/bid/:bidProjectId/file-artifacts`.
+4. **Real LLM jacket builder** — `herbie-scope-extractor.service.ts` uses Claude Haiku at the extraction tier to produce `{summary, scopeItems[], riskFlags[], complianceItems[]}`; deterministic fallback when no API key. `enrichScopeExtractWithLLM` swaps the static "Scope Extract + Risk Flags" template for LLM-rendered markdown.
+5. **Herbie jacket tools** — `build_bid_jacket`, `ensure_bid_jacket_canonical`, `file_bid_jacket_artifacts` (write, gated by `HERBIE_PREVIEW_MODE`), and `route_document_to_jacket` (read-only) registered in `HERBIE_TOOL_SPECS`.
+6. **AI takeoff assistant** — `takeoff-assistant.service.ts` exposes `suggestTakeoffItems()` and `categorizeTakeoffItem()` (rule-first, LLM fallback, `TAKEOFF_TRADES` vocabulary). Endpoints: `POST /api/takeoff/suggest` and `POST /api/takeoff/categorize`.
+7. **Single source of truth for folder taxonomy** — `taxonomy.service.ts` derives `folder_sections` from `BID_JACKET_FOLDERS` / `COMPANY_JACKET_FOLDERS` / `PROJECT_JACKET_FOLDERS`. `seedFolderSectionsFromConstants()` is idempotent; `diffFolderSectionsAgainstConstants()` reports drift. Hand-typed seed list in `routes.ts` is gone.
+8. **Final consolidation** — extra coverage on the LLM enrichment glue; this section.
+
+**Audit corrections — claims that were NOT real gaps** (preserved here so future sessions don't re-litigate them):
+- `documentAuditLog` is **actively written** (9 callers in `routes.ts`).
+- `shareLinks` is **actively used** (11 callers — list, create, read-by-token, update, delete).
+- `server/takeoff-items-routes.ts` is **not a duplicate** of routes.ts — it serves `/api/takeoff-items` and `/api/estimate/...` paths, distinct from the `/api/takeoffs` paths.
+- `TakeoffUpdated` event names match between emitter and handler (the audit's "mismatch with `TakeoffQuantityUpdated`" was incorrect).
+- The "HERBIE Build Jacket" UI button **already exists** at `client/src/pages/bid-jacket.tsx:2446`.
+- `v4_bid_documents` is still used as a read source.
+
+**Build state:** `npm run check` clean, `npm test` 847/847 across 45 suites. Batch 1 also fixed pre-existing TS breakage in `deliverable-generator-routes.ts`, `lien-waivers.ts`, `lien-waiver-routes.ts`, `document-content-routes.ts`, and `index.ts:254`. `supertest` + `@types/supertest` added as devDependencies (an existing test imported them but they weren't in `package.json`).
+
 ### Known external actions still required
 
 - **`data-quality-gate` build gate** ✅ — RESOLVED 2025-04-24. The 3 repeated-Copy PO chains were repaired with `APPLY=true node scripts/repair-purchase-orders.cjs`. No further action needed.
 - **Rotate `EGNYTE_CLIENT_SECRET` in Egnyte admin** and add the new value to Replit Secrets. The old committed value is burned.
-- **Optional:** set `OPENAI_API_KEY` (or `AI_INTEGRATIONS_OPENAI_API_KEY`) to enable real Whisper transcription in Feature 4. Without it, voice daily logs fall back to a deterministic stub that returns a placeholder transcript — the endpoint stays functional for dev / demo.
+- **Set `ANTHROPIC_API_KEY`** to enable real LLM-driven scope extraction (`herbie-scope-extractor.service.ts`) and AI takeoff suggestions (`takeoff-assistant.service.ts`). Without it, both fall back to deterministic stubs that keep the API surface working for dev/demo.
+- **Optional:** set `OPENAI_API_KEY` (or `AI_INTEGRATIONS_OPENAI_API_KEY`) to enable real Whisper transcription in Feature 4. Without it, voice daily logs fall back to a deterministic stub.
 
 Update this section as milestones land.
 
