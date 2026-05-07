@@ -20403,6 +20403,21 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
     }
   });
 
+  // File any unfiled SAM/HigherGov artifacts for a bid into its jacket
+  // folders. Idempotent: artifacts that already have a storageKey are
+  // skipped. Returns { filed, skipped, failed, results[] }.
+  app.post("/api/jackets/bid/:bidProjectId/file-artifacts", async (req: Request, res: Response) => {
+    try {
+      const bidProjectId = p(req.params.bidProjectId);
+      const { fileUnfiledArtifactsForBid, productionFilingDeps } = await import("./services/bid-jacket-filing.service");
+      const summary = await fileUnfiledArtifactsForBid(DEFAULT_TENANT_ID, bidProjectId, productionFilingDeps);
+      res.json(summary);
+    } catch (error: any) {
+      console.error("[Filing] Error filing artifacts:", error);
+      res.status(500).json({ error: "Failed to file artifacts", message: error.message });
+    }
+  });
+
   app.post("/api/jackets/auto-build-all", async (req: Request, res: Response) => {
     try {
       const { autoBuildAllEmptyJackets } = await import("./services/herbie-jacket-builder.service");
