@@ -8,6 +8,7 @@ import {
   type OpsEvent,
 } from "@shared/schema";
 import { eq, and, sql } from "drizzle-orm";
+import { registerJacketAutoFillHandler } from "./jacket-auto-fill.handler";
 
 const DEFAULT_TENANT_ID = "blackhawk-default";
 
@@ -325,4 +326,7 @@ export function registerWorkflowHandlers(): void {
   eventBus.register("SolicitationParsed", handleSolicitationParsed);
   eventBus.register("TakeoffUpdated", handleTakeoffUpdated);
   eventBus.register("TakeoffDelta", handleTakeoffDelta);
+  // Phase 2 v2.1 — register jacket auto-fill handler for TakeoffUpdated events.
+  // Gated by AUTO_FILL_JACKETS=1 env var inside the handler.
+  registerJacketAutoFillHandler();
 }
