@@ -13,7 +13,7 @@ const JOB_HANDLERS: Record<string, JobHandler> = {
   samgov_ingest: async (payload) => {
     const tenantId = payload.tenantId as string;
     const service = await createSamGovIngestionService(tenantId);
-    
+
     if (!service) {
       console.log("SAM.gov API key not configured, skipping ingestion");
       return;
@@ -21,6 +21,22 @@ const JOB_HANDLERS: Record<string, JobHandler> = {
 
     const stats = await service.runIngestion();
     console.log(`SAM.gov ingestion complete: ${stats.created} created, ${stats.updated} updated, ${stats.errors} errors`);
+
+    // After ingestion, run the win-history-aware auto-create pipeline so
+    // high-fit opportunities show up in Sentinel as fully built bid
+    // jackets (canonical folders + checklist + artifact templates +
+    // SAM blobs filed) without a human having to click anything.
+    try {
+      const { runAutoCreate, productionAutoCreateDeps } = await import(
+        "../services/samgov-auto-create.service"
+      );
+      const auto = await runAutoCreate(tenantId, productionAutoCreateDeps);
+      console.log(
+        `[samgov_ingest] auto-create: ${auto.created} created, ${auto.skipped} skipped, ${auto.failed} failed (of ${auto.evaluated} evaluated)`,
+      );
+    } catch (err: any) {
+      console.error("[samgov_ingest] auto-create failed:", err?.message || err);
+    }
   },
 
   herbie_autonomous: async (payload) => {

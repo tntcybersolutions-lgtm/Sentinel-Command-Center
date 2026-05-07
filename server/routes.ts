@@ -20414,6 +20414,47 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
     }
   });
 
+  // Manually trigger the SAM.gov auto-create pipeline. Each cron tick of
+  // samgov_ingest also runs this; the route is for on-demand use.
+  // Body: { minFitScore?, postedWithinDays?, maxPerRun? }.
+  app.post("/api/samgov/auto-create", async (req: Request, res: Response) => {
+    try {
+      const { runAutoCreate, productionAutoCreateDeps } = await import(
+        "./services/samgov-auto-create.service"
+      );
+      const config: Record<string, number> = {};
+      if (typeof req.body?.minFitScore === "number") config.minFitScore = req.body.minFitScore;
+      if (typeof req.body?.postedWithinDays === "number") config.postedWithinDays = req.body.postedWithinDays;
+      if (typeof req.body?.maxPerRun === "number") config.maxPerRun = req.body.maxPerRun;
+      const result = await runAutoCreate(DEFAULT_TENANT_ID, productionAutoCreateDeps, config);
+      res.json(result);
+    } catch (error: any) {
+      console.error("[samgov/auto-create] error:", error);
+      res.status(500).json({ error: "Failed to run auto-create", message: error.message });
+    }
+  });
+
+  // Surface Blackhawk's win profile so the UI can show "we win when…"
+  app.get("/api/samgov/win-profile", async (req: Request, res: Response) => {
+    try {
+      const { productionAutoCreateDeps } = await import("./services/samgov-auto-create.service");
+      const { buildWinProfileFromRows } = await import("./services/win-profile.service");
+      const wins = await productionAutoCreateDeps.loadWinHistory(DEFAULT_TENANT_ID);
+      const profile = buildWinProfileFromRows(wins);
+      res.json({
+        totalWins: profile.totalWins,
+        topNaics: Array.from(profile.naicsFreq.entries()).sort((a, b) => b[1] - a[1]).slice(0, 5),
+        topAgencies: Array.from(profile.agencyFreq.entries()).sort((a, b) => b[1] - a[1]).slice(0, 5),
+        setAsideMix: Array.from(profile.setAsideFreq.entries()).sort((a, b) => b[1] - a[1]),
+        valueRange: profile.valueRange,
+        medianValue: profile.medianValue,
+      });
+    } catch (error: any) {
+      console.error("[samgov/win-profile] error:", error);
+      res.status(500).json({ error: "Failed to load win profile", message: error.message });
+    }
+  });
+
   // File any unfiled SAM/HigherGov artifacts for a bid into its jacket
   // folders. Idempotent: artifacts that already have a storageKey are
   // skipped. Returns { filed, skipped, failed, results[] }.
