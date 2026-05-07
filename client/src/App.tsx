@@ -217,6 +217,7 @@ import Notifications from "@/pages/notifications";
 import KnowledgeVault from "@/pages/knowledge-vault";
 import Companies from "@/pages/companies";
 import Blueprints from "@/pages/blueprints";
+import SmartTakeoff from "@/pages/smart-takeoff";
 import DesignSystems from "@/pages/design-systems";
 import EgnyteDiagnostics from "@/pages/egnyte-diagnostics";
 import EgnyteSyncMonitor from "@/pages/egnyte-sync-monitor";
@@ -289,6 +290,7 @@ function Router() {
 
       {/* ── Estimate ── */}
       <Route path="/estimate/blueprints" component={() => <SafeRoute component={Blueprints} name="Blueprints" />} />
+      <Route path="/blueprints/:id/smart-takeoff" component={() => <SafeRoute component={SmartTakeoff} name="SmartTakeoff" />} />
       <Route path="/estimate/takeoff" component={() => <SafeRoute component={DesignSystems} name="TakeoffEngine" />} />
       <Route path="/estimate/design-systems" component={() => <SafeRoute component={DesignSystems} name="DesignSystems" />} />
 
