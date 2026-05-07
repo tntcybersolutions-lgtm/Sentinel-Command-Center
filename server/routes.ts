@@ -21973,7 +21973,7 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
       const [oppCount] = await db.select({ value: count() }).from(opportunities);
       const [bidCount] = await db.select({ value: count() }).from(bidProjects);
 
-      const samApiConfigured = !!(process.env.SAM_API_KEY || process.env.SAM_GOV_API_KEY);
+      const samApiConfigured = !!process.env.SAM_GOV_API_KEY;
 
       res.json({
         lastIngestRun: latestRun
