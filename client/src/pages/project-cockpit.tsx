@@ -1,14 +1,15 @@
 import { useState } from "react";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import React from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRoute } from "wouter";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import {
   FileQuestion, FileCheck, ArrowLeftRight, ClipboardList, ListChecks, Bot,
   Loader2, Play, ChevronDown, ChevronRight, AlertTriangle, Clock, CheckCircle2,
-  XCircle, ArrowUp, ArrowRight, Minus,
+  XCircle, ArrowUp, ArrowRight, Minus, Brain, Lightbulb, GitBranch, Zap,
 } from "lucide-react";
 
-type TabId = "rfis" | "submittals" | "change-orders" | "daily-logs" | "tasks" | "agent-reports";
+type TabId = "rfis" | "submittals" | "change-orders" | "daily-logs" | "tasks" | "agent-reports" | "herbie-memory";
 
 const TABS: { id: TabId; label: string; icon: typeof FileQuestion }[] = [
   { id: "rfis", label: "RFIs", icon: FileQuestion },
@@ -17,6 +18,7 @@ const TABS: { id: TabId; label: string; icon: typeof FileQuestion }[] = [
   { id: "daily-logs", label: "Daily Reports", icon: ClipboardList },
   { id: "tasks", label: "Tasks", icon: ListChecks },
   { id: "agent-reports", label: "Agent Reports", icon: Bot },
+  { id: "herbie-memory", label: "Memory", icon: Brain },
 ];
 
 function formatDate(d: string | Date | null | undefined): string {
@@ -205,12 +207,38 @@ function CoiRollupBadge({ rollup }: { rollup?: CoiRollup }) {
 }
 
 function RFIsTab({ projectId }: { projectId: string }) {
+  const qc = useQueryClient();
   const { data, isLoading } = useQuery<any[]>({ queryKey: ["/api/projects", projectId, "rfis"], queryFn: () => fetch(`/api/projects/${projectId}/rfis`).then(r => r.json()) });
+  const [draftingId, setDraftingId] = useState<string | null>(null);
+  const [draftResult, setDraftResult] = useState<{ rfiId: string; approvalId: string } | null>(null);
+
+  const draftRfi = async (rfiId: string) => {
+    setDraftingId(rfiId);
+    try {
+      const res = await apiRequest("POST", "/api/rfi/draft", { rfiId, projectId });
+      const data = await res.json();
+      setDraftResult({ rfiId, approvalId: data.approvalId ?? data.draftId });
+      qc.invalidateQueries({ queryKey: ["/api/projects", projectId, "rfis"] });
+    } catch (err) {
+      console.error("RFI draft failed:", err);
+    } finally {
+      setDraftingId(null);
+    }
+  };
+
   if (isLoading) return <LoadingState />;
   const rows = data || [];
   if (rows.length === 0) return <EmptyState label="No RFIs found for this project" />;
   return (
-    <div className="overflow-x-auto">
+    <div className="space-y-3">
+      {draftResult && (
+        <div className="rounded-md bg-green-950/30 border border-green-900 p-2.5 text-xs text-green-400 flex items-center gap-2">
+          <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
+          Herbie drafted an RFI response — check the Approvals queue to review &amp; send.
+          <button className="ml-auto underline hover:no-underline" onClick={() => setDraftResult(null)}>Dismiss</button>
+        </div>
+      )}
+      <div className="overflow-x-auto">
       <table className="w-full text-sm" data-testid="table-rfis">
         <thead>
           <tr className="border-b border-white/10 text-left text-zinc-500 text-xs uppercase tracking-wider font-mono">
@@ -219,7 +247,9 @@ function RFIsTab({ projectId }: { projectId: string }) {
             <th className="py-2 px-3">Status</th>
             <th className="py-2 px-3">Priority</th>
             <th className="py-2 px-3">Age</th>
+              <th className="py-2 px-3">Herbie</th>
             <th className="py-2 px-3">Created</th>
+            <th className="py-2 px-3">AI</th>
           </tr>
         </thead>
         <tbody>
@@ -231,10 +261,22 @@ function RFIsTab({ projectId }: { projectId: string }) {
               <td className="py-2 px-3"><PriorityIcon priority={r.priority} /></td>
               <td className="py-2 px-3 text-zinc-400 font-mono text-xs">{daysSince(r.createdAt || r.created_at)}d</td>
               <td className="py-2 px-3 text-zinc-500 text-xs">{formatDate(r.createdAt || r.created_at)}</td>
+              <td className="py-2 px-3">
+                <button
+                  onClick={() => draftRfi(String(r.id))}
+                  disabled={draftingId === String(r.id)}
+                  className="flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  title="Have Herbie draft a response"
+                >
+                  {draftingId === String(r.id) ? <Loader2 className="h-3 w-3 animate-spin" /> : <Zap className="h-3 w-3" />}
+                  Draft
+                </button>
+              </td>
             </tr>
           ))}
         </tbody>
       </table>
+      </div>
     </div>
   );
 }
@@ -242,6 +284,10 @@ function RFIsTab({ projectId }: { projectId: string }) {
 function SubmittalsTab({ projectId }: { projectId: string }) {
   const { data, isLoading } = useQuery<any[]>({ queryKey: ["/api/projects", projectId, "submittals"], queryFn: () => fetch(`/api/projects/${projectId}/submittals`).then(r => r.json()) });
   if (isLoading) return <LoadingState />;
+
+  const qc = useQueryClient();
+  const [draftingS, setDraftingS] = React.useState<string|null>(null);
+  const draftSub = async (r: any) => { setDraftingS(r.id); try { await apiRequest("POST","/api/submittal/draft",{projectId,submittalNumber:r.submittalNumber||r.submittal_number,name:r.name,description:r.description||"",draftedBy:"Herbie"}); await qc.invalidateQueries({queryKey:["/api/projects",projectId,"submittals"]}); } finally { setDraftingS(null); } };
   const rows = data || [];
   if (rows.length === 0) return <EmptyState label="No submittals found for this project" />;
   return (
@@ -264,6 +310,7 @@ function SubmittalsTab({ projectId }: { projectId: string }) {
               <td className="py-2 px-3"><StatusPill status={r.status} /></td>
               <td className="py-2 px-3 font-mono text-zinc-400">v{r.revision ?? 0}</td>
               <td className="py-2 px-3 text-zinc-400 font-mono text-xs">{daysSince(r.createdAt || r.created_at)}d</td>
+            <td className="py-2 px-3"><button onClick={() => draftSub(r)} disabled={draftingS === r.id} data-testid={`btn-draft-submittal-${r.id}`} className="flex items-center gap-1 px-2 py-1 rounded text-xs bg-amber-500/10 border border-amber-500/30 text-amber-400 hover:bg-amber-500/20 disabled:opacity-50 transition-colors">{draftingS === r.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Zap className="w-3 h-3" />}Draft</button></td>
             </tr>
           ))}
         </tbody>
@@ -487,6 +534,85 @@ function EmptyState({ label }: { label: string }) {
   );
 }
 
+
+function HerbieMemoryTab({ projectId }: { projectId: string }) {
+  const { data, isLoading } = useQuery<{ facts: any[]; decisions: any[]; relationships: any[] }>({
+    queryKey: ["/api/herbie/memory/project", projectId],
+    queryFn: () => fetch(`/api/herbie/memory/project/${projectId}`).then(r => r.json()),
+  });
+  if (isLoading) return <div className="flex items-center gap-2 py-8 text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" /> Loading memory…</div>;
+  const facts = data?.facts ?? [];
+  const decisions = data?.decisions ?? [];
+  const rels = data?.relationships ?? [];
+  if (facts.length === 0 && decisions.length === 0 && rels.length === 0) {
+    return (
+      <div className="text-center py-12 text-muted-foreground">
+        <Brain className="h-8 w-8 mx-auto mb-2 opacity-40" />
+        <p className="text-sm">Herbie hasn't learned anything about this project yet.</p>
+        <p className="text-xs mt-1">Run a document ingestion cycle to populate project memory.</p>
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-6">
+      {facts.length > 0 && (
+        <div>
+          <h3 className="flex items-center gap-2 text-sm font-semibold mb-3">
+            <Lightbulb className="h-4 w-4 text-yellow-500" /> Facts ({facts.length})
+          </h3>
+          <div className="space-y-2">
+            {facts.map((f: any, i: number) => (
+              <div key={f.id ?? i} className="flex items-center gap-2 text-sm py-1 border-b last:border-0">
+                <span className="text-xs font-mono text-muted-foreground w-28 shrink-0 truncate">{f.subjectType}</span>
+                <ChevronRight className="h-3 w-3 text-muted-foreground shrink-0" />
+                <span className="font-medium text-primary">{f.predicate}</span>
+                <ChevronRight className="h-3 w-3 text-muted-foreground shrink-0" />
+                <span className="truncate">{f.object ?? "—"}</span>
+                <div className="ml-auto flex items-center gap-1 shrink-0">
+                  <div className={`h-1.5 w-1.5 rounded-full ${f.confidence >= 0.85 ? "bg-green-500" : f.confidence >= 0.6 ? "bg-yellow-500" : "bg-red-500"}`} />
+                  <span className="text-xs text-muted-foreground font-mono">{Math.round((f.confidence ?? 0) * 100)}%</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {decisions.length > 0 && (
+        <div>
+          <h3 className="flex items-center gap-2 text-sm font-semibold mb-3">
+            <Brain className="h-4 w-4 text-purple-500" /> Decisions ({decisions.length})
+          </h3>
+          <div className="space-y-2">
+            {decisions.map((d: any, i: number) => (
+              <div key={d.id ?? i} className="py-2 border-b last:border-0">
+                <p className="text-sm font-medium">{d.summary}</p>
+                {d.rationale && <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{d.rationale}</p>}
+                <p className="text-xs text-muted-foreground mt-1">by {d.decidedBy}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {rels.length > 0 && (
+        <div>
+          <h3 className="flex items-center gap-2 text-sm font-semibold mb-3">
+            <GitBranch className="h-4 w-4 text-blue-500" /> Relationships ({rels.length})
+          </h3>
+          <div className="space-y-1.5">
+            {rels.map((r: any, i: number) => (
+              <div key={r.id ?? i} className="flex items-center gap-2 text-xs py-1 border-b last:border-0">
+                <span className="font-mono text-muted-foreground">{r.fromEntityType}:{r.fromEntityId?.slice(0,8)}</span>
+                <span className="text-primary font-medium">—[{r.role}]→</span>
+                <span className="font-mono text-muted-foreground">{r.toEntityType}:{r.toEntityId?.slice(0,8)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function ProjectCockpit() {
   const [, params] = useRoute("/projects/:id/cockpit");
   const projectId = params?.id || "";
@@ -608,6 +734,7 @@ export default function ProjectCockpit() {
         {activeTab === "daily-logs" && <DailyLogsTab projectId={projectId} />}
         {activeTab === "tasks" && <TasksTab projectId={projectId} />}
         {activeTab === "agent-reports" && <AgentReportsTab projectId={projectId} />}
+            {activeTab === "herbie-memory" && <HerbieMemoryTab projectId={projectId} />}
       </div>
     </div>
   );

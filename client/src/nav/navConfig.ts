@@ -30,12 +30,15 @@ import {
   BookOpen,
   BrainCircuit,
   RefreshCcw,
-  Bot,
+  Bot, Brain,
   Sparkles,
   SlidersHorizontal,
   Plug,
   Settings,
   ArrowDownToLine,
+  Mic,
+  TrendingUp,
+  ClipboardCheck,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -97,6 +100,8 @@ export const navConfig: NavGroupConfig[] = [
       { id: "precon.blueprints", label: "Blueprints & Drawings", icon: PencilRuler, route: "/estimate/blueprints" },
       { id: "precon.takeoff", label: "Takeoff Engine", icon: Ruler, route: "/estimate/takeoff" },
       { id: "precon.buildingSystems", label: "Building Systems", icon: Wrench, route: "/estimate/design-systems" },
+            { id: "ai.proactive", label: "Proactive Intelligence", icon: Brain, route: "/proactive-intelligence" },
+      { id: "precon.bidReadiness", label: "Bid Readiness", icon: FileCheck, route: "/bid-readiness" },
     ],
   },
   {
@@ -108,6 +113,7 @@ export const navConfig: NavGroupConfig[] = [
       { id: "pm.projects", label: "Active Projects", icon: FolderGit2, route: "/projects/active", portfolioOnly: true },
       { id: "pm.tasks", label: "Tasks", icon: ListChecks, route: "/execution/tasks", badgeKey: "overdueTaskCount" },
       { id: "pm.rfis", label: "RFIs", icon: FileQuestion, route: "/execution/rfis", badgeKey: "openRfiCount" },
+      { id: "pm.voiceLog", label: "Voice Daily Log", icon: Mic, route: "/voice-daily-log", projectOnly: true },
       { id: "pm.submittals", label: "Submittals", icon: FileCheck, route: "/execution/submittals", badgeKey: "pendingSubmittalCount" },
     ],
   },
@@ -133,6 +139,7 @@ export const navConfig: NavGroupConfig[] = [
     items: [
       { id: "dir.contacts", label: "Contacts", icon: Users, route: "/knowledge/contacts" },
       { id: "dir.vendors", label: "Vendors & Subs", icon: Factory, route: "/execution/vendors" },
+        { id: "dir.coi", label: "COI Tracker", icon: Shield, route: "/coi" },
       { id: "dir.workforce", label: "Workforce", icon: HardHat, route: "/execution/workforce" },
       { id: "dir.agencies", label: "Agencies", icon: Building2, route: "/capture/agencies" },
     ],
@@ -154,7 +161,12 @@ export const navConfig: NavGroupConfig[] = [
     icon: Bot,
     order: 70,
     items: [
-      { id: "herbie.chat", label: "Chat Assistant", icon: Bot, route: "/automation/herbie" },
+      { id: "co.approvals", label: "CO Approvals", icon: ClipboardCheck, route: "/change-order-approvals" },
+    { id: "vendor.confidence", label: "Vendor Confidence", icon: Building2, route: "/vendor-confidence" },
+    { id: "herbie.digest", label: "Digest", icon: TrendingUp, route: "/herbie-digest" },
+        { id: "herbie.chat", label: "Chat Assistant", icon: Bot, route: "/automation/herbie" },
+        { id: "herbie.autonomous", label: "Autonomous", icon: Zap, route: "/herbie-autonomous" },
+        { id: "herbie.memory", label: "Memory Inspector", icon: Brain, route: "/herbie-memory" },
       { id: "herbie.reviewQueue", label: "AI Review Queue", icon: Sparkles, route: "/automation/workflows" },
     ],
   },

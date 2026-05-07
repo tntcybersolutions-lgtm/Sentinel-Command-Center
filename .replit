@@ -4,7 +4,7 @@ hidden = [".config", ".git", "generated-icon.png", "node_modules", "dist"]
 
 [nix]
 channel = "stable-24_05"
-packages = ["p7zip", "unzip", "jq"]
+packages = ["p7zip", "unzip", "jq", "gh"]
 
 [[ports]]
 localPort = 5000
@@ -66,3 +66,6 @@ HIGHERGOV_BASE_URL = "https://www.highergov.com"
 
 [userenv.development]
 VITE_HMR_OVERLAY = "false"
+
+[objectStorage]
+defaultBucketID = "replit-objstore-c6fe9ea2-c700-4765-b89e-6724876a539d"

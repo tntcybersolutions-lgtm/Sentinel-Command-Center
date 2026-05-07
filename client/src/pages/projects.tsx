@@ -125,12 +125,15 @@ export default function Projects() {
     queryKey: ["/api/projects"],
   });
 
-  const { data: stats, isLoading: statsLoading } = useQuery<ProjectStats>({
-    queryKey: ["/api/projects/stats"],
-  });
-
   const displayProjects = projects || [];
-  const displayStats = stats || { activeProjects: 0, totalValue: 0, onSchedule: 0, overdueMilestones: 0 };
+  // Compute stats from loaded projects instead of broken /api/projects/stats endpoint
+  const statsLoading = isLoading;
+  const displayStats = {
+    activeProjects: displayProjects.filter(p => p.status === 'active').length,
+    totalValue: displayProjects.reduce((sum, p) => sum + (Number(p.contractValue) || 0), 0),
+    onSchedule: displayProjects.filter(p => p.status === 'active').length,
+    overdueMilestones: 0,
+  };
 
   const filteredProjects = displayProjects
     .filter((project) => {

@@ -68,12 +68,44 @@ const ACTION_BOXES: ActionBox[] = [
   { label: "Pending Submittals", countKey: "pendingSubmittalCount", icon: FileCheck, route: "/execution/submittals", accentClass: "border-l-violet-500" },
 ];
 
+
+// ── Herbie Digest Banner ─────────────────────────────────────────────────────
+
+interface DigestTotals { critical: number; high: number; medium: number; low: number; }
+interface TinyDigest { totals: DigestTotals; }
+
+function HerbieDigestBanner() {
+  const { data } = useQuery<TinyDigest>({
+    queryKey: ["/api/herbie/digest"],
+    queryFn: () => fetch("/api/herbie/digest").then(r => r.json()),
+    staleTime: 5 * 60 * 1000,
+  });
+  if (!data) return null;
+  const { critical, high } = data.totals;
+  const urgent = critical + high;
+  if (urgent === 0) return null;
+  return (
+    <div className="flex items-center gap-3 rounded-lg border border-red-900/60 bg-red-950/20 px-4 py-2.5 text-sm" data-testid="herbie-digest-banner">
+      <span className="flex h-5 w-5 items-center justify-center rounded-full bg-red-600 text-white text-xs font-bold shrink-0">{urgent}</span>
+      <span className="text-red-300">
+        Herbie flagged <strong className="text-red-200">{urgent} urgent item{urgent !== 1 ? "s" : ""}</strong>
+        {critical > 0 && <span> — {critical} critical</span>}
+        {high > 0 && critical > 0 && <span>, </span>}
+        {high > 0 && <span>{high} high priority</span>}
+      </span>
+      <a href="/herbie-digest" className="ml-auto text-xs text-red-400 hover:text-red-300 underline hover:no-underline whitespace-nowrap">
+        View Digest →
+      </a>
+    </div>
+  );
+}
+
 export default function HomeAssistant() {
   const [, setLocation] = useLocation();
 
   const countsQuery = useQuery<NavCounts>({ queryKey: ["/api/nav-counts"] });
   const projectsQuery = useQuery<any[]>({ queryKey: ["/api/projects"] });
-  const activityQuery = useQuery<any[]>({ queryKey: ["/api/audit-events", { limit: 10 }] });
+  const activityQuery = useQuery<any[]>({ queryKey: ["/api/audit-events?limit=10"] });
 
   const counts = countsQuery.data;
   const projects = (projectsQuery.data ?? []).slice(0, 10);

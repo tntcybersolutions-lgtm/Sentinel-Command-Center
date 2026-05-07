@@ -7,7 +7,10 @@ import { worker } from "./queue/worker";
 import { websocketService } from "./services/websocket.service";
 import { validateBidJacketTaxonomy } from "@shared/schema";
 import { sql } from "drizzle-orm";
-
+import { lienWaiverRouter } from "./lien-waiver-routes";
+import { takeoffItemsRouter } from "./takeoff-items-routes";
+import { deliverableGeneratorRouter } from "./deliverable-generator-routes";
+import { documentContentRouter } from "./document-content-routes";
 validateBidJacketTaxonomy();
 
 const app = express();
@@ -68,6 +71,10 @@ app.use((req, res, next) => {
 
 (async () => {
   await registerRoutes(httpServer, app);
+    app.use("/api/lien-waivers", lienWaiverRouter);
+        app.use(takeoffItemsRouter);
+    app.use(deliverableGeneratorRouter);
+  app.use(documentContentRouter);
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
@@ -240,6 +247,15 @@ app.use((req, res, next) => {
       } catch (e) {
         console.error("Failed to seed bid jacket data:", e);
       }
+
+              // Seed 50-state lien waiver templates (200 total: 50 states x 4 types)
+        try {
+          const { seedLienWaiverTemplates } = await import("./lien-waivers");
+          await seedLienWaiverTemplates("blackhawk-default");
+          log("Lien waiver templates seeded (200 templates across 50 states)", "lien-waivers");
+        } catch (e) {
+          console.error("Failed to seed lien waiver templates:", e);
+        }
 
       // Start HERBIE autonomous processing engine
       log("Starting HERBIE autonomous processing engine...", "herbie");

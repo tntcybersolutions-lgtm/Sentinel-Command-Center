@@ -2938,6 +2938,10 @@ export const blueprints = pgTable("blueprints", {
   mimeType: text("mime_type").default("application/pdf"),
   pageCount: integer("page_count").default(1),
   scale: text("scale"),
+  // Per-page calibration: { "1": pixelsPerFoot, "2": pixelsPerFoot } so a
+  // single drawing set with multiple pages can carry distinct scales.
+  pixelsPerFootByPage: jsonb("pixels_per_foot_by_page"),
+  calibratedAt: timestamp("calibrated_at"),
   category: text("category").notNull().default("General"),
   uploadedAt: timestamp("uploaded_at").defaultNow().notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -3189,6 +3193,10 @@ export const takeoffQuantities = pgTable("takeoff_quantities", {
   laborHours: decimal("labor_hours", { precision: 10, scale: 2 }),
   wasteFactor: decimal("waste_factor", { precision: 5, scale: 2 }).default("0"),
   extendedCost: decimal("extended_cost", { precision: 14, scale: 2 }),
+  // Procurement routing — when true, the unified-workflows handler rolls
+  // this line into an auto-generated PO. Replaces the old substring match
+  // on `notes` ("procure"/"purchase"/"order").
+  triggersProcurement: boolean("triggers_procurement").default(false).notNull(),
   // Annotation link
   annotationId: varchar("annotation_id", { length: 36 }),
   annotationJson: jsonb("annotation_json"), // shape data for reference
@@ -4091,8 +4099,14 @@ export type RetroScanCluster = typeof retroScanClusters.$inferSelect;
 export type InsertRetroScanCluster = z.infer<typeof insertRetroScanClusterSchema>;
 
 // ============================================================================
-// FOLDER TAXONOMY CONSTANTS
+// FOLDER TAXONOMY CONSTANTS — CANONICAL SOURCE OF TRUTH
 // ============================================================================
+//
+// These three constants are the only place jacket folder structure is
+// defined. The `folder_sections` DB table is a derived projection seeded
+// by server/services/taxonomy.service.ts (seedFolderSectionsFromConstants).
+// FolderTaxonomyService and any UI surface that needs the folder list
+// MUST import from here — do not hand-type folder lists elsewhere.
 
 export const COMPANY_JACKET_FOLDERS = [
   { code: "00", name: "Overview" },

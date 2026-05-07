@@ -1,4 +1,4 @@
-import { useState, useEffect, Component, ErrorInfo, ReactNode } from "react";
+import { useState, useEffect, Component, ErrorInfo, ReactNode, lazy, Suspense } from "react";
 import { Switch, Route, useLocation, useRoute } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
@@ -217,6 +217,7 @@ import Notifications from "@/pages/notifications";
 import KnowledgeVault from "@/pages/knowledge-vault";
 import Companies from "@/pages/companies";
 import Blueprints from "@/pages/blueprints";
+import SmartTakeoff from "@/pages/smart-takeoff";
 import DesignSystems from "@/pages/design-systems";
 import EgnyteDiagnostics from "@/pages/egnyte-diagnostics";
 import EgnyteSyncMonitor from "@/pages/egnyte-sync-monitor";
@@ -240,6 +241,15 @@ import ExecutionRFIs from "@/pages/execution-rfis";
 import ExecutionPurchaseOrders from "@/pages/execution-purchase-orders";
 import DataHygiene from "@/pages/data-hygiene";
 import ProjectCockpit from "@/pages/project-cockpit";
+const ProactiveIntelligence = lazy(() => import("@/pages/proactive-intelligence"));
+const CoiTracker = lazy(() => import("@/pages/coi-tracker"));
+const BidReadiness = lazy(() => import("@/pages/bid-readiness"));
+const VoiceDailyLog = lazy(() => import("./pages/voice-daily-log"));
+const VendorConfidence = lazy(() => import('@/pages/vendor-confidence-dashboard'));
+const HerbieDigest = lazy(() => import('@/pages/herbie-digest-page'));
+const HerbieAutonomous = lazy(() => import('@/pages/herbie-autonomous-dashboard'));
+const HerbieMemory = lazy(() => import('@/pages/herbie-memory-inspector'));
+const ChangeOrderApprovals = lazy(() => import('@/pages/approvals'));
 import NotFound from "@/pages/not-found";
 
 function LegacyRedirect({ to }: { to: string }) {
@@ -280,6 +290,7 @@ function Router() {
 
       {/* ── Estimate ── */}
       <Route path="/estimate/blueprints" component={() => <SafeRoute component={Blueprints} name="Blueprints" />} />
+      <Route path="/blueprints/:id/smart-takeoff" component={() => <SafeRoute component={SmartTakeoff} name="SmartTakeoff" />} />
       <Route path="/estimate/takeoff" component={() => <SafeRoute component={DesignSystems} name="TakeoffEngine" />} />
       <Route path="/estimate/design-systems" component={() => <SafeRoute component={DesignSystems} name="DesignSystems" />} />
 
@@ -300,6 +311,15 @@ function Router() {
       <Route path="/execution/inventory" component={() => <SafeRoute component={Inventory} name="Inventory" />} />
       <Route path="/execution/workforce" component={() => <SafeRoute component={Workforce} name="Workforce" />} />
       <Route path="/execution/vendors" component={() => <SafeRoute component={Vendors} name="Vendors" />} />
+        <Route path="/coi" component={() => <Suspense fallback={<div>Loading...</div>}><CoiTracker /></Suspense>} />
+              <Route path="/bid-readiness" component={() => <Suspense fallback={<div>Loading...</div>}><BidReadiness /></Suspense>} />
+        <Route path="/voice-daily-log" component={() => <Suspense fallback={<div>Loading...</div>}><VoiceDailyLog /></Suspense>} />
+              <Route path="/proactive-intelligence" component={() => <Suspense fallback={<div>Loading...</div>}><ProactiveIntelligence /></Suspense>} />
+              <Route path="/vendor-confidence" component={() => <Suspense fallback={<div>Loading...</div>}><VendorConfidence /></Suspense>} />
+              <Route path="/herbie-digest" component={() => <Suspense fallback={<div>Loading...</div>}><HerbieDigest /></Suspense>} />
+              <Route path="/herbie-autonomous" component={() => <Suspense fallback={<div>Loading...</div>}><HerbieAutonomous /></Suspense>} />
+              <Route path="/herbie-memory" component={() => <Suspense fallback={<div>Loading...</div>}><HerbieMemory /></Suspense>} />
+              <Route path="/change-order-approvals" component={() => <Suspense fallback={<div>Loading...</div>}><ChangeOrderApprovals /></Suspense>} />
 
       {/* ── Financial Control ── */}
       <Route path="/financial/overview" component={() => <SafeRoute component={Finance} name="Finance" />} />

@@ -6,7 +6,7 @@ import crypto from "crypto";
 
 const DEFAULT_TENANT_ID = "blackhawk-default";
 
-interface OpportunityData {
+export interface OpportunityData {
   id: string;
   title: string;
   sourceSystemId: string | null;
@@ -19,7 +19,7 @@ interface OpportunityData {
   status: string | null;
 }
 
-interface GeneratedDocument {
+export interface GeneratedDocument {
   folderCode: string;
   title: string;
   fileName: string;
@@ -534,6 +534,61 @@ function parseObjectPath(path: string): { bucketName: string; objectName: string
   };
 }
 
+export interface ScopeEnrichmentDeps {
+  extract: (
+    input: import("./herbie-scope-extractor.service").ScopeExtractionInput,
+  ) => Promise<import("./herbie-scope-extractor.service").ScopeExtraction>;
+  render: (
+    input: import("./herbie-scope-extractor.service").ScopeExtractionInput,
+    extraction: import("./herbie-scope-extractor.service").ScopeExtraction,
+  ) => string;
+}
+
+async function defaultEnrichmentDeps(): Promise<ScopeEnrichmentDeps> {
+  const mod = await import("./herbie-scope-extractor.service");
+  return { extract: mod.extractSolicitationScope, render: mod.renderScopeExtractionMarkdown };
+}
+
+export async function enrichScopeExtractWithLLM(
+  docs: GeneratedDocument[],
+  opp: OpportunityData,
+  jobId: string,
+  depsOverride?: ScopeEnrichmentDeps,
+): Promise<void> {
+  const target = docs.find((d) => d.generatedType === "ScopeExtractRiskFlags");
+  if (!target) return;
+
+  try {
+    const deps = depsOverride ?? (await defaultEnrichmentDeps());
+    const solicitationNumber = opp.sourceSystemId || null;
+    const extraction = await deps.extract({
+      title: opp.title,
+      solicitationNumber,
+      agency: null,
+      setAside: opp.setAside || null,
+      contractValue: opp.contractValue ? Number(opp.contractValue) : null,
+      naics: opp.naicsCodes || null,
+      solicitationText: [opp.description, opp.synopsis].filter(Boolean).join("\n\n"),
+    });
+    const markdown = deps.render(
+      {
+        title: opp.title,
+        solicitationNumber,
+        solicitationText: "",
+      },
+      extraction,
+    );
+    target.content = markdown;
+    target.fileName = target.fileName.replace(/\.txt$/, ".md");
+    target.mimeType = "text/markdown";
+    console.log(
+      `[HERBIE-JACKET-BUILDER] Job ${jobId}: scope extraction (${extraction.source}, conf=${extraction.confidence.toFixed(2)})`,
+    );
+  } catch (err: any) {
+    console.error(`[HERBIE-JACKET-BUILDER] Job ${jobId}: scope enrichment failed (keeping template): ${err?.message}`);
+  }
+}
+
 export async function buildBidJacket(bidProjectId: string, mode: "build" | "repair" = "build"): Promise<{
   success: boolean;
   documentsCreated: number;
@@ -667,6 +722,11 @@ export async function buildBidJacket(bidProjectId: string, mode: "build" | "repa
   }
 
   const generatedDocs = generateDocumentsFromOpportunity(oppData, bidProjectId);
+
+  // Enrich the ScopeExtractRiskFlags doc with real LLM-driven extraction
+  // when an Anthropic key is configured. The extractor degrades to a
+  // deterministic fallback in stub mode, so this never blocks the build.
+  await enrichScopeExtractWithLLM(generatedDocs, oppData, jobId);
 
   let documentsCreated = 0;
   let documentsSkipped = 0;

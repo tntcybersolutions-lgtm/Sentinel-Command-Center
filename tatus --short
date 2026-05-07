@@ -1,0 +1,20 @@
+[33md633f0d[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mfeature/phase-2-ui[m[33m, [m[1;31morigin/feature/phase-2-ui[m[33m)[m feat(phase-5): service test coverage for ProjectsService, VendorService, PlannerService, HerbieAutonomousService (251 passing)
+[33m7234eb7[m feat(phase-4): service test coverage for VendorConfidence, Scoring, Finance, ProactiveIntelligence (209 passing)
+[33mbfdd9ff[m feat(phase-2-ui): wire 6 missing nav routes + 36 route tests (183 passing)
+[33m50721e9[m feat(phase-2-ui): Proactive Intelligence Center
+[33m5a50122[m fix: clean bid-readiness.tsx rewrite
+[33maaec7ba[m feat(phase-2-ui): Bid Readiness Dashboard (go/no-go tracker)
+[33m159e740[m Streamline the user interface by removing redundant pages and cleaning up navigation
+[33mddecc31[m Saved progress at the end of the loop
+[33me287cc3[m feat(phase-2-ui): Change Order Approval Center + ClipboardCheck nav import fix
+[33m06a03dc[m feat(phase-2-ui): Vendor Confidence Dashboard (AI-scored vendor health)
+[33m142ae05[m feat(phase-2-ui): Submittal Draft-with-Herbie button in Project Cockpit
+[33m8efdf37[m feat(phase-2-ui): Herbie Digest urgent-items banner on home page
+[33m9e6877e[m feat(phase-2-ui): RFI Draft-with-Herbie button in Project Cockpit + Zap/useQueryClient imports
+[33ma088808[m feat(phase-2-ui): Herbie Digest global page (cross-project critical/high/medium/low view)
+[33m977e034[m feat(phase-2-ui): Herbie Memory tab in Project Cockpit + ChevronRight/Search dedup fix
+[33mc84bce8[m feat(phase-2-ui): Herbie Autonomous Dashboard (activity log + daily briefing + run-cycle)
+[33m001e1ee[m feat(phase-2-ui): Herbie Memory Inspector page (facts/decisions/relationships tabs)
+[33m4677064[m Update navConfig.tsfeat(phase-2-ui): add Voice Daily Log nav item (Mic icon, /voice-daily-log)
+[33mc0575d9[m Update App.tsxfeat(phase-2-ui): wire /voice-daily-log route + VoiceDailyLog lazy import
+[33m9f99fa4[m feat(phase-2-ui): Voice Daily Log page (Roadmap Feature 4 UI)

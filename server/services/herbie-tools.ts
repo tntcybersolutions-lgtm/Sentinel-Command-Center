@@ -62,6 +62,9 @@ export const WRITE_CAPABLE_TOOLS = new Set([
   "flag_for_review",
   "log_daily",
   "draft_message",
+  "build_bid_jacket",
+  "ensure_bid_jacket_canonical",
+  "file_bid_jacket_artifacts",
 ]);
 
 /** Returns true when the orchestrator should block write-capable tools. */
@@ -264,6 +267,60 @@ export const HERBIE_TOOL_SPECS: HerbieToolSpec[] = [
       required: ["recipient", "channel", "body"],
     },
   },
+  {
+    name: "build_bid_jacket",
+    description:
+      "Auto-build (or repair) a bid jacket: create the canonical folder set if missing and populate it with Herbie's generated documents (Opportunity Summary, Solicitation Notice, Scope Extract + Risk Flags, Compliance Checklist, Submission Instructions, Bid Form Template). Idempotent — existing Herbie-generated docs are skipped.",
+    parameters: {
+      type: "object",
+      properties: {
+        bidProjectId: { type: "string", description: "ID of the bid_project to build the jacket for." },
+        mode: {
+          type: "string",
+          enum: ["build", "repair"],
+          description: "build (default) creates missing artifacts; repair is currently equivalent and reserved for future delta repair.",
+        },
+      },
+      required: ["bidProjectId"],
+    },
+  },
+  {
+    name: "ensure_bid_jacket_canonical",
+    description:
+      "Ensure a bid jacket has all canonical folders (00-Intake … 99-Archive) per BID_JACKET_FOLDERS, creating any missing ones. Returns isHealthy plus the list of folders created. Safe to run repeatedly.",
+    parameters: {
+      type: "object",
+      properties: {
+        bidProjectId: { type: "string" },
+      },
+      required: ["bidProjectId"],
+    },
+  },
+  {
+    name: "file_bid_jacket_artifacts",
+    description:
+      "Download any unfiled SAM.gov / HigherGov artifacts attached to a bid (rows in bid_jacket_artifacts with sourceUrl but no storageKey) and file each into the correct jacket folder per ARTIFACT_CODE_TO_FOLDER. Idempotent — already-filed rows are skipped.",
+    parameters: {
+      type: "object",
+      properties: {
+        bidProjectId: { type: "string" },
+      },
+      required: ["bidProjectId"],
+    },
+  },
+  {
+    name: "route_document_to_jacket",
+    description:
+      "Look up which canonical jacket folder a given document type belongs in. Read-only — does not mutate state. Returns { folderCode, folderName } using BID_DOC_ROUTING / COMPANY_DOC_ROUTING.",
+    parameters: {
+      type: "object",
+      properties: {
+        docType: { type: "string", description: "Document type label, e.g. 'solicitation', 'amendment', 'insurance', 'sub_quote'." },
+        jacketType: { type: "string", enum: ["bid", "company"] },
+      },
+      required: ["docType", "jacketType"],
+    },
+  },
 ];
 
 export function getHerbieToolSpec(name: string): HerbieToolSpec | undefined {
@@ -450,6 +507,53 @@ export async function executeHerbieTool(
             `extract_fields has a COI extractor wired; other categories (category='${category}') depend on Feature 2 main. For now, use read_document + record_fact.`,
           code: "NOT_IMPLEMENTED",
         };
+      }
+      case "build_bid_jacket": {
+        const bidProjectId = String(call.args.bidProjectId ?? "");
+        if (!bidProjectId) {
+          return { success: false, error: "bidProjectId is required", code: "BAD_ARGS" };
+        }
+        const mode = call.args.mode === "repair" ? "repair" : "build";
+        const { buildBidJacket } = await import("./herbie-jacket-builder.service");
+        const result = await buildBidJacket(bidProjectId, mode);
+        if (!result.success) {
+          return { success: false, error: result.error || "build_bid_jacket failed", code: "BUILD_FAILED" };
+        }
+        return { success: true, data: result };
+      }
+      case "ensure_bid_jacket_canonical": {
+        const bidProjectId = String(call.args.bidProjectId ?? "");
+        if (!bidProjectId) {
+          return { success: false, error: "bidProjectId is required", code: "BAD_ARGS" };
+        }
+        const { jacketService } = await import("./jacket.service");
+        const result = await jacketService.ensureCanonicalBidJacket(ctx.tenantId, bidProjectId);
+        return { success: true, data: result };
+      }
+      case "file_bid_jacket_artifacts": {
+        const bidProjectId = String(call.args.bidProjectId ?? "");
+        if (!bidProjectId) {
+          return { success: false, error: "bidProjectId is required", code: "BAD_ARGS" };
+        }
+        const { fileUnfiledArtifactsForBid, productionFilingDeps } = await import(
+          "./bid-jacket-filing.service"
+        );
+        const result = await fileUnfiledArtifactsForBid(
+          ctx.tenantId,
+          bidProjectId,
+          productionFilingDeps,
+        );
+        return { success: true, data: result };
+      }
+      case "route_document_to_jacket": {
+        const docType = String(call.args.docType ?? "");
+        const jacketType = String(call.args.jacketType ?? "");
+        if (!docType || (jacketType !== "bid" && jacketType !== "company")) {
+          return { success: false, error: "docType and jacketType=bid|company are required", code: "BAD_ARGS" };
+        }
+        const { jacketService } = await import("./jacket.service");
+        const routing = jacketService.routeDocumentToFolder(docType, jacketType);
+        return { success: true, data: routing };
       }
       default:
         return {
