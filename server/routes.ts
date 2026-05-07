@@ -116,6 +116,7 @@ import { eventStreamService } from "./services/event-stream.service";
 import crypto from "crypto";
 import { fromError } from "zod-validation-error";
 import { auditService } from "./services/audit.service";
+import { computeTakeoffExtendedCost } from "./services/takeoff-cost.service";
 import { approvalService } from "./services/approval.service";
 import { scoringService } from "./services/scoring.service";
 import { bidService } from "./services/bid.service";
@@ -17963,11 +17964,18 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
   // Takeoff Quantities
   app.get("/api/takeoff-quantities", async (req: Request, res: Response) => {
     try {
-      const { projectId, categoryId, sheetId } = req.query;
-      let query = db.select().from(takeoffQuantities)
-        .where(eq(takeoffQuantities.tenantId, DEFAULT_TENANT_ID));
-      
-      const quantities = await query.orderBy(desc(takeoffQuantities.createdAt));
+      const projectId = pOpt(req.query.projectId as string | undefined);
+      const categoryId = pOpt(req.query.categoryId as string | undefined);
+      const sheetId = pOpt(req.query.sheetId as string | undefined);
+
+      const conditions = [eq(takeoffQuantities.tenantId, DEFAULT_TENANT_ID)];
+      if (projectId) conditions.push(eq(takeoffQuantities.projectId, projectId));
+      if (categoryId) conditions.push(eq(takeoffQuantities.categoryId, categoryId));
+      if (sheetId) conditions.push(eq(takeoffQuantities.sheetId, sheetId));
+
+      const quantities = await db.select().from(takeoffQuantities)
+        .where(and(...conditions))
+        .orderBy(desc(takeoffQuantities.createdAt));
       res.json(quantities);
     } catch (error) {
       console.error("Error fetching takeoff quantities:", error);
@@ -17988,7 +17996,9 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
     unitCost: z.string().optional(),
     laborRate: z.string().optional(),
     laborHours: z.string().optional(),
+    wasteFactor: z.string().optional(),
     notes: z.string().optional(),
+    triggersProcurement: z.boolean().optional(),
   });
 
   app.post("/api/takeoff-quantities", async (req: Request, res: Response) => {
@@ -17997,12 +18007,21 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
       if (!validated.success) {
         return res.status(400).json({ error: "Validation failed", details: fromError(validated.error).toString() });
       }
-      
+
+      const extendedCost = computeTakeoffExtendedCost({
+        quantity: validated.data.quantity,
+        unitCost: validated.data.unitCost,
+        laborRate: validated.data.laborRate,
+        laborHours: validated.data.laborHours,
+        wasteFactor: validated.data.wasteFactor,
+      });
+
       const [quantity] = await db.insert(takeoffQuantities).values({
         tenantId: DEFAULT_TENANT_ID,
         ...validated.data,
+        extendedCost,
       }).returning();
-      
+
       await auditService.logEvent({
         tenantId: DEFAULT_TENANT_ID,
         eventType: "takeoff_quantity.created",
@@ -18011,7 +18030,7 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
         entityId: quantity.id,
         afterJson: quantity as unknown as Record<string, unknown>,
       });
-      
+
       res.status(201).json(quantity);
     } catch (error) {
       console.error("Error creating takeoff quantity:", error);
@@ -18021,13 +18040,37 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
 
   app.patch("/api/takeoff-quantities/:id", async (req: Request, res: Response) => {
     try {
+      const id = p(req.params.id);
+      const updates: Record<string, unknown> = { ...req.body, updatedAt: new Date() };
+      delete (updates as any).id;
+      delete (updates as any).tenantId;
+
+      // Recompute extendedCost when any cost-input field changes.
+      const costFields = ["quantity", "unitCost", "laborRate", "laborHours", "wasteFactor"];
+      const costFieldChanged = costFields.some((k) => Object.prototype.hasOwnProperty.call(req.body, k));
+      if (costFieldChanged) {
+        const [current] = await db.select().from(takeoffQuantities).where(and(
+          eq(takeoffQuantities.tenantId, DEFAULT_TENANT_ID),
+          eq(takeoffQuantities.id, id),
+        ));
+        if (!current) return res.status(404).json({ error: "Takeoff quantity not found" });
+        updates.extendedCost = computeTakeoffExtendedCost({
+          quantity: (req.body.quantity ?? current.quantity) as string,
+          unitCost: (req.body.unitCost ?? current.unitCost) as string | null | undefined,
+          laborRate: (req.body.laborRate ?? current.laborRate) as string | null | undefined,
+          laborHours: (req.body.laborHours ?? current.laborHours) as string | null | undefined,
+          wasteFactor: (req.body.wasteFactor ?? current.wasteFactor) as string | null | undefined,
+        });
+      }
+
       const [quantity] = await db.update(takeoffQuantities)
-        .set({ ...req.body, updatedAt: new Date() })
+        .set(updates)
         .where(and(
           eq(takeoffQuantities.tenantId, DEFAULT_TENANT_ID),
-          eq(takeoffQuantities.id, p(req.params.id))
+          eq(takeoffQuantities.id, id),
         ))
         .returning();
+      if (!quantity) return res.status(404).json({ error: "Takeoff quantity not found" });
       res.json(quantity);
     } catch (error) {
       console.error("Error updating takeoff quantity:", error);

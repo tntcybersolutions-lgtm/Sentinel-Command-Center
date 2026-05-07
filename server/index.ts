@@ -251,7 +251,7 @@ app.use((req, res, next) => {
               // Seed 50-state lien waiver templates (200 total: 50 states x 4 types)
         try {
           const { seedLienWaiverTemplates } = await import("./lien-waivers");
-          await seedLienWaiverTemplates();
+          await seedLienWaiverTemplates("blackhawk-default");
           log("Lien waiver templates seeded (200 templates across 50 states)", "lien-waivers");
         } catch (e) {
           console.error("Failed to seed lien waiver templates:", e);

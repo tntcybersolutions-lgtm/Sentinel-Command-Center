@@ -219,9 +219,7 @@ function genCableSchedule(project: any, takeoff: { items: any[] }): string {
 
 | Circuit ID | Cable Type | System | Length | Origin | Destination | Remarks |
 |------------|-----------|--------|--------|--------|-------------|---------|
-${rows || "| C-001 | CAT6A | Data | Per plan | IDF-1 | Work Area Outlet | TBD |
-| C-002 | Single-mode fiber | Backbone | Per plan | MDF | IDF-1 | 12-strand |
-| C-003 | RG-6 Quad Shield | CATV | Per plan | Head-end | Outlet | TBD |"}
+${rows || "| C-001 | CAT6A | Data | Per plan | IDF-1 | Work Area Outlet | TBD |\n| C-002 | Single-mode fiber | Backbone | Per plan | MDF | IDF-1 | 12-strand |\n| C-003 | RG-6 Quad Shield | CATV | Per plan | Head-end | Outlet | TBD |"}
 
 ## System Legend
 - **Data:** Structured cabling (CAT6A minimum)
@@ -258,10 +256,7 @@ function genDeviceSchedule(project: any, takeoff: { items: any[] }): string {
 
 | Device ID | Device Type | System | Qty | Location | Status | Notes |
 |-----------|-------------|--------|-----|----------|--------|-------|
-${rows || "| D-001 | Data Outlet | Data | Per plan | Per room | Pending | CAT6A |
-| D-002 | IP Camera | Security | Per plan | Corridor | Pending | 4MP |
-| D-003 | Card Reader | Access | Per plan | Entry | Pending | HID |
-| D-004 | IP Phone | Voice | Per plan | Office | Pending | PoE |"}
+${rows || "| D-001 | Data Outlet | Data | Per plan | Per room | Pending | CAT6A |\n| D-002 | IP Camera | Security | Per plan | Corridor | Pending | 4MP |\n| D-003 | Card Reader | Access | Per plan | Entry | Pending | HID |\n| D-004 | IP Phone | Voice | Per plan | Office | Pending | PoE |"}
 
 ## Device Specifications
 - All devices to meet NEC and project specifications
@@ -293,16 +288,16 @@ function genRackElevation(project: any, takeoff: { items: any[] }): string {
 | DVR-01 | Security room | 6U | NVR/DVR, access control panel | 15A | 800 |
 
 ## MDF-01 Equipment Layout (42U)
-```
+${"```"}
 U01-02: Patch Panel — Voice (48-port)
-U03-04: Patch Panel — Data (48-port)  
+U03-04: Patch Panel — Data (48-port)
 U05-06: Patch Panel — Data (48-port)
 U07:    1U Blank
 U08-10: Core Switch (48-port PoE+)
 U11-12: Firewall/Router
 U13:    1U Blank
 U14-16: UPS (3kVA tower)
-```
+${"```"}
 
 ## Installation Requirements
 - Rack equipment per manufacturer specifications

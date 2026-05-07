@@ -3189,6 +3189,10 @@ export const takeoffQuantities = pgTable("takeoff_quantities", {
   laborHours: decimal("labor_hours", { precision: 10, scale: 2 }),
   wasteFactor: decimal("waste_factor", { precision: 5, scale: 2 }).default("0"),
   extendedCost: decimal("extended_cost", { precision: 14, scale: 2 }),
+  // Procurement routing — when true, the unified-workflows handler rolls
+  // this line into an auto-generated PO. Replaces the old substring match
+  // on `notes` ("procure"/"purchase"/"order").
+  triggersProcurement: boolean("triggers_procurement").default(false).notNull(),
   // Annotation link
   annotationId: varchar("annotation_id", { length: 36 }),
   annotationJson: jsonb("annotation_json"), // shape data for reference

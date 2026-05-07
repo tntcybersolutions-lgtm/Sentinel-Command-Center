@@ -169,9 +169,10 @@ async function handleTakeoffUpdated(event: OpsEvent): Promise<void> {
     ));
 
   const procurementLines = quantities.filter(q => {
-    const cat = (q as any).categoryId;
-    const notes = q.notes || "";
-    return notes.toLowerCase().includes("procure") || notes.toLowerCase().includes("purchase") || notes.toLowerCase().includes("order");
+    if ((q as any).triggersProcurement === true) return true;
+    // Legacy fallback for rows created before triggers_procurement existed.
+    const notes = (q.notes || "").toLowerCase();
+    return notes.includes("procure") || notes.includes("purchase") || notes.includes("order");
   });
 
   if (procurementLines.length === 0) return;

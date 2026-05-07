@@ -27,8 +27,8 @@ documentContentRouter.get("/api/jackets/bid/:bidId/documents/:documentId/content
     const { bidId, documentId } = req.params;
     const tableName = await resolveDocTable();
     if (!tableName) return jsonError(res, 404, "Document not found");
-    const safeDoc = documentId.replace(/'/g, "''");
-    const safeBid = bidId.replace(/'/g, "''");
+    const safeDoc = String(documentId).replace(/'/g, "''");
+    const safeBid = String(bidId).replace(/'/g, "''");
     const safeTen = tenantId.replace(/'/g, "''");
     const result = await db.execute(sql.raw(`SELECT id,bid_project_id,tenant_id,title,content,storage_key,source_type,file_name,mime_type FROM "${tableName}" WHERE id='${safeDoc}' LIMIT 1`));
     const rows = (result as any).rows as any[];
