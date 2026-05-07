@@ -19,11 +19,113 @@ import {
   lienWaiverReminders,
   vendors,
   projects,
+  projectFolders,
+  jacketFolders,
   type LienWaiver,
   type InsertLienWaiver,
   type LienWaiverReminder,
 } from "@shared/schema";
 import { and, asc, desc, eq, gt, isNull, lte, sql } from "drizzle-orm";
+
+const LIEN_WAIVER_FOLDER_NAME = "11_Lien_Waivers";
+const LIEN_WAIVER_JACKET_FOLDER_NAME = "13 - Lien Waivers";
+
+function isPgUniqueViolation(err: unknown): boolean {
+  return typeof err === "object" && err !== null && (err as { code?: string }).code === "23505";
+}
+
+async function lookupJacketFolderId(tenantId: string, projectId: string): Promise<string | undefined> {
+  const r = await db
+    .select({ id: jacketFolders.id })
+    .from(jacketFolders)
+    .where(and(
+      eq(jacketFolders.tenantId, tenantId),
+      eq(jacketFolders.jacketType, "project"),
+      eq(jacketFolders.jacketId, projectId),
+      eq(jacketFolders.name, LIEN_WAIVER_JACKET_FOLDER_NAME),
+    ))
+    .limit(1);
+  return r[0]?.id;
+}
+
+export async function ensureLienWaiverFolder(
+  tenantId: string,
+  projectId: string,
+): Promise<{ projectFolderId: string; jacketFolderId: string }> {
+  const [proj] = await db
+    .select({ id: projects.id })
+    .from(projects)
+    .where(and(eq(projects.tenantId, tenantId), eq(projects.id, projectId)))
+    .limit(1);
+  if (!proj) {
+    throw Object.assign(new Error(`project not found: ${projectId}`), { statusCode: 404 });
+  }
+
+  // projectFolders: race-safe via unique index (tenantId, projectId, name).
+  const inserted = await db.insert(projectFolders).values({
+    tenantId,
+    projectId,
+    name: LIEN_WAIVER_FOLDER_NAME,
+    sortOrder: 110,
+  }).onConflictDoNothing({ target: [projectFolders.tenantId, projectFolders.projectId, projectFolders.name] })
+    .returning({ id: projectFolders.id });
+  let projectFolderId = inserted[0]?.id;
+  if (!projectFolderId) {
+    const existing = await db
+      .select({ id: projectFolders.id })
+      .from(projectFolders)
+      .where(and(
+        eq(projectFolders.tenantId, tenantId),
+        eq(projectFolders.projectId, projectId),
+        eq(projectFolders.name, LIEN_WAIVER_FOLDER_NAME),
+      ))
+      .limit(1);
+    projectFolderId = existing[0]?.id;
+  }
+  if (!projectFolderId) throw new Error(`failed to ensure project folder for ${projectId}`);
+
+  // jacketFolders: only swallow unique-violation, rethrow everything else.
+  let jacketFolderId = await lookupJacketFolderId(tenantId, projectId);
+  if (!jacketFolderId) {
+    try {
+      const [row] = await db.insert(jacketFolders).values({
+        tenantId,
+        jacketType: "project",
+        jacketId: projectId,
+        name: LIEN_WAIVER_JACKET_FOLDER_NAME,
+        path: `/Projects/${projectId}/${LIEN_WAIVER_JACKET_FOLDER_NAME}`,
+        sortOrder: 13,
+        isSystemFolder: true,
+      }).returning({ id: jacketFolders.id });
+      jacketFolderId = row.id;
+    } catch (err) {
+      if (!isPgUniqueViolation(err)) throw err;
+      jacketFolderId = await lookupJacketFolderId(tenantId, projectId);
+    }
+  }
+  if (!jacketFolderId) throw new Error(`failed to ensure jacket folder for ${projectId}`);
+
+  return { projectFolderId, jacketFolderId };
+}
+
+export async function backfillLienWaiverFoldersForAllProjects(
+  tenantId: string,
+): Promise<{ projectsScanned: number; foldersEnsured: number }> {
+  const allProjects = await db
+    .select({ id: projects.id })
+    .from(projects)
+    .where(eq(projects.tenantId, tenantId));
+  let foldersEnsured = 0;
+  for (const p of allProjects) {
+    try {
+      await ensureLienWaiverFolder(tenantId, p.id);
+      foldersEnsured++;
+    } catch (err) {
+      console.error(`[lien-waiver] backfill failed for project ${p.id}:`, err);
+    }
+  }
+  return { projectsScanned: allProjects.length, foldersEnsured };
+}
 import { randomBytes } from "crypto";
 import { findTemplate, fillTemplate, type TemplateWaiverType } from "./lien-waiver-templates.seed";
 
@@ -125,6 +227,9 @@ export async function createWaiver(input: CreateInput): Promise<LienWaiver> {
     notesText: input.notesText ?? null,
     createdByUserId: input.createdByUserId ?? null,
   };
+  // Guarantee folder BEFORE waiver insert. If folder ensure fails, the
+  // waiver is not created — the user gets a real 4xx/5xx and can retry.
+  await ensureLienWaiverFolder(input.tenantId, input.projectId);
   const [row] = await db.insert(lienWaivers).values(insert).returning();
   await logEvent(input.tenantId, row.id, "created", input.createdByUserId ?? null, null, {
     waiverType: input.waiverType,

@@ -4372,6 +4372,7 @@ export const PROJECT_JACKET_FOLDERS = [
   { code: "10", name: "Safety" },
   { code: "11", name: "Invoices & Pay Apps" },
   { code: "12", name: "Closeout" },
+  { code: "13", name: "Lien Waivers" },
   { code: "99", name: "Archive" },
 ] as const;
 
@@ -6194,7 +6195,9 @@ export const projectFolders = pgTable("project_folders", {
   name: text("name").notNull(),
   sortOrder: integer("sort_order").notNull().default(0),
   createdAt: timestamp("created_at").notNull().defaultNow(),
-});
+}, (table) => ({
+  uniqByName: uniqueIndex("project_folders_tenant_project_name_uniq").on(table.tenantId, table.projectId, table.name),
+}));
 
 export const insertProjectFolderSchema = createInsertSchema(projectFolders).omit({ id: true, createdAt: true });
 export type InsertProjectFolder = z.infer<typeof insertProjectFolderSchema>;
