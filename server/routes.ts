@@ -16468,62 +16468,33 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
     }
   });
 
-  // Seed standard folder sections
+  // Seed standard folder sections from the canonical schema constants.
+  // Single source of truth: shared/schema.ts BID_JACKET_FOLDERS /
+  // COMPANY_JACKET_FOLDERS / PROJECT_JACKET_FOLDERS. Idempotent — already-
+  // seeded rows are skipped.
   app.post("/api/seed/folder-sections", async (req: Request, res: Response) => {
     try {
-      const bidSections = [
-        { code: "01", name: "Bid_Request", displayName: "Bid Request", requiredForSubmit: true },
-        { code: "02", name: "Plans_and_Specs", displayName: "Plans & Specifications", requiredForSubmit: true },
-        { code: "03", name: "RFIs", displayName: "RFIs", requiredForSubmit: false },
-        { code: "04", name: "Addenda", displayName: "Addenda", requiredForSubmit: false },
-        { code: "05", name: "Takeoff_and_Estimating", displayName: "Takeoff & Estimating", requiredForSubmit: true },
-        { code: "06", name: "Subcontractor_Quotes", displayName: "Subcontractor Quotes", requiredForSubmit: false },
-        { code: "07", name: "Final_Bid_Submission", displayName: "Final Bid Submission", requiredForSubmit: true },
-        { code: "08", name: "Bid_Communications", displayName: "Bid Communications", requiredForSubmit: false },
-      ];
-      
-      const projectSections = [
-        { code: "01", name: "Converted_Bid_Documents", displayName: "Converted Bid Documents" },
-        { code: "02", name: "Contract_and_Agreements", displayName: "Contract & Agreements" },
-        { code: "03", name: "Change_Orders", displayName: "Change Orders" },
-        { code: "04", name: "Purchase_Orders", displayName: "Purchase Orders" },
-        { code: "05", name: "Schedules", displayName: "Schedules" },
-        { code: "06", name: "Invoices_and_Payments", displayName: "Invoices & Payments" },
-        { code: "07", name: "Photos_and_Field_Reports", displayName: "Photos & Field Reports" },
-        { code: "08", name: "Compliance_and_Safety", displayName: "Compliance & Safety" },
-        { code: "09", name: "Emails_and_Communication", displayName: "Emails & Communication" },
-        { code: "10", name: "Closeout_and_Warranty", displayName: "Closeout & Warranty" },
-      ];
-      
-      for (let i = 0; i < bidSections.length; i++) {
-        const s = bidSections[i];
-        await storage.createFolderSection({
-          tenantId: DEFAULT_TENANT_ID,
-          jacketType: "bid",
-          sortOrder: i + 1,
-          code: s.code,
-          name: s.name,
-          displayName: s.displayName,
-          requiredForSubmit: s.requiredForSubmit,
-        });
-      }
-      
-      for (let i = 0; i < projectSections.length; i++) {
-        const s = projectSections[i];
-        await storage.createFolderSection({
-          tenantId: DEFAULT_TENANT_ID,
-          jacketType: "project",
-          sortOrder: i + 1,
-          code: s.code,
-          name: s.name,
-          displayName: s.displayName,
-        });
-      }
-      
-      res.json({ success: true, message: "Folder sections seeded" });
-    } catch (error) {
+      const { seedFolderSectionsFromConstants } = await import("./services/taxonomy.service");
+      const result = await seedFolderSectionsFromConstants(DEFAULT_TENANT_ID);
+      res.json({ success: true, ...result });
+    } catch (error: any) {
       console.error("Error seeding folder sections:", error);
-      res.status(500).json({ error: "Failed to seed folder sections" });
+      res.status(500).json({ error: "Failed to seed folder sections", message: error.message });
+    }
+  });
+
+  // Drift report — does the DB folder_sections table match the constants?
+  app.get("/api/seed/folder-sections/diff", async (req: Request, res: Response) => {
+    try {
+      const { diffFolderSectionsAgainstConstants } = await import("./services/taxonomy.service");
+      const diff = await diffFolderSectionsAgainstConstants(DEFAULT_TENANT_ID);
+      res.json({
+        ok: diff.missing.length === 0 && diff.extraInDb.length === 0 && diff.nameMismatches.length === 0,
+        ...diff,
+      });
+    } catch (error: any) {
+      console.error("Error diffing folder sections:", error);
+      res.status(500).json({ error: "Failed to diff folder sections", message: error.message });
     }
   });
 

@@ -4095,8 +4095,14 @@ export type RetroScanCluster = typeof retroScanClusters.$inferSelect;
 export type InsertRetroScanCluster = z.infer<typeof insertRetroScanClusterSchema>;
 
 // ============================================================================
-// FOLDER TAXONOMY CONSTANTS
+// FOLDER TAXONOMY CONSTANTS — CANONICAL SOURCE OF TRUTH
 // ============================================================================
+//
+// These three constants are the only place jacket folder structure is
+// defined. The `folder_sections` DB table is a derived projection seeded
+// by server/services/taxonomy.service.ts (seedFolderSectionsFromConstants).
+// FolderTaxonomyService and any UI surface that needs the folder list
+// MUST import from here — do not hand-type folder lists elsewhere.
 
 export const COMPANY_JACKET_FOLDERS = [
   { code: "00", name: "Overview" },
