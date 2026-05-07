@@ -2938,6 +2938,10 @@ export const blueprints = pgTable("blueprints", {
   mimeType: text("mime_type").default("application/pdf"),
   pageCount: integer("page_count").default(1),
   scale: text("scale"),
+  // Per-page calibration: { "1": pixelsPerFoot, "2": pixelsPerFoot } so a
+  // single drawing set with multiple pages can carry distinct scales.
+  pixelsPerFootByPage: jsonb("pixels_per_foot_by_page"),
+  calibratedAt: timestamp("calibrated_at"),
   category: text("category").notNull().default("General"),
   uploadedAt: timestamp("uploaded_at").defaultNow().notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),

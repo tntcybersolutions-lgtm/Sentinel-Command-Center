@@ -109,6 +109,7 @@ import {
   changeOrders,
   dailyLogs,
   projectTasks,
+  blueprints,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, desc, asc, ilike, sql, count, isNotNull, gte, lte, lt, or, inArray } from "drizzle-orm";
@@ -4390,6 +4391,125 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Error deleting blueprint:", error);
       res.status(500).json({ error: "Failed to delete blueprint" });
+    }
+  });
+
+  // ─── Takeoff measurement engine ────────────────────────────────────────────
+  // Calibrate a drawing page: client picks two points + supplies a known
+  // length in feet; we store pixelsPerFoot so subsequent measurements
+  // resolve to real-world quantities.
+  app.post("/api/blueprints/:id/calibrate", async (req: Request, res: Response) => {
+    try {
+      const blueprintId = p(req.params.id);
+      const schema = z.object({
+        pageNumber: z.number().int().positive().default(1),
+        p1: z.object({ x: z.number(), y: z.number() }),
+        p2: z.object({ x: z.number(), y: z.number() }),
+        knownLengthFt: z.number().positive(),
+      });
+      const validated = schema.safeParse(req.body);
+      if (!validated.success) {
+        return res.status(400).json({ error: "Validation failed", details: fromError(validated.error).toString() });
+      }
+      const { computePixelsPerFoot } = await import("./services/measurement-engine.service");
+      const ppf = computePixelsPerFoot(validated.data.p1, validated.data.p2, validated.data.knownLengthFt);
+
+      const [bp] = await db.select().from(blueprints).where(and(
+        eq(blueprints.tenantId, DEFAULT_TENANT_ID),
+        eq(blueprints.id, blueprintId),
+      ));
+      if (!bp) return res.status(404).json({ error: "Blueprint not found" });
+
+      const existing = (bp.pixelsPerFootByPage as Record<string, number> | null) || {};
+      const updated = { ...existing, [String(validated.data.pageNumber)]: ppf };
+
+      await db.update(blueprints)
+        .set({ pixelsPerFootByPage: updated, calibratedAt: new Date() })
+        .where(eq(blueprints.id, blueprintId));
+
+      res.json({ blueprintId, pageNumber: validated.data.pageNumber, pixelsPerFoot: ppf, allPages: updated });
+    } catch (error: any) {
+      console.error("[Measurement] Calibrate error:", error);
+      res.status(500).json({ error: "Failed to calibrate", message: error.message });
+    }
+  });
+
+  // Evaluate a measurement: server applies the saved pixelsPerFoot for
+  // the page and returns { quantity, unit, type, closed }.
+  app.post("/api/blueprints/:id/measure", async (req: Request, res: Response) => {
+    try {
+      const blueprintId = p(req.params.id);
+      const schema = z.object({
+        pageNumber: z.number().int().positive().default(1),
+        type: z.enum(["linear", "polyline", "area", "volume", "count"]),
+        points: z.array(z.object({ x: z.number(), y: z.number() })),
+        depthFt: z.number().positive().optional(),
+      });
+      const validated = schema.safeParse(req.body);
+      if (!validated.success) {
+        return res.status(400).json({ error: "Validation failed", details: fromError(validated.error).toString() });
+      }
+
+      const [bp] = await db.select().from(blueprints).where(and(
+        eq(blueprints.tenantId, DEFAULT_TENANT_ID),
+        eq(blueprints.id, blueprintId),
+      ));
+      if (!bp) return res.status(404).json({ error: "Blueprint not found" });
+
+      const ppfMap = (bp.pixelsPerFootByPage as Record<string, number> | null) || {};
+      const ppf = ppfMap[String(validated.data.pageNumber)];
+      if (validated.data.type !== "count") {
+        if (!ppf || ppf <= 0) {
+          return res.status(409).json({
+            error: "Page not calibrated",
+            hint: "POST /api/blueprints/:id/calibrate first.",
+            pageNumber: validated.data.pageNumber,
+          });
+        }
+      }
+      const { evaluateMeasurement } = await import("./services/measurement-engine.service");
+      const result = evaluateMeasurement(
+        { type: validated.data.type, points: validated.data.points, depthFt: validated.data.depthFt },
+        { pixelsPerFoot: ppf || 0 },
+      );
+      res.json(result);
+    } catch (error: any) {
+      console.error("[Measurement] Measure error:", error);
+      res.status(500).json({ error: "Failed to measure", message: error.message });
+    }
+  });
+
+  // AI vision count: send a base64 image of a drawing region + target
+  // type, get back { count, confidence, source, notes, model }.
+  app.post("/api/blueprints/vision-count", async (req: Request, res: Response) => {
+    try {
+      const schema = z.object({
+        imageBase64: z.string().min(1),
+        mimeType: z.string().default("image/png"),
+        targetType: z.string(),
+        hint: z.string().optional(),
+      });
+      const validated = schema.safeParse(req.body);
+      if (!validated.success) {
+        return res.status(400).json({ error: "Validation failed", details: fromError(validated.error).toString() });
+      }
+      const { realVisionCounter, VISION_TARGET_TYPES } = await import("./services/vision-counter.service");
+      if (!(VISION_TARGET_TYPES as readonly string[]).includes(validated.data.targetType)) {
+        return res.status(400).json({
+          error: "Unknown targetType",
+          allowed: VISION_TARGET_TYPES,
+        });
+      }
+      const result = await realVisionCounter.count({
+        imageBase64: validated.data.imageBase64,
+        mimeType: validated.data.mimeType,
+        targetType: validated.data.targetType as any,
+        hint: validated.data.hint,
+      });
+      res.json(result);
+    } catch (error: any) {
+      console.error("[Measurement] Vision count error:", error);
+      res.status(500).json({ error: "Failed to count via vision", message: error.message });
     }
   });
 
