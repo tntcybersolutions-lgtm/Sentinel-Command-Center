@@ -109,6 +109,7 @@ import {
   changeOrders,
   dailyLogs,
   projectTasks,
+  blueprints,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, desc, asc, ilike, sql, count, isNotNull, gte, lte, lt, or, inArray } from "drizzle-orm";
@@ -116,6 +117,7 @@ import { eventStreamService } from "./services/event-stream.service";
 import crypto from "crypto";
 import { fromError } from "zod-validation-error";
 import { auditService } from "./services/audit.service";
+import { computeTakeoffExtendedCost } from "./services/takeoff-cost.service";
 import { approvalService } from "./services/approval.service";
 import { scoringService } from "./services/scoring.service";
 import { bidService } from "./services/bid.service";
@@ -4118,7 +4120,7 @@ export async function registerRoutes(
   app.patch("/api/bid-projects/:bidProjectId/jacket-checklist/:itemId", async (req: Request, res: Response) => {
     try {
       const itemId = p(req.params.itemId);
-      const { status, ownerUserId, dueAt, blockedReason } = req.body;
+      const { status, ownerUserId, dueAt, blockedReason, force } = req.body;
       const updates: Record<string, any> = { updatedAt: new Date() };
       if (status) {
         updates.status = status;
@@ -4130,6 +4132,32 @@ export async function registerRoutes(
       if (ownerUserId !== undefined) updates.ownerUserId = ownerUserId;
       if (dueAt !== undefined) updates.dueAt = dueAt ? new Date(dueAt) : null;
       if (blockedReason !== undefined) updates.blockedReason = blockedReason;
+
+      // Gate: cannot transition to "done" while required artifacts are missing.
+      if (status === "done" && force !== true) {
+        const [item] = await db.select().from(bidJacketChecklistItems)
+          .where(eq(bidJacketChecklistItems.id, itemId));
+        if (!item) return res.status(404).json({ error: "Checklist item not found" });
+
+        const artifacts = await db.select({
+          templateCode: bidJacketArtifacts.templateCode,
+          status: bidJacketArtifacts.status,
+        }).from(bidJacketArtifacts)
+          .where(eq(bidJacketArtifacts.bidProjectId, item.bidProjectId));
+
+        const { evaluateChecklistArtifactGate } = await import("./services/checklist-gate.service");
+        const gate = evaluateChecklistArtifactGate({
+          requiredArtifactCodes: item.requiredArtifactCodes,
+          bidArtifacts: artifacts,
+        });
+        if (gate.blocked) {
+          return res.status(409).json({
+            error: "Required artifacts are not ready",
+            missingArtifactCodes: gate.missingCodes,
+            hint: "Mark the missing artifacts ready/approved, or pass { force: true } to override.",
+          });
+        }
+      }
 
       const [updated] = await db
         .update(bidJacketChecklistItems)
@@ -4363,6 +4391,125 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Error deleting blueprint:", error);
       res.status(500).json({ error: "Failed to delete blueprint" });
+    }
+  });
+
+  // ─── Takeoff measurement engine ────────────────────────────────────────────
+  // Calibrate a drawing page: client picks two points + supplies a known
+  // length in feet; we store pixelsPerFoot so subsequent measurements
+  // resolve to real-world quantities.
+  app.post("/api/blueprints/:id/calibrate", async (req: Request, res: Response) => {
+    try {
+      const blueprintId = p(req.params.id);
+      const schema = z.object({
+        pageNumber: z.number().int().positive().default(1),
+        p1: z.object({ x: z.number(), y: z.number() }),
+        p2: z.object({ x: z.number(), y: z.number() }),
+        knownLengthFt: z.number().positive(),
+      });
+      const validated = schema.safeParse(req.body);
+      if (!validated.success) {
+        return res.status(400).json({ error: "Validation failed", details: fromError(validated.error).toString() });
+      }
+      const { computePixelsPerFoot } = await import("./services/measurement-engine.service");
+      const ppf = computePixelsPerFoot(validated.data.p1, validated.data.p2, validated.data.knownLengthFt);
+
+      const [bp] = await db.select().from(blueprints).where(and(
+        eq(blueprints.tenantId, DEFAULT_TENANT_ID),
+        eq(blueprints.id, blueprintId),
+      ));
+      if (!bp) return res.status(404).json({ error: "Blueprint not found" });
+
+      const existing = (bp.pixelsPerFootByPage as Record<string, number> | null) || {};
+      const updated = { ...existing, [String(validated.data.pageNumber)]: ppf };
+
+      await db.update(blueprints)
+        .set({ pixelsPerFootByPage: updated, calibratedAt: new Date() })
+        .where(eq(blueprints.id, blueprintId));
+
+      res.json({ blueprintId, pageNumber: validated.data.pageNumber, pixelsPerFoot: ppf, allPages: updated });
+    } catch (error: any) {
+      console.error("[Measurement] Calibrate error:", error);
+      res.status(500).json({ error: "Failed to calibrate", message: error.message });
+    }
+  });
+
+  // Evaluate a measurement: server applies the saved pixelsPerFoot for
+  // the page and returns { quantity, unit, type, closed }.
+  app.post("/api/blueprints/:id/measure", async (req: Request, res: Response) => {
+    try {
+      const blueprintId = p(req.params.id);
+      const schema = z.object({
+        pageNumber: z.number().int().positive().default(1),
+        type: z.enum(["linear", "polyline", "area", "volume", "count"]),
+        points: z.array(z.object({ x: z.number(), y: z.number() })),
+        depthFt: z.number().positive().optional(),
+      });
+      const validated = schema.safeParse(req.body);
+      if (!validated.success) {
+        return res.status(400).json({ error: "Validation failed", details: fromError(validated.error).toString() });
+      }
+
+      const [bp] = await db.select().from(blueprints).where(and(
+        eq(blueprints.tenantId, DEFAULT_TENANT_ID),
+        eq(blueprints.id, blueprintId),
+      ));
+      if (!bp) return res.status(404).json({ error: "Blueprint not found" });
+
+      const ppfMap = (bp.pixelsPerFootByPage as Record<string, number> | null) || {};
+      const ppf = ppfMap[String(validated.data.pageNumber)];
+      if (validated.data.type !== "count") {
+        if (!ppf || ppf <= 0) {
+          return res.status(409).json({
+            error: "Page not calibrated",
+            hint: "POST /api/blueprints/:id/calibrate first.",
+            pageNumber: validated.data.pageNumber,
+          });
+        }
+      }
+      const { evaluateMeasurement } = await import("./services/measurement-engine.service");
+      const result = evaluateMeasurement(
+        { type: validated.data.type, points: validated.data.points, depthFt: validated.data.depthFt },
+        { pixelsPerFoot: ppf || 0 },
+      );
+      res.json(result);
+    } catch (error: any) {
+      console.error("[Measurement] Measure error:", error);
+      res.status(500).json({ error: "Failed to measure", message: error.message });
+    }
+  });
+
+  // AI vision count: send a base64 image of a drawing region + target
+  // type, get back { count, confidence, source, notes, model }.
+  app.post("/api/blueprints/vision-count", async (req: Request, res: Response) => {
+    try {
+      const schema = z.object({
+        imageBase64: z.string().min(1),
+        mimeType: z.string().default("image/png"),
+        targetType: z.string(),
+        hint: z.string().optional(),
+      });
+      const validated = schema.safeParse(req.body);
+      if (!validated.success) {
+        return res.status(400).json({ error: "Validation failed", details: fromError(validated.error).toString() });
+      }
+      const { realVisionCounter, VISION_TARGET_TYPES } = await import("./services/vision-counter.service");
+      if (!(VISION_TARGET_TYPES as readonly string[]).includes(validated.data.targetType)) {
+        return res.status(400).json({
+          error: "Unknown targetType",
+          allowed: VISION_TARGET_TYPES,
+        });
+      }
+      const result = await realVisionCounter.count({
+        imageBase64: validated.data.imageBase64,
+        mimeType: validated.data.mimeType,
+        targetType: validated.data.targetType as any,
+        hint: validated.data.hint,
+      });
+      res.json(result);
+    } catch (error: any) {
+      console.error("[Measurement] Vision count error:", error);
+      res.status(500).json({ error: "Failed to count via vision", message: error.message });
     }
   });
 
@@ -15643,6 +15790,22 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
         : `inline; filename="${fileName}"`;
       res.setHeader("Content-Disposition", cd);
 
+      try {
+        await storage.createAuditLogEntry({
+          tenantId: DEFAULT_TENANT_ID,
+          action: disposition === "attachment" ? "download" : "view",
+          documentId: doc.id,
+          actorType: "user",
+          detailsJson: {
+            fileName: doc.fileName,
+            ip: req.ip || req.socket?.remoteAddress || "unknown",
+            userAgent: req.headers["user-agent"] || "unknown",
+          },
+        });
+      } catch (auditErr) {
+        console.error("[doc-content] audit log write failed:", auditErr);
+      }
+
       stream.pipe(res);
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : "Stream failed";
@@ -16425,62 +16588,33 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
     }
   });
 
-  // Seed standard folder sections
+  // Seed standard folder sections from the canonical schema constants.
+  // Single source of truth: shared/schema.ts BID_JACKET_FOLDERS /
+  // COMPANY_JACKET_FOLDERS / PROJECT_JACKET_FOLDERS. Idempotent — already-
+  // seeded rows are skipped.
   app.post("/api/seed/folder-sections", async (req: Request, res: Response) => {
     try {
-      const bidSections = [
-        { code: "01", name: "Bid_Request", displayName: "Bid Request", requiredForSubmit: true },
-        { code: "02", name: "Plans_and_Specs", displayName: "Plans & Specifications", requiredForSubmit: true },
-        { code: "03", name: "RFIs", displayName: "RFIs", requiredForSubmit: false },
-        { code: "04", name: "Addenda", displayName: "Addenda", requiredForSubmit: false },
-        { code: "05", name: "Takeoff_and_Estimating", displayName: "Takeoff & Estimating", requiredForSubmit: true },
-        { code: "06", name: "Subcontractor_Quotes", displayName: "Subcontractor Quotes", requiredForSubmit: false },
-        { code: "07", name: "Final_Bid_Submission", displayName: "Final Bid Submission", requiredForSubmit: true },
-        { code: "08", name: "Bid_Communications", displayName: "Bid Communications", requiredForSubmit: false },
-      ];
-      
-      const projectSections = [
-        { code: "01", name: "Converted_Bid_Documents", displayName: "Converted Bid Documents" },
-        { code: "02", name: "Contract_and_Agreements", displayName: "Contract & Agreements" },
-        { code: "03", name: "Change_Orders", displayName: "Change Orders" },
-        { code: "04", name: "Purchase_Orders", displayName: "Purchase Orders" },
-        { code: "05", name: "Schedules", displayName: "Schedules" },
-        { code: "06", name: "Invoices_and_Payments", displayName: "Invoices & Payments" },
-        { code: "07", name: "Photos_and_Field_Reports", displayName: "Photos & Field Reports" },
-        { code: "08", name: "Compliance_and_Safety", displayName: "Compliance & Safety" },
-        { code: "09", name: "Emails_and_Communication", displayName: "Emails & Communication" },
-        { code: "10", name: "Closeout_and_Warranty", displayName: "Closeout & Warranty" },
-      ];
-      
-      for (let i = 0; i < bidSections.length; i++) {
-        const s = bidSections[i];
-        await storage.createFolderSection({
-          tenantId: DEFAULT_TENANT_ID,
-          jacketType: "bid",
-          sortOrder: i + 1,
-          code: s.code,
-          name: s.name,
-          displayName: s.displayName,
-          requiredForSubmit: s.requiredForSubmit,
-        });
-      }
-      
-      for (let i = 0; i < projectSections.length; i++) {
-        const s = projectSections[i];
-        await storage.createFolderSection({
-          tenantId: DEFAULT_TENANT_ID,
-          jacketType: "project",
-          sortOrder: i + 1,
-          code: s.code,
-          name: s.name,
-          displayName: s.displayName,
-        });
-      }
-      
-      res.json({ success: true, message: "Folder sections seeded" });
-    } catch (error) {
+      const { seedFolderSectionsFromConstants } = await import("./services/taxonomy.service");
+      const result = await seedFolderSectionsFromConstants(DEFAULT_TENANT_ID);
+      res.json({ success: true, ...result });
+    } catch (error: any) {
       console.error("Error seeding folder sections:", error);
-      res.status(500).json({ error: "Failed to seed folder sections" });
+      res.status(500).json({ error: "Failed to seed folder sections", message: error.message });
+    }
+  });
+
+  // Drift report — does the DB folder_sections table match the constants?
+  app.get("/api/seed/folder-sections/diff", async (req: Request, res: Response) => {
+    try {
+      const { diffFolderSectionsAgainstConstants } = await import("./services/taxonomy.service");
+      const diff = await diffFolderSectionsAgainstConstants(DEFAULT_TENANT_ID);
+      res.json({
+        ok: diff.missing.length === 0 && diff.extraInDb.length === 0 && diff.nameMismatches.length === 0,
+        ...diff,
+      });
+    } catch (error: any) {
+      console.error("Error diffing folder sections:", error);
+      res.status(500).json({ error: "Failed to diff folder sections", message: error.message });
     }
   });
 
@@ -17963,11 +18097,18 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
   // Takeoff Quantities
   app.get("/api/takeoff-quantities", async (req: Request, res: Response) => {
     try {
-      const { projectId, categoryId, sheetId } = req.query;
-      let query = db.select().from(takeoffQuantities)
-        .where(eq(takeoffQuantities.tenantId, DEFAULT_TENANT_ID));
-      
-      const quantities = await query.orderBy(desc(takeoffQuantities.createdAt));
+      const projectId = pOpt(req.query.projectId as string | undefined);
+      const categoryId = pOpt(req.query.categoryId as string | undefined);
+      const sheetId = pOpt(req.query.sheetId as string | undefined);
+
+      const conditions = [eq(takeoffQuantities.tenantId, DEFAULT_TENANT_ID)];
+      if (projectId) conditions.push(eq(takeoffQuantities.projectId, projectId));
+      if (categoryId) conditions.push(eq(takeoffQuantities.categoryId, categoryId));
+      if (sheetId) conditions.push(eq(takeoffQuantities.sheetId, sheetId));
+
+      const quantities = await db.select().from(takeoffQuantities)
+        .where(and(...conditions))
+        .orderBy(desc(takeoffQuantities.createdAt));
       res.json(quantities);
     } catch (error) {
       console.error("Error fetching takeoff quantities:", error);
@@ -17988,7 +18129,9 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
     unitCost: z.string().optional(),
     laborRate: z.string().optional(),
     laborHours: z.string().optional(),
+    wasteFactor: z.string().optional(),
     notes: z.string().optional(),
+    triggersProcurement: z.boolean().optional(),
   });
 
   app.post("/api/takeoff-quantities", async (req: Request, res: Response) => {
@@ -17997,12 +18140,21 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
       if (!validated.success) {
         return res.status(400).json({ error: "Validation failed", details: fromError(validated.error).toString() });
       }
-      
+
+      const extendedCost = computeTakeoffExtendedCost({
+        quantity: validated.data.quantity,
+        unitCost: validated.data.unitCost,
+        laborRate: validated.data.laborRate,
+        laborHours: validated.data.laborHours,
+        wasteFactor: validated.data.wasteFactor,
+      });
+
       const [quantity] = await db.insert(takeoffQuantities).values({
         tenantId: DEFAULT_TENANT_ID,
         ...validated.data,
+        extendedCost,
       }).returning();
-      
+
       await auditService.logEvent({
         tenantId: DEFAULT_TENANT_ID,
         eventType: "takeoff_quantity.created",
@@ -18011,7 +18163,7 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
         entityId: quantity.id,
         afterJson: quantity as unknown as Record<string, unknown>,
       });
-      
+
       res.status(201).json(quantity);
     } catch (error) {
       console.error("Error creating takeoff quantity:", error);
@@ -18021,17 +18173,81 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
 
   app.patch("/api/takeoff-quantities/:id", async (req: Request, res: Response) => {
     try {
+      const id = p(req.params.id);
+      const updates: Record<string, unknown> = { ...req.body, updatedAt: new Date() };
+      delete (updates as any).id;
+      delete (updates as any).tenantId;
+
+      // Recompute extendedCost when any cost-input field changes.
+      const costFields = ["quantity", "unitCost", "laborRate", "laborHours", "wasteFactor"];
+      const costFieldChanged = costFields.some((k) => Object.prototype.hasOwnProperty.call(req.body, k));
+      if (costFieldChanged) {
+        const [current] = await db.select().from(takeoffQuantities).where(and(
+          eq(takeoffQuantities.tenantId, DEFAULT_TENANT_ID),
+          eq(takeoffQuantities.id, id),
+        ));
+        if (!current) return res.status(404).json({ error: "Takeoff quantity not found" });
+        updates.extendedCost = computeTakeoffExtendedCost({
+          quantity: (req.body.quantity ?? current.quantity) as string,
+          unitCost: (req.body.unitCost ?? current.unitCost) as string | null | undefined,
+          laborRate: (req.body.laborRate ?? current.laborRate) as string | null | undefined,
+          laborHours: (req.body.laborHours ?? current.laborHours) as string | null | undefined,
+          wasteFactor: (req.body.wasteFactor ?? current.wasteFactor) as string | null | undefined,
+        });
+      }
+
       const [quantity] = await db.update(takeoffQuantities)
-        .set({ ...req.body, updatedAt: new Date() })
+        .set(updates)
         .where(and(
           eq(takeoffQuantities.tenantId, DEFAULT_TENANT_ID),
-          eq(takeoffQuantities.id, p(req.params.id))
+          eq(takeoffQuantities.id, id),
         ))
         .returning();
+      if (!quantity) return res.status(404).json({ error: "Takeoff quantity not found" });
       res.json(quantity);
     } catch (error) {
       console.error("Error updating takeoff quantity:", error);
       res.status(500).json({ error: "Failed to update takeoff quantity" });
+    }
+  });
+
+  // AI takeoff assistant: suggest line items from a scope blurb.
+  app.post("/api/takeoff/suggest", async (req: Request, res: Response) => {
+    try {
+      const { projectTitle, scopeText, existingItemNames, maxItems } = req.body ?? {};
+      if (typeof projectTitle !== "string" || typeof scopeText !== "string") {
+        return res.status(400).json({ error: "projectTitle (string) and scopeText (string) are required" });
+      }
+      const { suggestTakeoffItems } = await import("./services/takeoff-assistant.service");
+      const result = await suggestTakeoffItems({
+        projectTitle,
+        scopeText,
+        existingItemNames: Array.isArray(existingItemNames) ? existingItemNames.filter((n) => typeof n === "string") : undefined,
+        maxItems: typeof maxItems === "number" && maxItems > 0 ? Math.min(maxItems, 30) : undefined,
+      });
+      res.json(result);
+    } catch (error: any) {
+      console.error("[Takeoff] Suggest error:", error);
+      res.status(500).json({ error: "Failed to suggest takeoff items", message: error.message });
+    }
+  });
+
+  // AI takeoff assistant: classify a single item into a trade.
+  app.post("/api/takeoff/categorize", async (req: Request, res: Response) => {
+    try {
+      const { name, description } = req.body ?? {};
+      if (typeof name !== "string" || name.trim().length === 0) {
+        return res.status(400).json({ error: "name (string) is required" });
+      }
+      const { categorizeTakeoffItem } = await import("./services/takeoff-assistant.service");
+      const result = await categorizeTakeoffItem({
+        name: name.trim(),
+        description: typeof description === "string" ? description : undefined,
+      });
+      res.json(result);
+    } catch (error: any) {
+      console.error("[Takeoff] Categorize error:", error);
+      res.status(500).json({ error: "Failed to categorize takeoff item", message: error.message });
     }
   });
 
@@ -20275,15 +20491,22 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
 
   // ============================================================================
   // HERBIE AUTO-BUILD JACKET / AUTOPOPULATE
+  // Both routes call the same handler. /autopopulate is the canonical path
+  // used by the bid-jacket UI; /auto-build is kept for API compatibility.
   // ============================================================================
+  async function handleJacketAutoBuild(bidProjectId: string, modeRaw: unknown, res: Response) {
+    const mode = (modeRaw === "repair" ? "repair" : "build") as "build" | "repair";
+    const { buildBidJacket } = await import("./services/herbie-jacket-builder.service");
+    const result = await buildBidJacket(bidProjectId, mode);
+    if (!result.success) {
+      return res.status(400).json(result);
+    }
+    res.json(result);
+  }
+
   app.post("/api/jackets/bid/:bidProjectId/auto-build", async (req: Request, res: Response) => {
     try {
-      const { buildBidJacket } = await import("./services/herbie-jacket-builder.service");
-      const result = await buildBidJacket(p(req.params.bidProjectId));
-      if (!result.success) {
-        return res.status(400).json(result);
-      }
-      res.json(result);
+      await handleJacketAutoBuild(p(req.params.bidProjectId), req.query.mode, res);
     } catch (error: any) {
       console.error("[Jackets] Error auto-building jacket:", error);
       res.status(500).json({ error: "Failed to auto-build jacket", message: error.message });
@@ -20292,14 +20515,7 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
 
   app.post("/api/bids/:id/jacket/autopopulate", async (req: Request, res: Response) => {
     try {
-      const bidProjectId = p(req.params.id);
-      const mode = (req.query.mode === "repair" ? "repair" : "build") as "build" | "repair";
-      const { buildBidJacket } = await import("./services/herbie-jacket-builder.service");
-      const result = await buildBidJacket(bidProjectId, mode);
-      if (!result.success) {
-        return res.status(400).json(result);
-      }
-      res.json(result);
+      await handleJacketAutoBuild(p(req.params.id), req.query.mode, res);
     } catch (error: any) {
       console.error("[Autopopulate] Error:", error);
       res.status(500).json({ error: "Failed to autopopulate jacket", message: error.message });
@@ -20315,6 +20531,62 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
       res.json(jobs);
     } catch (error: any) {
       res.status(500).json({ error: "Failed to fetch build jobs", message: error.message });
+    }
+  });
+
+  // Manually trigger the SAM.gov auto-create pipeline. Each cron tick of
+  // samgov_ingest also runs this; the route is for on-demand use.
+  // Body: { minFitScore?, postedWithinDays?, maxPerRun? }.
+  app.post("/api/samgov/auto-create", async (req: Request, res: Response) => {
+    try {
+      const { runAutoCreate, productionAutoCreateDeps } = await import(
+        "./services/samgov-auto-create.service"
+      );
+      const config: Record<string, number> = {};
+      if (typeof req.body?.minFitScore === "number") config.minFitScore = req.body.minFitScore;
+      if (typeof req.body?.postedWithinDays === "number") config.postedWithinDays = req.body.postedWithinDays;
+      if (typeof req.body?.maxPerRun === "number") config.maxPerRun = req.body.maxPerRun;
+      const result = await runAutoCreate(DEFAULT_TENANT_ID, productionAutoCreateDeps, config);
+      res.json(result);
+    } catch (error: any) {
+      console.error("[samgov/auto-create] error:", error);
+      res.status(500).json({ error: "Failed to run auto-create", message: error.message });
+    }
+  });
+
+  // Surface Blackhawk's win profile so the UI can show "we win when…"
+  app.get("/api/samgov/win-profile", async (req: Request, res: Response) => {
+    try {
+      const { productionAutoCreateDeps } = await import("./services/samgov-auto-create.service");
+      const { buildWinProfileFromRows } = await import("./services/win-profile.service");
+      const wins = await productionAutoCreateDeps.loadWinHistory(DEFAULT_TENANT_ID);
+      const profile = buildWinProfileFromRows(wins);
+      res.json({
+        totalWins: profile.totalWins,
+        topNaics: Array.from(profile.naicsFreq.entries()).sort((a, b) => b[1] - a[1]).slice(0, 5),
+        topAgencies: Array.from(profile.agencyFreq.entries()).sort((a, b) => b[1] - a[1]).slice(0, 5),
+        setAsideMix: Array.from(profile.setAsideFreq.entries()).sort((a, b) => b[1] - a[1]),
+        valueRange: profile.valueRange,
+        medianValue: profile.medianValue,
+      });
+    } catch (error: any) {
+      console.error("[samgov/win-profile] error:", error);
+      res.status(500).json({ error: "Failed to load win profile", message: error.message });
+    }
+  });
+
+  // File any unfiled SAM/HigherGov artifacts for a bid into its jacket
+  // folders. Idempotent: artifacts that already have a storageKey are
+  // skipped. Returns { filed, skipped, failed, results[] }.
+  app.post("/api/jackets/bid/:bidProjectId/file-artifacts", async (req: Request, res: Response) => {
+    try {
+      const bidProjectId = p(req.params.bidProjectId);
+      const { fileUnfiledArtifactsForBid, productionFilingDeps } = await import("./services/bid-jacket-filing.service");
+      const summary = await fileUnfiledArtifactsForBid(DEFAULT_TENANT_ID, bidProjectId, productionFilingDeps);
+      res.json(summary);
+    } catch (error: any) {
+      console.error("[Filing] Error filing artifacts:", error);
+      res.status(500).json({ error: "Failed to file artifacts", message: error.message });
     }
   });
 

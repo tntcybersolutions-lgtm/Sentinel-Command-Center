@@ -8,6 +8,7 @@ import {
   type OpsEvent,
 } from "@shared/schema";
 import { eq, and, sql } from "drizzle-orm";
+import { registerJacketAutoFillHandler } from "./jacket-auto-fill.handler";
 
 const DEFAULT_TENANT_ID = "blackhawk-default";
 
@@ -169,9 +170,10 @@ async function handleTakeoffUpdated(event: OpsEvent): Promise<void> {
     ));
 
   const procurementLines = quantities.filter(q => {
-    const cat = (q as any).categoryId;
-    const notes = q.notes || "";
-    return notes.toLowerCase().includes("procure") || notes.toLowerCase().includes("purchase") || notes.toLowerCase().includes("order");
+    if ((q as any).triggersProcurement === true) return true;
+    // Legacy fallback for rows created before triggers_procurement existed.
+    const notes = (q.notes || "").toLowerCase();
+    return notes.includes("procure") || notes.includes("purchase") || notes.includes("order");
   });
 
   if (procurementLines.length === 0) return;
@@ -324,4 +326,7 @@ export function registerWorkflowHandlers(): void {
   eventBus.register("SolicitationParsed", handleSolicitationParsed);
   eventBus.register("TakeoffUpdated", handleTakeoffUpdated);
   eventBus.register("TakeoffDelta", handleTakeoffDelta);
+  // Phase 2 v2.1 — register jacket auto-fill handler for TakeoffUpdated events.
+  // Gated by AUTO_FILL_JACKETS=1 env var inside the handler.
+  registerJacketAutoFillHandler();
 }

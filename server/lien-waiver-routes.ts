@@ -36,7 +36,7 @@ lienWaiverRouter.get("/templates/:stateCode", async (req: Request, res: Response
     try {
           const tenantId = getTenantId(req);
           await seedLienWaiverTemplates(tenantId);
-          const templates = await getLienWaiverTemplatesByState(tenantId, req.params.stateCode);
+          const templates = await getLienWaiverTemplatesByState(tenantId, String(req.params.stateCode));
           if (!templates.length) return res.status(404).json({ error: "State not found" });
           res.json(templates);
     } catch (err: any) {
@@ -48,7 +48,7 @@ lienWaiverRouter.get("/templates/:stateCode", async (req: Request, res: Response
 lienWaiverRouter.get("/projects/:projectId", async (req: Request, res: Response) => {
     try {
           const tenantId = getTenantId(req);
-          res.json(await getProjectLienWaivers(tenantId, req.params.projectId));
+          res.json(await getProjectLienWaivers(tenantId, String(req.params.projectId)));
     } catch (err: any) {
     res.status(500).json({ error: err.message });
     }
@@ -63,7 +63,7 @@ lienWaiverRouter.post("/projects/:projectId/initialize", async (req: Request, re
                   return res.status(400).json({ error: "stateCode required (2-letter)" });
           }
           await seedLienWaiverTemplates(tenantId);
-          const waivers = await createProjectLienWaivers(tenantId, req.params.projectId, stateCode.toUpperCase());
+          const waivers = await createProjectLienWaivers(tenantId, String(req.params.projectId), stateCode.toUpperCase());
           res.status(201).json({ created: waivers.length, waivers });
     } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -79,7 +79,7 @@ lienWaiverRouter.post("/projects/:projectId/regenerate", async (req: Request, re
                   return res.status(400).json({ error: "stateCode required (2-letter)" });
           }
           await seedLienWaiverTemplates(tenantId);
-          const waivers = await createProjectLienWaivers(tenantId, req.params.projectId, stateCode.toUpperCase());
+          const waivers = await createProjectLienWaivers(tenantId, String(req.params.projectId), stateCode.toUpperCase());
           res.json({ regenerated: waivers.length, waivers });
     } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -94,7 +94,7 @@ lienWaiverRouter.patch("/:waiverId/status", async (req: Request, res: Response) 
           if (!["missing", "uploaded", "approved"].includes(status)) {
                   return res.status(400).json({ error: "status must be: missing, uploaded, or approved" });
           }
-          const updated = await updateProjectLienWaiverStatus(tenantId, req.params.waiverId, status, storageKey);
+          const updated = await updateProjectLienWaiverStatus(tenantId, String(req.params.waiverId), status, storageKey);
           if (!updated) return res.status(404).json({ error: "Waiver not found" });
           res.json(updated);
     } catch (err: any) {

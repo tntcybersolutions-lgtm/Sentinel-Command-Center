@@ -1,7 +1,9 @@
 import { db } from "./db";
 import { sql } from "drizzle-orm";
 import { pgTable, varchar, text, boolean, integer, timestamp, pgEnum } from "drizzle-orm/pg-core";
-import { createId } from "@paralleldrive/cuid2";
+import { randomUUID } from "node:crypto";
+
+const createId = () => randomUUID();
 
 // ─── Lien Waiver Types ────────────────────────────────────────────────────────
 

@@ -11,6 +11,7 @@ import { lienWaiverRouter } from "./lien-waiver-routes";
 import { takeoffItemsRouter } from "./takeoff-items-routes";
 import { deliverableGeneratorRouter } from "./deliverable-generator-routes";
 import { documentContentRouter } from "./document-content-routes";
+import { bidJacketAutoFillRouter } from "./bid-jacket-auto-fill-routes.v2";
 validateBidJacketTaxonomy();
 
 const app = express();
@@ -75,6 +76,8 @@ app.use((req, res, next) => {
         app.use(takeoffItemsRouter);
     app.use(deliverableGeneratorRouter);
   app.use(documentContentRouter);
+  // Phase 2 v2.1 — POST /api/bid-projects/:bidProjectId/auto-fill-jacket
+  app.use(bidJacketAutoFillRouter);
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
@@ -251,7 +254,7 @@ app.use((req, res, next) => {
               // Seed 50-state lien waiver templates (200 total: 50 states x 4 types)
         try {
           const { seedLienWaiverTemplates } = await import("./lien-waivers");
-          await seedLienWaiverTemplates();
+          await seedLienWaiverTemplates("blackhawk-default");
           log("Lien waiver templates seeded (200 templates across 50 states)", "lien-waivers");
         } catch (e) {
           console.error("Failed to seed lien waiver templates:", e);

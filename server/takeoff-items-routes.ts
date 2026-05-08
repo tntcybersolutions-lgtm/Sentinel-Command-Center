@@ -58,10 +58,9 @@ takeoffItemsRouter.post("/api/takeoff-items", async (req: Request, res: Response
     const item = await storage.createTakeoffItem({
       blueprintId: body.blueprintId,
       name: String(body.name || "").trim() || "New Item",
-      quantity: Number(body.quantity) || 0,
+      quantity: String(Number(body.quantity) || 0),
       unit: String(body.unit || "EA").trim(),
-      unitCost: body.unitCost != null ? parseFloat(String(body.unitCost)) : 0,
-      totalCost: body.totalCost != null ? parseFloat(String(body.totalCost)) : 0,
+      unitCost: body.unitCost != null ? String(parseFloat(String(body.unitCost))) : "0",
       category: body.category || null,
       notes: body.notes || null,
       bidProjectId: body.bidProjectId || null,
@@ -80,13 +79,12 @@ takeoffItemsRouter.patch("/api/takeoff-items/:id", async (req: Request, res: Res
     const body = req.body;
     const updates: Record<string, any> = {};
     if (body.name !== undefined) updates.name = String(body.name).trim();
-    if (body.quantity !== undefined) updates.quantity = Number(body.quantity);
+    if (body.quantity !== undefined) updates.quantity = String(Number(body.quantity));
     if (body.unit !== undefined) updates.unit = String(body.unit).trim();
-    if (body.unitCost !== undefined) updates.unitCost = parseFloat(String(body.unitCost));
-    if (body.totalCost !== undefined) updates.totalCost = parseFloat(String(body.totalCost));
+    if (body.unitCost !== undefined) updates.unitCost = String(parseFloat(String(body.unitCost)));
     if (body.category !== undefined) updates.category = body.category;
     if (body.notes !== undefined) updates.notes = body.notes;
-    const updated = await storage.updateTakeoffItem(id, updates);
+    const updated = await storage.updateTakeoffItem(String(id), updates);
     if (!updated) return jsonError(res, 404, "Takeoff item not found");
     return res.json(updated);
   } catch (err: unknown) {
@@ -98,8 +96,9 @@ takeoffItemsRouter.delete("/api/takeoff-items/:id", async (req: Request, res: Re
   try {
     const { id } = req.params;
     if (!id) return jsonError(res, 400, "id is required");
-    await storage.deleteTakeoffItem(id);
-    return res.json({ success: true, deleted: id });
+    const idStr = String(id);
+    await storage.deleteTakeoffItem(idStr);
+    return res.json({ success: true, deleted: idStr });
   } catch (err: unknown) {
     return jsonError(res, 500, err instanceof Error ? err.message : "Failed to delete takeoff item");
   }
@@ -119,7 +118,7 @@ takeoffItemsRouter.get("/api/estimate/takeoff/items", async (req: Request, res: 
 
 takeoffItemsRouter.get("/api/projects/:projectId/takeoff-items", async (req: Request, res: Response) => {
   try {
-    const items = await storage.getTakeoffItemsByProject(req.params.projectId);
+    const items = await storage.getTakeoffItemsByProject(String(req.params.projectId));
     return res.json(items);
   } catch (err: unknown) {
     return jsonError(res, 500, err instanceof Error ? err.message : "Failed to fetch takeoff items");
@@ -128,7 +127,7 @@ takeoffItemsRouter.get("/api/projects/:projectId/takeoff-items", async (req: Req
 
 takeoffItemsRouter.get("/api/projects/:projectId/estimate/takeoff/items", async (req: Request, res: Response) => {
   try {
-    const items = await storage.getTakeoffItemsByProject(req.params.projectId);
+    const items = await storage.getTakeoffItemsByProject(String(req.params.projectId));
     return res.json(items);
   } catch (err: unknown) {
     return jsonError(res, 500, err instanceof Error ? err.message : "Failed to fetch takeoff items");
@@ -157,7 +156,7 @@ takeoffItemsRouter.get("/api/project-deliverables", async (req: Request, res: Re
 
 takeoffItemsRouter.get("/api/projects/:projectId/deliverables", async (req: Request, res: Response) => {
   try {
-    const items = await fetchDeliverables(req.params.projectId, getTenantId(req) ?? undefined);
+    const items = await fetchDeliverables(String(req.params.projectId), getTenantId(req) ?? undefined);
     return res.json(items);
   } catch (err: unknown) {
     return jsonError(res, 500, err instanceof Error ? err.message : "Failed to fetch deliverables");
@@ -166,7 +165,7 @@ takeoffItemsRouter.get("/api/projects/:projectId/deliverables", async (req: Requ
 
 takeoffItemsRouter.get("/api/projects/:projectId/estimate/deliverables", async (req: Request, res: Response) => {
   try {
-    const items = await fetchDeliverables(req.params.projectId, getTenantId(req) ?? undefined);
+    const items = await fetchDeliverables(String(req.params.projectId), getTenantId(req) ?? undefined);
     return res.json(items);
   } catch (err: unknown) {
     return jsonError(res, 500, err instanceof Error ? err.message : "Failed to fetch deliverables");

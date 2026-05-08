@@ -1,8 +1,27 @@
 import { Router, type Request, type Response } from "express";
 import { db } from "./db";
 import { sql } from "drizzle-orm";
+import { storage } from "./storage";
 
 export const documentContentRouter = Router();
+
+async function logDocumentView(req: Request, tenantId: string, documentId: string, fileName: string | null) {
+  try {
+    await storage.createAuditLogEntry({
+      tenantId,
+      action: "view",
+      documentId,
+      actorType: "user",
+      detailsJson: {
+        fileName,
+        ip: req.ip || req.socket?.remoteAddress || "unknown",
+        userAgent: req.headers["user-agent"] || "unknown",
+      },
+    });
+  } catch (err) {
+    console.error("[document-content] audit log write failed:", err);
+  }
+}
 
 function getTenantId(req: Request): string {
   return (req as any).tenantId || (req as any).user?.tenantId || "blackhawk-default";
@@ -27,8 +46,8 @@ documentContentRouter.get("/api/jackets/bid/:bidId/documents/:documentId/content
     const { bidId, documentId } = req.params;
     const tableName = await resolveDocTable();
     if (!tableName) return jsonError(res, 404, "Document not found");
-    const safeDoc = documentId.replace(/'/g, "''");
-    const safeBid = bidId.replace(/'/g, "''");
+    const safeDoc = String(documentId).replace(/'/g, "''");
+    const safeBid = String(bidId).replace(/'/g, "''");
     const safeTen = tenantId.replace(/'/g, "''");
     const result = await db.execute(sql.raw(`SELECT id,bid_project_id,tenant_id,title,content,storage_key,source_type,file_name,mime_type FROM "${tableName}" WHERE id='${safeDoc}' LIMIT 1`));
     const rows = (result as any).rows as any[];
@@ -43,6 +62,7 @@ documentContentRouter.get("/api/jackets/bid/:bidId/documents/:documentId/content
       const body = typeof doc.content === "string" ? doc.content : JSON.stringify(doc.content);
       const mimeType = doc.mime_type || "text/markdown";
       res.set({"Content-Type": mimeType, "Content-Disposition": `attachment; filename="${fileName}"`, "Content-Length": Buffer.byteLength(body).toString(), "Cache-Control": "no-store"});
+      await logDocumentView(req, tenantId, doc.id, doc.file_name || null);
       return res.send(body);
     }
     if (doc.storage_key) {
@@ -61,6 +81,7 @@ documentContentRouter.get("/api/jackets/bid/:bidId/documents/:documentId/content
         const mimeType = doc.mime_type || metadata.contentType || "application/octet-stream";
         res.set({"Content-Type": mimeType, "Content-Disposition": `attachment; filename="${fileName}"`, "Cache-Control": "no-store"});
         if (metadata.size) res.set("Content-Length", metadata.size.toString());
+        await logDocumentView(req, tenantId, doc.id, doc.file_name || null);
         const stream = file.createReadStream();
         stream.on("error", (err: Error) => { console.error("[document-content] stream error:", err.message); if (!res.headersSent) jsonError(res, 500, "Error streaming document content"); });
         return stream.pipe(res);
