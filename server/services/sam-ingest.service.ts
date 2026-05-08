@@ -254,21 +254,37 @@ export class SamIngestService {
       queryParams.append("deptname", params.agency);
     }
 
-    try {
-      const response = await fetch(`${SAM_API_BASE}/search?${queryParams.toString()}`, {
-        headers: { Accept: "application/json" },
-      });
+    const response = await fetch(`${SAM_API_BASE}/search?${queryParams.toString()}`, {
+      headers: { Accept: "application/json" },
+    });
 
-      if (!response.ok) {
-        const errText = await response.text().catch(() => "");
-        throw new Error(`SAM.gov API error: ${response.status} ${response.statusText} ${errText}`);
-      }
-
-      return await response.json();
-    } catch (error) {
-      console.error("Error fetching SAM.gov opportunities:", error);
-      return { totalRecords: 0, limit: 10, offset: 0, opportunitiesData: [] };
+    // 404 from SAM.gov = "No Data found" (empty result set), not a missing endpoint.
+    // Per https://open.gsa.gov/api/get-opportunities-public-api/
+    if (response.status === 404) {
+      console.info("[sam-ingest] response status: 404 totalRecords: 0 (no data in range)");
+      return { totalRecords: 0, limit: params.limit ?? 100, offset: params.offset ?? 0, opportunitiesData: [] };
     }
+
+    // 400/401/403: client error — surface the body so the caller sees the real reason.
+    if (response.status === 400 || response.status === 401 || response.status === 403) {
+      const errText = await response.text().catch(() => "");
+      throw new Error(`SAM.gov API client error: ${response.status} ${response.statusText} ${errText}`);
+    }
+
+    // 5xx: upstream failure — throw so retry logic / run record can capture it.
+    if (response.status >= 500) {
+      const errText = await response.text().catch(() => "");
+      throw new Error(`SAM.gov API server error: ${response.status} ${response.statusText} ${errText}`);
+    }
+
+    if (!response.ok) {
+      const errText = await response.text().catch(() => "");
+      throw new Error(`SAM.gov API error: ${response.status} ${response.statusText} ${errText}`);
+    }
+
+    const data = await response.json();
+    console.info("[sam-ingest] response status:", response.status, "totalRecords:", data?.totalRecords);
+    return data;
   }
 
   async processOpportunity(samOpp: SAMOpportunity): Promise<{ opportunityId: string; isNew: boolean }> {
