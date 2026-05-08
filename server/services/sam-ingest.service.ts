@@ -15,7 +15,7 @@ import { randomUUID } from "crypto";
 import { eventStreamService } from "./event-stream.service";
 import type { SamGovAttachment, SamGovOpportunityDetail } from "../integrations/samgov/samgov.client";
 
-const SAM_API_BASE = "https://api.sam.gov/prod/opportunities/v2";
+const SAM_API_BASE = "https://api.sam.gov/opportunities/v2";
 
 interface SAMOpportunity {
   noticeId: string;
