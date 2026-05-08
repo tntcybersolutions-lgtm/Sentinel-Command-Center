@@ -2707,6 +2707,10 @@ export const subcontractors = pgTable("subcontractors", {
   status: text("status").notNull().default("active"), // active, inactive, preferred
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  csiDivision: varchar("csi_division", { length: 2 }),
+  csiSection: varchar("csi_section", { length: 8 }),
+  csiClassificationMethod: varchar("csi_classification_method", { length: 20 }),
+  csiClassifiedAt: timestamp("csi_classified_at"),
 });
 
 // Labor Rates - Pricing database for quotes
@@ -6914,3 +6918,24 @@ export type HerbieAgentResult = {
   done: boolean;
   changeSetId?: string;
 };
+
+// SAM.gov document import audit log
+export const samImportLog = pgTable("sam_import_log", {
+  id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id", { length: 36 }).notNull(),
+  bidProjectId: varchar("bid_project_id", { length: 36 }).notNull(),
+  opportunityId: varchar("opportunity_id", { length: 36 }),
+  triggerSource: text("trigger_source").notNull(),
+  triggeredByUserId: varchar("triggered_by_user_id", { length: 36 }),
+  startedAt: timestamp("started_at").notNull().defaultNow(),
+  finishedAt: timestamp("finished_at"),
+  status: text("status").notNull().default("running"),
+  filesAttempted: integer("files_attempted").notNull().default(0),
+  filesImported: integer("files_imported").notNull().default(0),
+  filesSkippedDuplicate: integer("files_skipped_duplicate").notNull().default(0),
+  bytesImported: integer("bytes_imported").notNull().default(0),
+  errorsJson: jsonb("errors_json"),
+  noticeId: text("notice_id"),
+  durationMs: integer("duration_ms"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
