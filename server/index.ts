@@ -9,6 +9,8 @@ import { websocketService } from "./services/websocket.service";
 import { validateBidJacketTaxonomy } from "@shared/schema";
 import { sql } from "drizzle-orm";
 import { bidJacketAutoFillRouter } from "./bid-jacket-auto-fill-routes.v2";
+import { samDocImportRouter } from "./routes-sam-doc-import";
+import { subRecommendationRouter } from "./routes-sub-recommendations";
 
 validateBidJacketTaxonomy();
 
@@ -73,6 +75,8 @@ app.use((req, res, next) => {
 
   // Phase 2 v2.1 — POST /api/bid-projects/:bidProjectId/auto-fill-jacket
   app.use(bidJacketAutoFillRouter);
+  app.use(samDocImportRouter);
+  app.use(subRecommendationRouter);
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
