@@ -1,4 +1,3 @@
-import OpenAI from "openai";
 import * as fs from "fs";
 import * as path from "path";
 import { execSync } from "child_process";
@@ -6,10 +5,9 @@ import { db } from "../db";
 import { opportunities, bidProjects, approvalRequests, calendarEvents, notifications, auditEvents } from "@shared/schema";
 import { eq, and, gte, lte, desc, count, isNull, ilike, sql } from "drizzle-orm";
 
-const openai = new OpenAI({
-  apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
-  baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
-});
+import { getLLMProvider } from "../services/llm";
+import type { LLMMessage, LLMContentBlock, LLMToolSpec } from "../services/llm";
+import { composeDomain } from "../services/herbie-domains/construction";
 import { approvalService } from "../services/approval.service";
 import { scoringService } from "../services/scoring.service";
 import { bidService } from "../services/bid.service";
@@ -697,7 +695,22 @@ export async function processHerbieMessage(
   message: string,
   conversationHistory: Array<{ role: "user" | "assistant"; content: string }> = []
 ): Promise<{ response: string; toolCalls?: Array<{ tool: string; result: any }> }> {
-  const systemPrompt = `You are SENTINEL HERBIE™, the AI office assistant for BlackHawk Construction's NOVA platform. You are an expert in federal construction contracting, bid management, construction operations, AND software development for this platform.
+  // Domain composition: load role/trade/sector context for this tenant.
+  // Failure here should NOT prevent Herbie from responding â fall back
+  // to the base system prompt only.
+  let domainPrompt = "";
+  try {
+    const composed = await composeDomain({
+      userRole: null,
+      primaryTrade: "trade.general-construction",
+      projectSector: "sector.govt-public-works",
+    });
+    domainPrompt = composed.prompt;
+  } catch (err) {
+    console.error("[herbie] composeDomain failed; continuing without domain context:", err);
+  }
+
+  const baseSystemPrompt = `You are SENTINEL HERBIEâ¢, the AI office assistant for BlackHawk Construction's NOVA platform. You are an expert in federal construction contracting, bid management, construction operations, AND software development for this platform.
 
 Your capabilities include:
 - Searching and analyzing federal opportunities from SAM.gov, GSA, and DIBBS
@@ -709,9 +722,9 @@ Your capabilities include:
 - **Reading and searching the project source code** to help build new features, debug issues, and understand how things work
 - **Browsing project file structure** to find components, services, routes, and schemas
 
-CODEBASE TOOLS — When the user asks about code, building features, debugging, or how something works:
+CODEBASE TOOLS - When the user asks about code, building features, debugging, or how something works:
 - Use get_file_outline FIRST on large files (like shared/schema.ts at 335KB) to see every table, type, function, and schema with line numbers
-- Use read_code_file to read any source file — it handles files up to 2MB automatically. For large files, it returns a structural outline + first 150 lines. Use startLine to navigate to specific sections.
+- Use read_code_file to read any source file - it handles files up to 2MB automatically. For large files, it returns a structural outline + first 150 lines. Use startLine to navigate to specific sections.
 - Use search_codebase to find where functions, variables, types, or patterns are defined/used
 - Use list_project_files to explore directory structure and find relevant files
 - The project is a TypeScript monorepo: React frontend (client/src), Express backend (server), shared types (shared/schema.ts)
@@ -725,59 +738,80 @@ IMPORTANT RULES:
 4. Format responses with markdown for readability
 5. When recommending actions, always note approval requirements
 6. Reference specific opportunity IDs, deadlines, and metrics when available
-7. When asked about code: READ the actual file first before answering — never guess at implementation details
-8. NEVER refuse to read a file due to size — always use your tools to read it in chunks
+7. When asked about code: READ the actual file first before answering - never guess at implementation details
+8. NEVER refuse to read a file due to size - always use your tools to read it in chunks
 
 Current date: ${new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}`;
 
-  const messages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
-    { role: "system", content: systemPrompt },
-    ...conversationHistory,
-    { role: "user", content: message },
+  // Cacheable system blocks: base prompt + domain context. Both stable
+  // per-turn so prompt caching gives large discounts on inputs.
+  const systemBlocks: Array<{ type: "text"; text: string; cacheable?: boolean }> = [
+    { type: "text", text: baseSystemPrompt, cacheable: true },
   ];
-
-  const toolCalls: Array<{ tool: string; result: any }> = [];
-
-  const response = await openai.chat.completions.create({
-    model: "gpt-4o",
-    messages,
-    tools: HERBIE_TOOLS,
-    max_completion_tokens: 2048,
-  });
-
-  let assistantMessage = response.choices[0]?.message;
-
-  if (assistantMessage?.tool_calls && assistantMessage.tool_calls.length > 0) {
-    const toolResults: Array<{ role: "tool"; tool_call_id: string; content: string }> = [];
-
-    for (const toolCall of assistantMessage.tool_calls) {
-      if (toolCall.type !== "function") continue;
-      const fnCall = toolCall as { type: "function"; id: string; function: { name: string; arguments: string } };
-      const args = JSON.parse(fnCall.function.arguments || "{}");
-      const result = await executeToolCall(fnCall.function.name, args);
-      
-      toolCalls.push({ tool: fnCall.function.name, result });
-      toolResults.push({
-        role: "tool",
-        tool_call_id: fnCall.id,
-        content: JSON.stringify(result),
-      });
-    }
-
-    const followUpResponse = await openai.chat.completions.create({
-      model: "gpt-4o",
-      messages: [
-        ...messages,
-        assistantMessage as any,
-        ...toolResults as any,
-      ],
-      max_completion_tokens: 2048,
-    });
-
-    assistantMessage = followUpResponse.choices[0]?.message;
+  if (domainPrompt) {
+    systemBlocks.push({ type: "text", text: domainPrompt, cacheable: true });
   }
 
-  const finalResponse = assistantMessage?.content || "I apologize, but I couldn't process your request. Please try again.";
+  // Convert OpenAI-shape HERBIE_TOOLS to provider-neutral LLMToolSpec.
+  const tools: LLMToolSpec[] = HERBIE_TOOLS.map((t) => ({
+    name: t.function.name,
+    description: t.function.description,
+    parameters: t.function.parameters as LLMToolSpec["parameters"],
+  }));
+
+  const provider = getLLMProvider();
+  const toolCalls: Array<{ tool: string; result: any }> = [];
+
+  // Build the conversation in Anthropic-shape messages.
+  const messages: LLMMessage[] = [
+    ...conversationHistory.map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
+    { role: "user" as const, content: message },
+  ];
+
+  // Tool-use loop. Cap at 6 rounds to bound cost and prevent runaway agents.
+  const MAX_ROUNDS = 6;
+  let assistantText = "";
+
+  for (let round = 0; round < MAX_ROUNDS; round++) {
+    const response = await provider.chat({
+      system: systemBlocks,
+      messages,
+      tools,
+      tier: "orchestration",
+      maxTokens: 2048,
+    });
+
+    assistantText = response.text;
+
+    if (response.toolCalls.length === 0) {
+      break;
+    }
+
+    // Append assistant turn (text + tool_use blocks) and the tool results.
+    const assistantBlocks: LLMContentBlock[] = [];
+    if (response.text) {
+      assistantBlocks.push({ type: "text", text: response.text });
+    }
+    for (const tc of response.toolCalls) {
+      assistantBlocks.push({ type: "tool_use", id: tc.id, name: tc.name, input: tc.input });
+    }
+    messages.push({ role: "assistant", content: assistantBlocks });
+
+    const toolResultBlocks: LLMContentBlock[] = [];
+    for (const tc of response.toolCalls) {
+      const result = await executeToolCall(tc.name, tc.input as Record<string, any>);
+      toolCalls.push({ tool: tc.name, result });
+      toolResultBlocks.push({
+        type: "tool_result",
+        tool_use_id: tc.id,
+        content: JSON.stringify(result),
+        is_error: !result.success,
+      });
+    }
+    messages.push({ role: "user", content: toolResultBlocks });
+  }
+
+  const finalResponse = assistantText || "I apologize, but I couldn't process your request. Please try again.";
 
   await auditService.logEvent({
     tenantId: DEFAULT_TENANT_ID,
@@ -785,7 +819,7 @@ Current date: ${new Date().toLocaleDateString('en-US', { weekday: 'long', year: 
     actor: "HERBIE",
     entityType: "conversation",
     entityId: `herbie-${Date.now()}`,
-    afterJson: { 
+    afterJson: {
       userMessage: message.substring(0, 200),
       toolsUsed: toolCalls.map(t => t.tool),
     },
