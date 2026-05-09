@@ -6687,3 +6687,5 @@ export type HerbieAgentResult = {
   done: boolean;
   changeSetId?: string;
 };
+// === Federal pursuit + compliance schema (v2.1) ===
+export * from "./schema-federal";
