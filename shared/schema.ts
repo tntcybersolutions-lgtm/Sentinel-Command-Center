@@ -58,6 +58,12 @@ export const tenants = pgTable("tenants", {
   dbaName: text("dba_name"),
   timezone: text("timezone").notNull().default("America/New_York"),
   status: text("status").notNull().default("active"),
+  // Federal pursuit fit profile (additive — used by federal-bid-pursuit scoring)
+  dollarSweetSpotMin: decimal("dollar_sweet_spot_min", { precision: 15, scale: 2 }),
+  dollarSweetSpotMax: decimal("dollar_sweet_spot_max", { precision: 15, scale: 2 }),
+  preferredStates: jsonb("preferred_states").default(sql`'[]'::jsonb`),
+  bondingSingleCapacity: decimal("bonding_single_capacity", { precision: 15, scale: 2 }),
+  currentBacklogUtilization: decimal("current_backlog_utilization", { precision: 5, scale: 4 }).default("0"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -218,6 +224,16 @@ export const opportunities = pgTable("opportunities", {
   lastSeenAt: timestamp("last_seen_at").defaultNow(),
   locationJson: jsonb("location_json"),
   rawRefId: varchar("raw_ref_id", { length: 36 }).references(() => sourceItemsRaw.id),
+  // Federal pursuit fields (additive — used by federal-bid-pursuit scoring)
+  scopeKeywords: jsonb("scope_keywords").default(sql`'[]'::jsonb`),
+  placeOfPerformanceState: text("place_of_performance_state"),
+  agency: text("agency"),
+  solicitationType: text("solicitation_type"),
+  estimatedValue: decimal("estimated_value", { precision: 15, scale: 2 }),
+  isRecompete: boolean("is_recompete").default(false),
+  incumbentTenureYears: integer("incumbent_tenure_years"),
+  naicsCode: text("naics_code"),
+  setAsideCategory: text("set_aside_category"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => ({
@@ -6939,3 +6955,7 @@ export const samImportLog = pgTable("sam_import_log", {
   durationMs: integer("duration_ms"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
+// ============================================================================
+// FEDERAL PURSUIT SCHEMA (re-exported from shared/schema-federal.ts)
+// ============================================================================
+export * from "./schema-federal";
