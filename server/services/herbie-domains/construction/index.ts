@@ -39,7 +39,14 @@ type Loader = () => Promise<{ default: DomainModule }>;
 // Populated modules. Add entries as dedicated module files ship.
 // Anything NOT in these maps gets a stub from ./stubs.ts.
 const roleLoaders: Partial<Record<RoleId, Loader>> = {
-  // populate as role module files are added
+  "role.bid-pursuit.capture-manager": () => import("./roles/bid-pursuit/capture-manager"),
+  "role.bid-pursuit.proposal-writer": () => import("./roles/bid-pursuit/proposal-writer"),
+  "role.bid-pursuit.bd-federal": () => import("./roles/bid-pursuit/bd-federal"),
+  "role.bid-pursuit.past-performance-manager": () => import("./roles/bid-pursuit/past-performance-manager"),
+  "role.bid-pursuit.contracts-compliance": () => import("./roles/bid-pursuit/contracts-compliance"),
+  "role.bid-pursuit.pricing-strategist": () => import("./roles/bid-pursuit/pricing-strategist"),
+  "role.bid-pursuit.teaming-coordinator": () => import("./roles/bid-pursuit/teaming-coordinator"),
+  "role.bid-pursuit.small-business-liaison": () => import("./roles/bid-pursuit/small-business-liaison"),
 };
 
 const tradeLoaders: Partial<Record<TradeId, Loader>> = {
