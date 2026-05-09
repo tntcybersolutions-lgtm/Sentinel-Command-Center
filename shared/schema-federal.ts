@@ -124,10 +124,10 @@ export const proposalDrafts = pgTable("proposal_drafts", {
 });
 
 // ============================================================================
-// 6. Opportunity scoring history
+// 6. Opportunity scoring history (renamed to avoid collision with shared/schema.ts)
 // ============================================================================
 
-export const opportunityScores = pgTable("opportunity_scores", {
+export const opportunityScoresFederal = pgTable("opportunity_scores_federal", {
   id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()`),
   tenantId: varchar("tenant_id", { length: 36 }).notNull().references(() => tenants.id, { onDelete: "cascade" }),
   opportunityId: varchar("opportunity_id", { length: 36 }).notNull(),
