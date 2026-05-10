@@ -481,7 +481,7 @@ export default function Integrations() {
                           </Link>
                         </div>
                       ) : (
-                        <Badge variant="secondary">Not Configured</Badge>
+                        <Link href="/egnyte-diagnostics"><Button size="sm" variant="outline" data-testid="button-egnyte-setup"><Link2 className="h-3 w-3 mr-1" />Set Up Egnyte</Button></Link>
                       )
                     ) : (
                       <>
