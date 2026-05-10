@@ -8072,7 +8072,7 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
         action: e.action,
         resource: e.entityType,
         resourceId: e.entityId,
-        status: (e as any).outcome === "success" ? "success" : (e as any).outcome === "failure" ? "failure" : "warning",
+        status: ((): "success" | "failure" | "warning" => { const t = (e.eventType || e.action || "").toLowerCase(); if (t.includes("fail") || t.includes("error") || t.includes("reject")) return "failure"; if (t.includes("warn") || t.includes("overdue") || t.includes("stale")) return "warning"; return "success"; })(),
         ipAddress: "127.0.0.1",
         details: (e as any).notes || `${e.action} on ${e.entityType}`,
       }));
