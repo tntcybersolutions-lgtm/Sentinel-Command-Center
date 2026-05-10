@@ -2178,7 +2178,7 @@ export async function registerRoutes(
         .from(opportunities)
         .where(and(
           eq(opportunities.tenantId, DEFAULT_TENANT_ID),
-          eq(opportunities.status, "open"),
+          sql`COALESCE(LOWER(${opportunities.status}), '') NOT IN ('dismissed', 'lost', 'declined', 'awarded')`,
         ))
         .orderBy(opportunities.dueAt)
         .limit(50);
