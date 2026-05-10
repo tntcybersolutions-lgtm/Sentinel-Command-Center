@@ -86,7 +86,7 @@ const HERBIE_TOOLS = [
         properties: {
           keyword: { type: "string", description: "Search keyword (title, description)" },
           naicsCode: { type: "string", description: "NAICS code filter" },
-          status: { type: "string", enum: ["active", "scored", "tracking", "dismissed"], description: "Opportunity status" },
+          status: { type: "string", description: "Opportunity status filter (e.g. 'New', 'Estimating', 'Pursuing', 'Tracking', 'Dismissed'). OMIT this field to see ALL opportunities regardless of status — that is the right default for general pipeline questions." },
           limit: { type: "number", description: "Max results to return (default 10)" },
         },
       },
@@ -327,7 +327,7 @@ async function executeToolCall(
         }
         
         if (args.status) {
-          conditions.push(eq(opportunities.status, args.status));
+          conditions.push(sql`LOWER(${opportunities.status}) = LOWER(${args.status})`);
         }
         
         const results = await db.select()
