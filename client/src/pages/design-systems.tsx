@@ -619,7 +619,7 @@ export default function DesignSystems() {
                   )}
                 </div>
                 <input type="hidden" name="storageKey" value={uploadedStorageKey || ""} />
-                <Button type="submit" className="w-full" disabled={uploadSheetMutation.isPending} data-testid="button-submit-upload">
+                <Button type="submit" className="w-full" disabled={uploadSheetMutation.isPending || !uploadedStorageKey} data-testid="button-submit-upload">
                   {uploadSheetMutation.isPending ? "Creating Sheet..." : "Create Sheet Record"}
                 </Button>
               </form>
