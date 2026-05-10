@@ -66,6 +66,18 @@ async function buildAll() {
       "import.meta.filename": "__filename",
     },
     minify: true,
+    plugins: [
+      {
+        name: "stub-vite-prod",
+        setup(b) {
+          // Mark vite + plugins external so esbuild does not bundle them
+          b.onResolve({ filter: /^vite$|^@replit\/vite-plugin-|^@vitejs\// }, (args) => ({ path: args.path, external: true }));
+          // Stub vite.config to an empty object so its top-level plugin imports never execute
+          b.onResolve({ filter: /vite\.config(\.ts|\.js)?$/ }, () => ({ path: "vite-config-stub", namespace: "stub" }));
+          b.onLoad({ filter: /.*/, namespace: "stub" }, () => ({ contents: "export default { plugins: [] };", loader: "ts" }));
+        },
+      },
+    ],
     external: externals,
     logLevel: "info",
   });
