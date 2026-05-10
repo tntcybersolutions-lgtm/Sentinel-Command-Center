@@ -186,7 +186,7 @@ export class HerbieAutonomousAgent {
       .from(opportunities)
       .where(and(
         eq(opportunities.tenantId, this.tenantId),
-        eq(opportunities.status, "open"),
+        sql`COALESCE(LOWER(${opportunities.status}), '') NOT IN ('dismissed', 'lost', 'declined')`,
         sql`${opportunities.id} NOT IN (${scored})`
       ))
       .orderBy(desc(opportunities.dueAt))
