@@ -355,6 +355,7 @@ function Router() {
       <Route path="/companies" component={() => <LegacyRedirect to="/capture/agencies" />} />
       <Route path="/company-jackets" component={() => <LegacyRedirect to="/capture/agencies" />} />
       <Route path="/bids" component={() => <LegacyRedirect to="/capture/pipeline" />} />
+      <Route path="/bids/:id" component={() => <SafeRoute component={BidJacket} name="BidJacket" />} />
       <Route path="/bid-jacket/:id" component={() => <SafeRoute component={BidJacket} name="BidJacket" />} />
       <Route path="/projects" component={() => <LegacyRedirect to="/projects/active" />} />
       <Route path="/compliance" component={() => <LegacyRedirect to="/financial/compliance" />} />
