@@ -170,7 +170,7 @@ app.use((req, res, next) => {
     app.use("/{*path}", async (req, res, next) => {
       try {
         const clientTemplate = path.resolve(
-          import.meta.dirname,
+          process.cwd(),
           "..",
           "client",
           "index.html",
