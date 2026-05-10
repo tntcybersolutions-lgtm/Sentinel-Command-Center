@@ -162,7 +162,13 @@ export default function Compliance() {
     queryKey: ["/api/compliance/incidents"],
   });
 
-  const displayStats = stats || { complianceScore: 0, controlsImplemented: 0, totalControls: 0, evidenceItems: 0, securityIncidentsMTD: 0 };
+  const displayStats = {
+    complianceScore: stats?.complianceScore ?? 0,
+    controlsImplemented: stats?.controlsImplemented ?? 0,
+    totalControls: stats?.totalControls ?? 0,
+    evidenceItems: stats?.evidenceItems ?? 0,
+    securityIncidentsMTD: stats?.securityIncidentsMTD ?? 0,
+  };
   const displayFrameworks = frameworks || [];
   const displayControls = controls || [];
   const displayEvidence = evidence || [];
