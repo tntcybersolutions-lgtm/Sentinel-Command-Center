@@ -15,7 +15,7 @@ import * as fs from "fs";
 import * as path from "path";
 
 const HERBIE_MD_PATH = path.resolve(
-  import.meta.dirname,
+  process.cwd(),
   "..",
   "..",
   "HERBIE.md",
