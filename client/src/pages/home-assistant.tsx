@@ -8,6 +8,8 @@ import {
   ChevronRight,
   FolderGit2,
   Clock,
+  Plus,
+  Sparkles,
 } from "lucide-react";
 import type { NavCounts } from "@/nav/navConfig";
 
@@ -182,7 +184,20 @@ export default function HomeAssistant() {
                 ))
               ) : projects.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="py-8 text-center text-zinc-500">No active projects</td>
+                  <td colSpan={5} className="py-12 text-center">
+                    <div className="flex flex-col items-center gap-3 text-zinc-500">
+                      <FolderGit2 className="h-8 w-8 text-zinc-700" />
+                      <div className="text-sm">No active projects yet</div>
+                      <button
+                        onClick={() => setLocation("/capture/opportunities")}
+                        className="mt-1 inline-flex items-center gap-1.5 rounded-md border border-white/10 bg-white/5 hover:bg-white/10 px-3 py-1.5 text-xs font-medium text-zinc-200 transition-colors"
+                        data-testid="empty-projects-cta"
+                      >
+                        <Plus className="h-3.5 w-3.5" />
+                        Find opportunities
+                      </button>
+                    </div>
+                  </td>
                 </tr>
               ) : (
                 projects.map((p: any) => (
@@ -235,7 +250,13 @@ export default function HomeAssistant() {
               </div>
             ))
           ) : events.length === 0 ? (
-            <div className="py-8 text-center text-zinc-500">No recent activity</div>
+            <div className="py-12 px-6 flex flex-col items-center gap-3 text-zinc-500" data-testid="empty-activity">
+              <Sparkles className="h-8 w-8 text-zinc-700" />
+              <div className="text-sm">No recent activity yet</div>
+              <div className="text-xs text-zinc-600 max-w-md text-center">
+                Approvals, project updates, and team actions will show up here as they happen.
+              </div>
+            </div>
           ) : (
             events.map((ev: any, i: number) => (
               <div key={ev.id ?? i} className="py-2.5 px-4 flex items-start gap-3 text-sm" data-testid={`activity-row-${i}`}>
