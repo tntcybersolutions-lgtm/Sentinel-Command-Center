@@ -2686,8 +2686,40 @@ export async function registerRoutes(
         source: "sam.gov",
       }));
 
+      // Score each result against tenant's win profile (best matches first)
+      let scoredResults: any[] = results;
+      try {
+        const { buildWinProfileFromRows, scoreOpportunityFit } = await import("./services/win-profile.service");
+        const { bidHistory } = await import("@shared/schema");
+        const winRows = await db
+          .select({
+            naicsCode: bidHistory.naicsCode,
+            setAsideCode: bidHistory.setAsideCode,
+            agencyName: bidHistory.agencyName,
+            contractValue: bidHistory.contractValue,
+          })
+          .from(bidHistory)
+          .where(and(eq(bidHistory.tenantId, DEFAULT_TENANT_ID), eq(bidHistory.outcome, "win")));
+        const profile = buildWinProfileFromRows(winRows);
+        scoredResults = results.map((r: any) => {
+          const fit = scoreOpportunityFit(
+            {
+              naicsCodes: r.naicsCode ? [r.naicsCode] : null,
+              agency: r.agency,
+              setAside: r.setAside,
+              contractValue: null,
+            },
+            profile,
+          );
+          return { ...r, fitScore: fit.score, fitReasons: fit.reasons, fitBreakdown: fit.breakdown };
+        });
+        scoredResults.sort((a: any, b: any) => (b.fitScore ?? 0) - (a.fitScore ?? 0));
+      } catch (scoringErr) {
+        console.warn("Federal search: win-profile scoring skipped:", scoringErr);
+      }
+
       res.json({
-        results,
+        results: scoredResults,
         total: samResponse.totalRecords || results.length,
         page: pageNum,
         limit: limitNum,
