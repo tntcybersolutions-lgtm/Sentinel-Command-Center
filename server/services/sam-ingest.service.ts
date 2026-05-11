@@ -82,6 +82,7 @@ interface SAMSearchResponse {
   limit: number;
   offset: number;
   opportunitiesData?: SAMOpportunity[];
+  _error?: string;
 }
 
 export class SamIngestService {
@@ -222,8 +223,9 @@ export class SamIngestService {
     offset?: number;
   }): Promise<SAMSearchResponse> {
     if (!this.apiKey) {
-      console.log("SAM.gov API key not configured, returning empty results");
-      return { totalRecords: 0, limit: 10, offset: 0, opportunitiesData: [] };
+      const msg = "SAM_GOV_API_KEY environment variable is not set";
+      console.log(`SAM.gov: ${msg}`);
+      return { totalRecords: 0, limit: 10, offset: 0, opportunitiesData: [], _error: msg };
     }
 
     const queryParams = new URLSearchParams();
@@ -261,13 +263,16 @@ export class SamIngestService {
 
       if (!response.ok) {
         const errText = await response.text().catch(() => "");
-        throw new Error(`SAM.gov API error: ${response.status} ${response.statusText} ${errText}`);
+        const msg = `SAM.gov API error: ${response.status} ${response.statusText} ${errText.substring(0, 300)}`;
+        console.error(msg);
+        return { totalRecords: 0, limit: 10, offset: 0, opportunitiesData: [], _error: msg };
       }
 
       return await response.json();
     } catch (error) {
-      console.error("Error fetching SAM.gov opportunities:", error);
-      return { totalRecords: 0, limit: 10, offset: 0, opportunitiesData: [] };
+      const msg = error instanceof Error ? error.message : String(error);
+      console.error("Error fetching SAM.gov opportunities:", msg);
+      return { totalRecords: 0, limit: 10, offset: 0, opportunitiesData: [], _error: `Network/parse error: ${msg}` };
     }
   }
 
