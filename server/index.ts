@@ -142,10 +142,17 @@ app.use((req, res, next) => {
 
   const isReplit = Boolean(process.env.REPL_ID);
 
-  if (isProd && !forceViteDev) {
+  if (isProd) {
     app.get("/__mode", (_req, res) => res.json({ mode: "static" }));
     serveStatic(app);
-    log("STATIC mode: serving dist/public", "ui");
+    if (forceViteDev) {
+      log(
+        "STATIC mode: ignoring FORCE_VITE_DEV in production build (vite.config not bundled for runtime use)",
+        "ui",
+      );
+    } else {
+      log("STATIC mode: serving dist/public", "ui");
+    }
   } else if (isReplit) {
     app.get("/__mode", (_req, res) => res.json({ mode: "dev" }));
     const { createServer: createViteServer } = await import("vite");
