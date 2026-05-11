@@ -2692,6 +2692,7 @@ export async function registerRoutes(
         page: pageNum,
         limit: limitNum,
         hasMore: offset + limitNum < (samResponse.totalRecords || 0),
+        ...((samResponse as any)._error ? { _diagnostic: (samResponse as any)._error } : {}),
       });
     } catch (error) {
       console.error("Federal search opportunities error:", error);
@@ -2887,6 +2888,64 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Local awards search error:", error);
       res.status(500).json({ error: "Failed to search local awards" });
+    }
+  });
+
+  // ----------------------------------------------------------------------------
+  // SAM.gov diagnostic / health endpoint
+  // ----------------------------------------------------------------------------
+  app.get("/api/sam/health", async (_req: Request, res: Response) => {
+    const apiKey = process.env.SAM_GOV_API_KEY;
+    if (!apiKey) {
+      return res.status(200).json({
+        ok: false,
+        configured: false,
+        error: "SAM_GOV_API_KEY environment variable is not set",
+      });
+    }
+    try {
+      const today = new Date();
+      const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+      const fmt = (d: Date) => `${String(d.getMonth() + 1).padStart(2, "0")}/${String(d.getDate()).padStart(2, "0")}/${d.getFullYear()}`;
+      const url = new URL("https://api.sam.gov/prod/opportunities/v2/search");
+      url.searchParams.set("api_key", apiKey);
+      url.searchParams.set("limit", "1");
+      url.searchParams.set("offset", "0");
+      url.searchParams.set("postedFrom", fmt(sevenDaysAgo));
+      url.searchParams.set("postedTo", fmt(today));
+      const r = await fetch(url.toString(), { headers: { Accept: "application/json" } });
+      const rateLimit = {
+        limit: r.headers.get("x-ratelimit-limit"),
+        remaining: r.headers.get("x-ratelimit-remaining"),
+        reset: r.headers.get("x-ratelimit-reset"),
+      };
+      if (!r.ok) {
+        const body = await r.text().catch(() => "");
+        return res.status(200).json({
+          ok: false,
+          configured: true,
+          status: r.status,
+          statusText: r.statusText,
+          rateLimit,
+          body: body.substring(0, 500),
+        });
+      }
+      const json = await r.json().catch(() => null) as any;
+      return res.status(200).json({
+        ok: true,
+        configured: true,
+        status: r.status,
+        rateLimit,
+        sampleTotalRecords: json?.totalRecords ?? null,
+        sampleNoticeId: json?.opportunitiesData?.[0]?.noticeId ?? null,
+      });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      return res.status(200).json({
+        ok: false,
+        configured: true,
+        error: `Network error: ${msg}`,
+      });
     }
   });
 
