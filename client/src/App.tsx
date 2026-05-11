@@ -14,8 +14,7 @@ import { ProjectContextProvider } from "@/nav/project-context";
 import { EntityDrawer } from "@/features/drawers/EntityDrawer";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { ModeBadge } from "@/components/ModeBadge";
-import { Search, AlertTriangle, RefreshCw } from "lucide-react";
-import { NotificationBell } from "@/components/notification-bell";
+import { Bell, Search, AlertTriangle, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 
@@ -218,13 +217,13 @@ import Notifications from "@/pages/notifications";
 import KnowledgeVault from "@/pages/knowledge-vault";
 import Companies from "@/pages/companies";
 import Blueprints from "@/pages/blueprints";
+import SmartTakeoff from "@/pages/smart-takeoff";
 import DesignSystems from "@/pages/design-systems";
 import EgnyteDiagnostics from "@/pages/egnyte-diagnostics";
 import EgnyteSyncMonitor from "@/pages/egnyte-sync-monitor";
 import AIReviewQueue from "@/pages/ai-review-queue";
 import ViewerDemo from "@/pages/viewer-demo";
 import VendorPortal from "@/pages/vendor-portal";
-import PortalPage from "@/pages/portal/[token]";
 import Competitors from "@/pages/competitors";
 import FederalSearch from "@/pages/federal-search";
 import CaptureFeed from "@/pages/capture-feed";
@@ -246,13 +245,11 @@ const ProactiveIntelligence = lazy(() => import("@/pages/proactive-intelligence"
 const CoiTracker = lazy(() => import("@/pages/coi-tracker"));
 const BidReadiness = lazy(() => import("@/pages/bid-readiness"));
 const VoiceDailyLog = lazy(() => import("./pages/voice-daily-log"));
-const LienWaivers = lazy(() => import("./pages/lien-waivers"));
-const SignLienWaiver = lazy(() => import("./pages/sign-lien-waiver"));
 const VendorConfidence = lazy(() => import('@/pages/vendor-confidence-dashboard'));
 const HerbieDigest = lazy(() => import('@/pages/herbie-digest-page'));
 const HerbieAutonomous = lazy(() => import('@/pages/herbie-autonomous-dashboard'));
 const HerbieMemory = lazy(() => import('@/pages/herbie-memory-inspector'));
-const ChangeOrderApprovals = lazy(() => import('@/pages/change-order-approval'));
+const ChangeOrderApprovals = lazy(() => import('@/pages/approvals'));
 import NotFound from "@/pages/not-found";
 
 function LegacyRedirect({ to }: { to: string }) {
@@ -293,6 +290,7 @@ function Router() {
 
       {/* ── Estimate ── */}
       <Route path="/estimate/blueprints" component={() => <SafeRoute component={Blueprints} name="Blueprints" />} />
+      <Route path="/blueprints/:id/smart-takeoff" component={() => <SafeRoute component={SmartTakeoff} name="SmartTakeoff" />} />
       <Route path="/estimate/takeoff" component={() => <SafeRoute component={DesignSystems} name="TakeoffEngine" />} />
       <Route path="/estimate/design-systems" component={() => <SafeRoute component={DesignSystems} name="DesignSystems" />} />
 
@@ -316,9 +314,6 @@ function Router() {
         <Route path="/coi" component={() => <Suspense fallback={<div>Loading...</div>}><CoiTracker /></Suspense>} />
               <Route path="/bid-readiness" component={() => <Suspense fallback={<div>Loading...</div>}><BidReadiness /></Suspense>} />
         <Route path="/voice-daily-log" component={() => <Suspense fallback={<div>Loading...</div>}><VoiceDailyLog /></Suspense>} />
-        <Route path="/lien-waivers" component={() => <SafeRoute component={LienWaivers} name="Lien Waivers" />} />
-        <Route path="/financial/lien-waivers" component={() => <SafeRoute component={LienWaivers} name="Lien Waivers" />} />
-        <Route path="/sign/lien-waiver/:token" component={() => <Suspense fallback={<div>Loading...</div>}><SignLienWaiver /></Suspense>} />
               <Route path="/proactive-intelligence" component={() => <Suspense fallback={<div>Loading...</div>}><ProactiveIntelligence /></Suspense>} />
               <Route path="/vendor-confidence" component={() => <Suspense fallback={<div>Loading...</div>}><VendorConfidence /></Suspense>} />
               <Route path="/herbie-digest" component={() => <Suspense fallback={<div>Loading...</div>}><HerbieDigest /></Suspense>} />
@@ -360,7 +355,7 @@ function Router() {
       <Route path="/companies" component={() => <LegacyRedirect to="/capture/agencies" />} />
       <Route path="/company-jackets" component={() => <LegacyRedirect to="/capture/agencies" />} />
       <Route path="/bids" component={() => <LegacyRedirect to="/capture/pipeline" />} />
-      <Route path="/bid" component={() => <LegacyRedirect to="/capture/pipeline" />} />
+      <Route path="/bids/:id" component={() => <SafeRoute component={BidJacket} name="BidJacket" />} />
       <Route path="/bid-jacket/:id" component={() => <SafeRoute component={BidJacket} name="BidJacket" />} />
       <Route path="/projects" component={() => <LegacyRedirect to="/projects/active" />} />
       <Route path="/compliance" component={() => <LegacyRedirect to="/financial/compliance" />} />
@@ -386,10 +381,8 @@ function Router() {
       <Route path="/design-systems" component={() => <LegacyRedirect to="/estimate/design-systems" />} />
       <Route path="/blueprint-hub" component={() => <LegacyRedirect to="/estimate/blueprints" />} />
       <Route path="/takeoff-engine" component={() => <LegacyRedirect to="/estimate/takeoff" />} />
-      <Route path="/systems-matrix" component={() => <LegacyRedirect to="/estimate/design-systems?tab=systems" />} />
-      <Route path="/building-systems" component={() => <LegacyRedirect to="/estimate/design-systems?tab=systems" />} />
-      <Route path="/estimate/systems" component={() => <LegacyRedirect to="/estimate/design-systems?tab=systems" />} />
-      <Route path="/auto-build" component={() => <LegacyRedirect to="/estimate/design-systems?tab=overview" />} />
+      <Route path="/systems-matrix" component={() => <LegacyRedirect to="/estimate/design-systems" />} />
+      <Route path="/auto-build" component={() => <LegacyRedirect to="/estimate/design-systems" />} />
       <Route path="/herbie" component={() => <LegacyRedirect to="/automation/herbie" />} />
       <Route path="/inventory" component={() => <LegacyRedirect to="/execution/inventory" />} />
       <Route path="/tickets" component={() => <LegacyRedirect to="/execution/tickets" />} />
@@ -430,19 +423,6 @@ function App() {
     );
   }
 
-  if (location.startsWith("/portal/")) {
-    return (
-      <QueryClientProvider client={queryClient}>
-        <ThemeProvider defaultTheme="light">
-          <TooltipProvider>
-            <Route path="/portal/:token" component={PortalPage} />
-            <Toaster />
-          </TooltipProvider>
-        </ThemeProvider>
-      </QueryClientProvider>
-    );
-  }
-
   return (
     <QueryClientProvider client={queryClient}>
       <ThemeProvider defaultTheme="dark">
@@ -474,7 +454,12 @@ function App() {
                     </kbd>
                   </Button>
                   <div className="flex items-center gap-2">
-                    <NotificationBell />
+                    <Button variant="ghost" size="icon" className="relative" data-testid="button-notifications">
+                      <Bell className="h-4 w-4" />
+                      <Badge className="absolute -top-1 -right-1 h-4 min-w-4 p-0 flex items-center justify-center text-[10px]">
+                        3
+                      </Badge>
+                    </Button>
                     <ThemeToggle />
                   </div>
                 </header>

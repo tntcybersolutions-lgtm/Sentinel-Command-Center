@@ -6,8 +6,6 @@ import {
   VENDOR_VISIBLE_FOLDER_CODES
 } from "@shared/schema";
 import { eq, and, desc, sql, count, inArray } from "drizzle-orm";
-import { sendEmail } from "./email/email.service";
-import { subcontractorInvitation } from "./email/templates";
 
 // ============================================================================
 // TOKEN HYGIENE
@@ -145,44 +143,6 @@ export async function createInvitation(
     lastActivityAt: new Date(),
     createdByUserId,
   }).returning();
-
-  // email-send block (auto-added) — best-effort, never throws
-  try {
-    const vendor = await db.select().from(vendors).where(eq(vendors.id, vendorId)).then(r => r[0]);
-    const proj   = await db.select().from(bidProjects).where(eq(bidProjects.id, bidProjectId)).then(r => r[0]);
-    let projectName = "BLACKHAWK Project";
-    if (proj?.opportunityId) {
-      try {
-        const opp = await db.select().from(opportunities).where(eq(opportunities.id, proj.opportunityId)).then(r => r[0]);
-        if (opp?.title) projectName = opp.title;
-      } catch { /* opportunities lookup is best-effort */ }
-    }
-    if (vendor?.email) {
-      const baseUrl = process.env.PUBLIC_BASE_URL || "https://sentinel-command-center-tntcybersolutio.replit.app";
-      const inviteUrl = `${baseUrl}/sub/invite/${rawToken}`;
-      const tpl = subcontractorInvitation({
-        vendorName: vendor.companyName || vendor.contactName || vendor.email,
-        projectName,
-        trade: "the scope listed in the bid package",
-        dueAt: dueAt,
-        inviteUrl,
-      });
-      await sendEmail({
-        to: vendor.email,
-        subject: tpl.subject,
-        html: tpl.html,
-        text: tpl.text,
-        tags: [
-          { name: "type", value: "sub_invitation" },
-          { name: "bid_project_id", value: bidProjectId },
-        ],
-      });
-    } else {
-      console.warn("[bid-invitation] vendor email missing for vendorId=" + vendorId + " — skipping email send");
-    }
-  } catch (e: any) {
-    console.error("[bid-invitation] email send failed (non-fatal):", e?.message || e);
-  }
 
   return { invitation: inv, rawToken };
 }

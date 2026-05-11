@@ -10,13 +10,8 @@
 // but keep that tone.
 
 import { db } from "../db";
-import {
-  approvalRequests,
-  projects,
-  herbieDigestDismissals,
-  rfis,
-} from "@shared/schema";
-import { and, eq, gt, inArray, lt, sql } from "drizzle-orm";
+import { approvalRequests, rfis } from "@shared/schema";
+import { and, eq, lt, sql } from "drizzle-orm";
 import {
   coisExpiringWithin,
   expiryTier,
@@ -31,11 +26,6 @@ export interface DigestItem {
   detail?: string;
   entity?: { type: string; id: string };
   suggestedAction?: string;
-  // Phase D additions — surfaced on the Herbie Digest page.
-  projectId?: string;
-  projectName?: string;
-  actionType: string;
-  createdAt: string;
 }
 
 export interface HerbieDigest {
@@ -64,20 +54,15 @@ export async function buildHerbieDigest(
   const now = input.now ?? new Date();
   const lookahead = input.lookaheadDays ?? 30;
 
-  const [coiItems, approvalItems, rfiItems, dismissedKeys] = await Promise.all([
+  const [coiItems, approvalItems, rfiItems] = await Promise.all([
     gatherCoiItems(input.tenantId, input.projectId, lookahead, now),
     gatherApprovalItems(input.tenantId),
     gatherStalledRfiItems(input.tenantId, input.projectId, now),
-    gatherActiveDismissals(input.tenantId, now),
   ]);
 
-  const all = [...coiItems, ...approvalItems, ...rfiItems];
-  const items = all
-    .filter((it) => {
-      if (!it.entity) return true;
-      return !dismissedKeys.has(`${it.entity.type}:${it.entity.id}`);
-    })
-    .sort(severityCompare);
+  const items = [...coiItems, ...approvalItems, ...rfiItems].sort(
+    severityCompare,
+  );
 
   const totals = {
     critical: items.filter((i) => i.severity === "critical").length,
@@ -106,11 +91,6 @@ async function gatherCoiItems(
     ? cois.filter((c) => !c.projectId || c.projectId === projectId)
     : cois;
 
-  const projectIds = Array.from(
-    new Set(scoped.map((c) => c.projectId).filter((id): id is string => !!id)),
-  );
-  const projectNameMap = await loadProjectNameMap(tenantId, projectIds);
-
   return scoped.map<DigestItem>((coi) => {
     const tier: CoiExpiryTier = expiryTier(coi, now);
     const policy = coi.policyType.toUpperCase();
@@ -128,10 +108,6 @@ async function gatherCoiItems(
         tier === "expired"
           ? "Stop any at-risk work; renew immediately."
           : "Draft the renewal and send for signature.",
-      projectId: coi.projectId ?? undefined,
-      projectName: coi.projectId ? projectNameMap.get(coi.projectId) : undefined,
-      actionType: "renew_coi",
-      createdAt: (coi.createdAt ?? now).toISOString(),
     };
   });
 }
@@ -154,17 +130,6 @@ async function gatherApprovalItems(tenantId: string): Promise<DigestItem[]> {
       ),
     );
 
-  // Best-effort project resolution: when the approval directly targets a
-  // bid_project, look up its name. Other entity types are left blank.
-  const bidProjectIds = Array.from(
-    new Set(
-      rows
-        .filter((r) => r.entityType === "bid_project")
-        .map((r) => r.entityId),
-    ),
-  );
-  const projectNameMap = await loadProjectNameMap(tenantId, bidProjectIds);
-
   return rows.map<DigestItem>((r) => {
     const severity =
       r.priority === "urgent" ? "critical" :
@@ -172,8 +137,6 @@ async function gatherApprovalItems(tenantId: string): Promise<DigestItem[]> {
       r.priority === "low" ? "low" :
       "medium";
     const drafty = (r.actionType || "").startsWith("draft_");
-    const projectId =
-      r.entityType === "bid_project" ? r.entityId : undefined;
     return {
       severity,
       category: "approval",
@@ -184,10 +147,6 @@ async function gatherApprovalItems(tenantId: string): Promise<DigestItem[]> {
       suggestedAction: drafty
         ? "Review the draft and approve to send, or deny with notes."
         : "Open the approval queue to decide.",
-      projectId,
-      projectName: projectId ? projectNameMap.get(projectId) : undefined,
-      actionType: r.actionType ?? "review_approval",
-      createdAt: r.createdAt.toISOString(),
     };
   });
 }
@@ -222,11 +181,6 @@ async function gatherStalledRfiItems(
 
   const scoped = projectId ? rows.filter((r) => r.projectId === projectId) : rows;
 
-  const projectIds = Array.from(
-    new Set(scoped.map((r) => r.projectId).filter((id): id is string => !!id)),
-  );
-  const projectNameMap = await loadProjectNameMap(tenantId, projectIds);
-
   return scoped.map<DigestItem>((r) => {
     const overdue = r.dueDate && new Date(r.dueDate).getTime() < now.getTime();
     const severity = overdue ? "high" : "medium";
@@ -239,43 +193,8 @@ async function gatherStalledRfiItems(
       suggestedAction: overdue
         ? "Nudge the recipient or escalate to the architect."
         : "Follow up — 10+ days with no response.",
-      projectId: r.projectId ?? undefined,
-      projectName: r.projectId ? projectNameMap.get(r.projectId) : undefined,
-      actionType: "respond_rfi",
-      createdAt: r.createdAt.toISOString(),
     };
   });
-}
-
-async function loadProjectNameMap(
-  tenantId: string,
-  ids: string[],
-): Promise<Map<string, string>> {
-  if (ids.length === 0) return new Map();
-  const rows = await db
-    .select({ id: projects.id, name: projects.name })
-    .from(projects)
-    .where(and(eq(projects.tenantId, tenantId), inArray(projects.id, ids)));
-  return new Map(rows.map((r) => [r.id, r.name]));
-}
-
-async function gatherActiveDismissals(
-  tenantId: string,
-  now: Date,
-): Promise<Set<string>> {
-  const rows = await db
-    .select({
-      entityType: herbieDigestDismissals.entityType,
-      entityId: herbieDigestDismissals.entityId,
-    })
-    .from(herbieDigestDismissals)
-    .where(
-      and(
-        eq(herbieDigestDismissals.tenantId, tenantId),
-        gt(herbieDigestDismissals.dismissedUntil, now),
-      ),
-    );
-  return new Set(rows.map((r) => `${r.entityType}:${r.entityId}`));
 }
 
 function friendlyDate(d: Date | string, now: Date): string {

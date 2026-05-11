@@ -186,7 +186,7 @@ export class HerbieAutonomousAgent {
       .from(opportunities)
       .where(and(
         eq(opportunities.tenantId, this.tenantId),
-        eq(opportunities.status, "open"),
+        sql`COALESCE(LOWER(${opportunities.status}), '') NOT IN ('dismissed', 'lost', 'declined')`,
         sql`${opportunities.id} NOT IN (${scored})`
       ))
       .orderBy(desc(opportunities.dueAt))
@@ -692,7 +692,7 @@ Format as JSON: {"favorableFactors": [], "unfavorableFactors": [], "keyInsights"
       .from(bidProjects)
       .where(and(
         eq(bidProjects.tenantId, this.tenantId),
-        eq(bidProjects.status, "initiated")
+        sql`COALESCE(LOWER(${bidProjects.status}), '') NOT IN ('submitted', 'won', 'lost', 'declined', 'cancelled')`
       ));
 
     // Get upcoming deadlines
@@ -704,7 +704,7 @@ Format as JSON: {"favorableFactors": [], "unfavorableFactors": [], "keyInsights"
       .from(opportunities)
       .where(and(
         eq(opportunities.tenantId, this.tenantId),
-        eq(opportunities.status, "bid_in_progress"),
+        sql`COALESCE(LOWER(${opportunities.status}), '') NOT IN ('dismissed', 'lost', 'declined', 'awarded')`,
         gte(opportunities.dueAt, today),
         lt(opportunities.dueAt, weekFromNow)
       ))

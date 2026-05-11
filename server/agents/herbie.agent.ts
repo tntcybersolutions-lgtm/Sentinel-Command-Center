@@ -1,29 +1,13 @@
-import OpenAI from "openai";
 import * as fs from "fs";
 import * as path from "path";
 import { execSync } from "child_process";
 import { db } from "../db";
-import {
-  opportunities,
-  bidProjects,
-  approvalRequests,
-  calendarEvents,
-  notifications,
-  auditEvents,
-  projectDeliverables,
-  takeoffQuantities,
-  buildingSystems,
-  systemDevices,
-  drawingSheets,
-  cableSchedules,
-} from "@shared/schema";
-import { eq, and, gte, lte, desc, count, isNull, ilike, sql, inArray } from "drizzle-orm";
-import { executeHerbieTool } from "../services/herbie-tools";
+import { opportunities, bidProjects, approvalRequests, calendarEvents, notifications, auditEvents } from "@shared/schema";
+import { eq, and, gte, lte, desc, count, isNull, ilike, sql } from "drizzle-orm";
 
-const openai = new OpenAI({
-  apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
-  baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
-});
+import { getLLMProvider } from "../services/llm";
+import type { LLMMessage, LLMContentBlock, LLMToolSpec } from "../services/llm";
+import { composeDomain } from "../services/herbie-domains/construction";
 import { approvalService } from "../services/approval.service";
 import { scoringService } from "../services/scoring.service";
 import { bidService } from "../services/bid.service";
@@ -102,7 +86,7 @@ const HERBIE_TOOLS = [
         properties: {
           keyword: { type: "string", description: "Search keyword (title, description)" },
           naicsCode: { type: "string", description: "NAICS code filter" },
-          status: { type: "string", enum: ["active", "scored", "tracking", "dismissed"], description: "Opportunity status" },
+          status: { type: "string", description: "Opportunity status filter (e.g. 'New', 'Estimating', 'Pursuing', 'Tracking', 'Dismissed'). OMIT this field to see ALL opportunities regardless of status — that is the right default for general pipeline questions." },
           limit: { type: "number", description: "Max results to return (default 10)" },
         },
       },
@@ -321,206 +305,6 @@ const HERBIE_TOOLS = [
       },
     },
   },
-  {
-    type: "function" as const,
-    function: {
-      name: "record_fact",
-      description: "Save a permanent fact about a project (decisions, conditions, observations). Use for things the team should remember.",
-      parameters: {
-        type: "object",
-        properties: {
-          projectId: { type: "string", description: "Project ID this fact relates to" },
-          fact: { type: "string", description: "The fact in plain English (1-2 sentences)" },
-          category: { type: "string", enum: ["decision", "condition", "observation", "constraint", "other"], description: "Type of fact" },
-          source: { type: "string", description: "Where this fact came from (e.g. 'PM voice memo', 'site walk', 'RFI #123')" },
-        },
-        required: ["projectId", "fact"],
-      },
-    },
-  },
-  {
-    type: "function" as const,
-    function: {
-      name: "record_decision",
-      description: "Record a project decision with rationale and decision-maker. Auto-creates an audit trail.",
-      parameters: {
-        type: "object",
-        properties: {
-          projectId: { type: "string", description: "Project ID" },
-          decision: { type: "string", description: "What was decided" },
-          rationale: { type: "string", description: "Why this decision was made" },
-          decidedBy: { type: "string", description: "Who made the decision" },
-        },
-        required: ["projectId", "decision"],
-      },
-    },
-  },
-  {
-    type: "function" as const,
-    function: {
-      name: "create_rfi",
-      description: "Draft a Request For Information for the project. Goes through approval before sending.",
-      parameters: {
-        type: "object",
-        properties: {
-          projectId: { type: "string", description: "Project ID" },
-          subject: { type: "string", description: "Short RFI subject" },
-          question: { type: "string", description: "The full question to the architect/owner" },
-          discipline: { type: "string", description: "Trade/discipline (electrical, structural, etc.)" },
-          urgency: { type: "string", enum: ["low", "normal", "high", "urgent"], description: "Response urgency" },
-        },
-        required: ["projectId", "subject", "question"],
-      },
-    },
-  },
-  {
-    type: "function" as const,
-    function: {
-      name: "create_submittal",
-      description: "Draft a submittal for the project (product data, shop drawings, samples).",
-      parameters: {
-        type: "object",
-        properties: {
-          projectId: { type: "string", description: "Project ID" },
-          title: { type: "string", description: "Submittal title" },
-          specSection: { type: "string", description: "CSI spec section reference" },
-          submittalType: { type: "string", enum: ["product_data", "shop_drawings", "samples", "mockup", "other"], description: "Type of submittal" },
-          description: { type: "string", description: "What is being submitted" },
-        },
-        required: ["projectId", "title"],
-      },
-    },
-  },
-  {
-    type: "function" as const,
-    function: {
-      name: "flag_for_review",
-      description: "Flag an item for human review. Use when something needs PM attention (missing data, anomaly, risk).",
-      parameters: {
-        type: "object",
-        properties: {
-          entityType: { type: "string", description: "What type of thing (takeoff_quantity, vendor, opportunity, etc.)" },
-          entityId: { type: "string", description: "ID of the flagged thing" },
-          reason: { type: "string", description: "Why it needs review (1-2 sentences)" },
-          priority: { type: "string", enum: ["low", "normal", "high"], description: "How urgent" },
-        },
-        required: ["entityType", "entityId", "reason"],
-      },
-    },
-  },
-  {
-    type: "function" as const,
-    function: {
-      name: "get_project_status",
-      description: "Get current status of a project: phase, deliverables, open RFIs, recent activity.",
-      parameters: {
-        type: "object",
-        properties: {
-          projectId: { type: "string", description: "Project ID" },
-        },
-        required: ["projectId"],
-      },
-    },
-  },
-  {
-    type: "function" as const,
-    function: {
-      name: "log_daily",
-      description: "Create a daily field log entry for a project. Captures crew, weather, work performed, issues.",
-      parameters: {
-        type: "object",
-        properties: {
-          projectId: { type: "string", description: "Project ID" },
-          date: { type: "string", description: "ISO date (YYYY-MM-DD); defaults to today" },
-          crewSize: { type: "number", description: "Number of workers on site" },
-          trade: { type: "string", description: "Primary trade working today" },
-          workPerformed: { type: "string", description: "What got done" },
-          weather: { type: "string", description: "Weather conditions" },
-          issues: { type: "string", description: "Any issues or delays" },
-        },
-        required: ["projectId", "workPerformed"],
-      },
-    },
-  },
-  {
-    type: "function" as const,
-    function: {
-      name: "read_document",
-      description: "Read a project document (drawing sheet, spec, COI, etc.) by its ID. Returns text content for analysis.",
-      parameters: {
-        type: "object",
-        properties: {
-          documentId: { type: "string", description: "Document ID" },
-          documentType: { type: "string", enum: ["drawing_sheet", "spec", "coi", "rfi_response", "submittal", "deliverable", "other"], description: "Type of document" },
-        },
-        required: ["documentId"],
-      },
-    },
-  },
-  {
-    type: "function" as const,
-    function: {
-      name: "extract_fields",
-      description: "Extract structured fields from an unstructured document (COI dates, drawing sheet info, spec requirements).",
-      parameters: {
-        type: "object",
-        properties: {
-          documentId: { type: "string", description: "Document ID to extract from" },
-          extractionType: { type: "string", enum: ["coi", "drawing_sheet", "spec", "addendum", "general"], description: "What kind of extraction" },
-          fields: { type: "array", items: { type: "string" }, description: "Specific fields to extract (optional)" },
-        },
-        required: ["documentId", "extractionType"],
-      },
-    },
-  },
-  {
-    type: "function" as const,
-    function: {
-      name: "search_project",
-      description: "Search across all project content (documents, RFIs, daily logs, facts) for a query string.",
-      parameters: {
-        type: "object",
-        properties: {
-          projectId: { type: "string", description: "Project ID to scope the search" },
-          query: { type: "string", description: "Search terms" },
-          limit: { type: "number", description: "Max results (default 10)" },
-        },
-        required: ["projectId", "query"],
-      },
-    },
-  },
-  {
-    type: "function" as const,
-    function: {
-      name: "draft_message",
-      description: "Draft an outbound message (email, Teams, SMS) to a recipient. Goes through approval.",
-      parameters: {
-        type: "object",
-        properties: {
-          projectId: { type: "string", description: "Related project ID" },
-          recipient: { type: "string", description: "Email address or contact name" },
-          channel: { type: "string", enum: ["email", "teams", "sms"], description: "Delivery channel" },
-          subject: { type: "string", description: "Subject line (email)" },
-          body: { type: "string", description: "Message body" },
-        },
-        required: ["recipient", "channel", "body"],
-      },
-    },
-  },
-  {
-    type: "function" as const,
-    function: {
-      name: "auto_document",
-      description: "Auto-generate ALL 9 project deliverables (trade scopes, bid packages, material lists, cable schedules, device schedules, rack elevations, as-builts, owner handoff, smart building config) for a project. Pulls real data, runs AI enrichment, files the documents. Use when PM says 'document everything', 'generate all docs', 'auto-document the project', etc.",
-      parameters: {
-        type: "object",
-        properties: {
-          projectId: { type: "string", description: "Project ID (optional - defaults to active project)" },
-          enrich: { type: "boolean", description: "Run AI enrichment pass on each deliverable (default true)" },
-        },
-      },
-    },
-  },
 ];
 
 async function executeToolCall(
@@ -543,7 +327,7 @@ async function executeToolCall(
         }
         
         if (args.status) {
-          conditions.push(eq(opportunities.status, args.status));
+          conditions.push(sql`LOWER(${opportunities.status}) = LOWER(${args.status})`);
         }
         
         const results = await db.select()
@@ -898,28 +682,6 @@ async function executeToolCall(
         };
       }
 
-      case "record_fact":
-      case "record_decision":
-      case "create_rfi":
-      case "create_submittal":
-      case "flag_for_review":
-      case "get_project_status":
-      case "log_daily":
-      case "read_document":
-      case "extract_fields":
-      case "search_project":
-      case "draft_message": {
-        const ctx = { tenantId: DEFAULT_TENANT_ID, userId: "herbie" };
-        const adapted = adaptToolArgs(name, args);
-        const result = await executeHerbieTool({ tool: name, args: adapted } as any, ctx as any);
-        return { success: true, data: result };
-      }
-
-      case "auto_document": {
-        const result = await runAutoDocument(args.projectId, args.enrich !== false);
-        return { success: true, data: result };
-      }
-
       default:
         return { success: false, error: `Unknown tool: ${name}` };
     }
@@ -929,325 +691,127 @@ async function executeToolCall(
   }
 }
 
-// ===========================================================================
-// Adapter: maps the PM-friendly tool args exposed to the LLM into the
-// canonical herbie-tools.ts schema (predicate/subjectType/confidence/etc.)
-// ===========================================================================
-function adaptToolArgs(name: string, args: Record<string, any>): Record<string, any> {
-  switch (name) {
-    case "record_fact": {
-      // LLM gives us {projectId, fact, category?, source?}
-      return {
-        projectId: args.projectId ?? null,
-        subjectType: args.subjectType || (args.projectId ? "project" : "general"),
-        subjectId: args.subjectId ?? args.projectId ?? null,
-        predicate: args.predicate || (args.category ? `${args.category}_note` : "observation"),
-        object: args.object || args.fact || "",
-        sourceType: args.sourceType || "herbie_extraction",
-        sourceId: args.sourceId || args.source || null,
-        confidence: typeof args.confidence === "number" ? args.confidence : 0.85,
-      };
-    }
-    case "record_decision": {
-      return {
-        projectId: args.projectId ?? null,
-        summary: args.summary || args.decision || "",
-        rationale: args.rationale ?? null,
-        decidedBy: args.decidedBy || "herbie",
-        relatedEntityType: args.relatedEntityType ?? null,
-        relatedEntityId: args.relatedEntityId ?? null,
-      };
-    }
-    case "create_rfi": {
-      return {
-        projectId: args.projectId,
-        subject: args.subject,
-        question: args.question,
-        priority: args.priority || args.urgency || "normal",
-        assignedToUserId: args.assignedToUserId,
-      };
-    }
-    case "create_submittal": {
-      return {
-        projectId: args.projectId,
-        name: args.name || args.title || "Untitled Submittal",
-        submittalType: args.submittalType,
-        description: args.description,
-        priority: args.priority || "medium",
-      };
-    }
-    case "flag_for_review": {
-      // Map our PM-friendly priority strings to numeric priorities.
-      const pMap: Record<string, number> = { low: 200, normal: 100, high: 25, urgent: 10 };
-      const priorityNum =
-        typeof args.priority === "number"
-          ? args.priority
-          : pMap[String(args.priority || "normal").toLowerCase()] ?? 100;
-      return {
-        reviewType: args.reviewType || "monitor_alert",
-        actionProposed: args.actionProposed || `Review ${args.entityType ?? "item"} ${args.entityId ?? ""}: ${args.reason ?? ""}`.trim(),
-        confidence: typeof args.confidence === "number" ? args.confidence : 0.7,
-        reasoningText: args.reasoningText || args.reason,
-        priority: priorityNum,
-        relatedEntityType: args.entityType,
-        relatedEntityId: args.entityId,
-      };
-    }
-    case "log_daily": {
-      // Build a transcript from structured fields if no transcript given.
-      const parts: string[] = [];
-      if (args.workPerformed) parts.push(`Work performed: ${args.workPerformed}.`);
-      if (args.crewSize) parts.push(`Crew size: ${args.crewSize}.`);
-      if (args.trade) parts.push(`Trade: ${args.trade}.`);
-      if (args.weather) parts.push(`Weather: ${args.weather}.`);
-      if (args.issues) parts.push(`Issues: ${args.issues}.`);
-      return {
-        projectId: args.projectId,
-        logDate: args.logDate || args.date,
-        transcript: args.transcript || parts.join(" ") || "Daily log entry.",
-      };
-    }
-    case "extract_fields": {
-      return {
-        documentId: args.documentId,
-        category: args.category || args.extractionType,
-      };
-    }
-    case "draft_message": {
-      // Map our 'teams' channel to 'portal' (closest match in service).
-      const channelMap: Record<string, string> = { email: "email", sms: "sms", teams: "portal", portal: "portal" };
-      return {
-        projectId: args.projectId,
-        recipient: args.recipient,
-        channel: channelMap[String(args.channel || "email").toLowerCase()] || "email",
-        subject: args.subject,
-        body: args.body,
-      };
-    }
-    default:
-      return args;
-  }
-}
-
-// ===========================================================================
-// AUTO-DOCUMENT: generates all 9 deliverables for a project
-// ===========================================================================
-const ALL_DELIVERABLE_TYPES = [
-  "trade_scope",
-  "bid_package",
-  "material_list",
-  "cable_schedule",
-  "device_schedule",
-  "rack_elevation",
-  "as_built",
-  "owner_handoff",
-  "smart_building_config",
-] as const;
-
-async function runAutoDocument(projectId: string | undefined, enrich: boolean) {
-  // Resolve a project if none given - default to most recently updated bid_project
-  let resolvedProjectId = projectId;
-  if (!resolvedProjectId) {
-    const [recent] = await db
-      .select({ id: bidProjects.id })
-      .from(bidProjects)
-      .where(eq(bidProjects.tenantId, DEFAULT_TENANT_ID))
-      .orderBy(desc(bidProjects.updatedAt))
-      .limit(1);
-    resolvedProjectId = recent?.id;
-  }
-
-  if (!resolvedProjectId) {
-    return { generated: 0, results: [], message: "No project available to document." };
-  }
-
-  // Fire each deliverable through the existing endpoint logic by inserting
-  // a project_deliverables row and letting downstream consumers regenerate.
-  // For correctness/portability, we directly call the same generator path
-  // by issuing internal HTTP via fetch to /api/generate-deliverable/:type.
-  const baseUrl = process.env.PUBLIC_BASE_URL || `http://127.0.0.1:${process.env.PORT || 5000}`;
-  const results: Array<{ type: string; status: "ok" | "failed"; deliverableId?: string; error?: string; enriched?: boolean }> = [];
-
-  for (const type of ALL_DELIVERABLE_TYPES) {
-    try {
-      const resp = await fetch(`${baseUrl}/api/generate-deliverable/${type}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ projectId: resolvedProjectId }),
-      });
-      if (!resp.ok) {
-        results.push({ type, status: "failed", error: `HTTP ${resp.status}` });
-        continue;
-      }
-      const json = await resp.json();
-      const deliverable = json?.deliverable ?? json;
-      const deliverableId: string | undefined = deliverable?.id;
-      const contentJson = deliverable?.contentJson;
-
-      let enriched = false;
-      if (enrich && deliverableId && contentJson) {
-        try {
-          const summary = await enrichDeliverable(type, contentJson);
-          if (summary) {
-            await db
-              .update(projectDeliverables)
-              .set({
-                contentJson: { ...contentJson, herbieSummary: summary },
-                updatedAt: new Date(),
-              })
-              .where(eq(projectDeliverables.id, deliverableId));
-            enriched = true;
-          }
-        } catch {
-          // enrichment is best-effort; never fail the whole batch
-        }
-      }
-      results.push({ type, status: "ok", deliverableId, enriched });
-    } catch (err) {
-      results.push({ type, status: "failed", error: err instanceof Error ? err.message : String(err) });
-    }
-  }
-
-  await auditService.logEvent({
-    tenantId: DEFAULT_TENANT_ID,
-    eventType: "herbie_auto_document",
-    actor: "HERBIE",
-    entityType: "bid_project",
-    entityId: resolvedProjectId,
-    afterJson: {
-      projectId: resolvedProjectId,
-      generated: results.filter((r) => r.status === "ok").length,
-      failed: results.filter((r) => r.status === "failed").length,
-      enriched: results.filter((r) => r.enriched).length,
-    },
-  });
-
-  return {
-    projectId: resolvedProjectId,
-    generated: results.filter((r) => r.status === "ok").length,
-    failed: results.filter((r) => r.status === "failed").length,
-    results,
-  };
-}
-
-async function enrichDeliverable(type: string, contentJson: any): Promise<string | null> {
-  try {
-    const prompt = `You are SENTINEL HERBIE. Read this auto-generated ${type.replace(/_/g, " ")} deliverable and produce a 3-5 sentence executive summary for the PM. Be sharp, specific, and call out anything missing, risky, or worth their attention. No corporate fluff.
-
-DELIVERABLE CONTENT:
-${JSON.stringify(contentJson).substring(0, 6000)}`;
-
-    const resp = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [{ role: "user", content: prompt }],
-      max_completion_tokens: 400,
-    });
-    return resp.choices[0]?.message?.content?.trim() || null;
-  } catch {
-    return null;
-  }
-}
-
 export async function processHerbieMessage(
   message: string,
   conversationHistory: Array<{ role: "user" | "assistant"; content: string }> = []
 ): Promise<{ response: string; toolCalls?: Array<{ tool: string; result: any }> }> {
-  const systemPrompt = `You are HERBIE — Sentinel's AI teammate for BlackHawk Construction. You're not a chatbot. You're the project coordinator every contractor wishes they could afford full-time.
+  // Domain composition: load role/trade/sector context for this tenant.
+  // Failure here should NOT prevent Herbie from responding â fall back
+  // to the base system prompt only.
+  let domainPrompt = "";
+  try {
+    const composed = await composeDomain({
+      userRole: null,
+      primaryTrade: "trade.general-construction",
+      projectSector: "sector.govt-public-works",
+    });
+    domainPrompt = composed.prompt;
+  } catch (err) {
+    console.error("[herbie] composeDomain failed; continuing without domain context:", err);
+  }
 
-WHO YOU ARE:
-- Sharp and direct. No corporate fluff. No "Hello!" or "Great question!"
-- Calm under pressure. When things are on fire, get shorter and clearer.
-- Dryly funny when it fits. Never forced, never at someone's expense.
-- Loyal to your PM. Flag things in their interest, even when uncomfortable.
-- Plainspoken — talk like a smart foreman, not Silicon Valley.
-- Own mistakes. No hedging, no excuses.
+  const baseSystemPrompt = `You are SENTINEL HERBIEâ¢, the AI office assistant for BlackHawk Construction's NOVA platform. You are an expert in federal construction contracting, bid management, construction operations, AND software development for this platform.
 
-VOICE — examples:
-- BAD: "Hello! I noticed that the certificate of insurance for Acme Plumbing will be expiring soon. Would you like me to help?"
-- GOOD: "Acme Plumbing's COI expires Friday. Drafted the renewal — want me to send it?"
-- BAD: "Great question! Let me look into that."
-- GOOD: "Looking. Two seconds." (then the answer)
+Your capabilities include:
+- Searching and analyzing federal opportunities from SAM.gov, GSA, and DIBBS
+- Scoring opportunities against BlackHawk's fit profile (NAICS codes, set-asides, geography, bonding capacity)
+- Managing the bid pipeline and approval workflows
+- Scheduling meetings and drafting communications
+- Providing daily briefings and exception reports
+- Tracking compliance requirements (CMMC, NIST 800-171)
+- **Reading and searching the project source code** to help build new features, debug issues, and understand how things work
+- **Browsing project file structure** to find components, services, routes, and schemas
 
-CONSTRUCTION CAPS YOU UNDERSTAND COLD:
-- RFI = Request For Information. Submittal = product data / shop drawings / samples.
-- COI = Certificate of Insurance. Expires kill projects.
-- CO = Change Order. Don't approve over $50k without PM sign-off.
-- AHJ = Authority Having Jurisdiction. Permits, inspections.
-- Trade scope, takeoff, as-built, owner handoff, BACnet/controls — you know all of it.
-- Federal contracting: SAM.gov, GSA, DIBBS, NAICS, set-asides, CMMC, NIST 800-171.
+CODEBASE TOOLS - When the user asks about code, building features, debugging, or how something works:
+- Use get_file_outline FIRST on large files (like shared/schema.ts at 335KB) to see every table, type, function, and schema with line numbers
+- Use read_code_file to read any source file - it handles files up to 2MB automatically. For large files, it returns a structural outline + first 150 lines. Use startLine to navigate to specific sections.
+- Use search_codebase to find where functions, variables, types, or patterns are defined/used
+- Use list_project_files to explore directory structure and find relevant files
+- The project is a TypeScript monorepo: React frontend (client/src), Express backend (server), shared types (shared/schema.ts)
+- Key directories: client/src/pages (page components), server/routes.ts (API endpoints), server/services (business logic), server/agents (AI agents), shared/schema.ts (DB schema + types)
+- NEVER tell the user a file is "too large" to read. You can read ANY file. Use get_file_outline + read_code_file with startLine to read any section of any file.
 
-YOUR TOOLS — use them, don't guess:
-- record_fact / record_decision: write things to project memory.
-- create_rfi / create_submittal: draft formal documents (goes through approval).
-- log_daily: capture daily field log.
-- flag_for_review: raise something for PM attention.
-- get_project_status: snapshot of open RFIs, submittals, COI, tasks.
-- search_project / read_document / extract_fields: pull info from project content.
-- draft_message: outbound email/Teams/SMS (always requires PM approval in Phase 1).
-- auto_document: generate ALL 9 deliverables (trade scopes, bid packages, material lists, cable schedules, device schedules, rack elevations, as-builts, owner handoff, smart building config) in one shot. Use when PM says "document everything", "auto-document", "generate all docs".
-- Codebase tools (read_code_file, search_codebase, list_project_files, get_file_outline): for engineering work on the platform itself.
-
-HARD RULES:
-1. No external sends without PM approval in Phase 1. Drafts only.
-2. No deletions. If something looks wrong, flag it.
-3. No financial finalization. Draft and flag.
-4. Suspected fraud / safety / double-billing → flag the PM directly. Never the external party first.
-5. Never make up numbers, opportunities, or facts. Use tools to get real data.
-6. When initiating, lead with the point. Never "Hi, just checking in."
-7. Format with markdown when it helps readability. Otherwise plain text is fine.
-
-NORTH STAR: Every interaction — did I save this PM time, or waste it? If wasted, shorten, sharpen, or stay quiet next time.
+IMPORTANT RULES:
+1. Always use tools to get real data - never make up numbers or opportunities
+2. External actions (emails, calendar events, bid submissions) require approval
+3. Be concise and action-oriented
+4. Format responses with markdown for readability
+5. When recommending actions, always note approval requirements
+6. Reference specific opportunity IDs, deadlines, and metrics when available
+7. When asked about code: READ the actual file first before answering - never guess at implementation details
+8. NEVER refuse to read a file due to size - always use your tools to read it in chunks
 
 Current date: ${new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}`;
 
-  const messages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
-    { role: "system", content: systemPrompt },
-    ...conversationHistory,
-    { role: "user", content: message },
+  // Cacheable system blocks: base prompt + domain context. Both stable
+  // per-turn so prompt caching gives large discounts on inputs.
+  const systemBlocks: Array<{ type: "text"; text: string; cacheable?: boolean }> = [
+    { type: "text", text: baseSystemPrompt, cacheable: true },
   ];
-
-  const toolCalls: Array<{ tool: string; result: any }> = [];
-
-  const response = await openai.chat.completions.create({
-    model: "gpt-4o",
-    messages,
-    tools: HERBIE_TOOLS,
-    max_completion_tokens: 2048,
-  });
-
-  let assistantMessage = response.choices[0]?.message;
-
-  if (assistantMessage?.tool_calls && assistantMessage.tool_calls.length > 0) {
-    const toolResults: Array<{ role: "tool"; tool_call_id: string; content: string }> = [];
-
-    for (const toolCall of assistantMessage.tool_calls) {
-      if (toolCall.type !== "function") continue;
-      const fnCall = toolCall as { type: "function"; id: string; function: { name: string; arguments: string } };
-      const args = JSON.parse(fnCall.function.arguments || "{}");
-      const result = await executeToolCall(fnCall.function.name, args);
-      
-      toolCalls.push({ tool: fnCall.function.name, result });
-      toolResults.push({
-        role: "tool",
-        tool_call_id: fnCall.id,
-        content: JSON.stringify(result),
-      });
-    }
-
-    const followUpResponse = await openai.chat.completions.create({
-      model: "gpt-4o",
-      messages: [
-        ...messages,
-        assistantMessage as any,
-        ...toolResults as any,
-      ],
-      max_completion_tokens: 2048,
-    });
-
-    assistantMessage = followUpResponse.choices[0]?.message;
+  if (domainPrompt) {
+    systemBlocks.push({ type: "text", text: domainPrompt, cacheable: true });
   }
 
-  const finalResponse = assistantMessage?.content || "I apologize, but I couldn't process your request. Please try again.";
+  // Convert OpenAI-shape HERBIE_TOOLS to provider-neutral LLMToolSpec.
+  const tools: LLMToolSpec[] = HERBIE_TOOLS.map((t) => ({
+    name: t.function.name,
+    description: t.function.description,
+    parameters: t.function.parameters as LLMToolSpec["parameters"],
+  }));
+
+  const provider = getLLMProvider();
+  const toolCalls: Array<{ tool: string; result: any }> = [];
+
+  // Build the conversation in Anthropic-shape messages.
+  const messages: LLMMessage[] = [
+    ...conversationHistory.map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
+    { role: "user" as const, content: message },
+  ];
+
+  // Tool-use loop. Cap at 6 rounds to bound cost and prevent runaway agents.
+  const MAX_ROUNDS = 6;
+  let assistantText = "";
+
+  for (let round = 0; round < MAX_ROUNDS; round++) {
+    const response = await provider.chat({
+      system: systemBlocks,
+      messages,
+      tools,
+      tier: "orchestration",
+      maxTokens: 2048,
+    });
+
+    assistantText = response.text;
+
+    if (response.toolCalls.length === 0) {
+      break;
+    }
+
+    // Append assistant turn (text + tool_use blocks) and the tool results.
+    const assistantBlocks: LLMContentBlock[] = [];
+    if (response.text) {
+      assistantBlocks.push({ type: "text", text: response.text });
+    }
+    for (const tc of response.toolCalls) {
+      assistantBlocks.push({ type: "tool_use", id: tc.id, name: tc.name, input: tc.input });
+    }
+    messages.push({ role: "assistant", content: assistantBlocks });
+
+    const toolResultBlocks: LLMContentBlock[] = [];
+    for (const tc of response.toolCalls) {
+      const result = await executeToolCall(tc.name, tc.input as Record<string, any>);
+      toolCalls.push({ tool: tc.name, result });
+      toolResultBlocks.push({
+        type: "tool_result",
+        tool_use_id: tc.id,
+        content: JSON.stringify(result),
+        is_error: !result.success,
+      });
+    }
+    messages.push({ role: "user", content: toolResultBlocks });
+  }
+
+  const finalResponse = assistantText || "I apologize, but I couldn't process your request. Please try again.";
 
   await auditService.logEvent({
     tenantId: DEFAULT_TENANT_ID,
@@ -1255,7 +819,7 @@ Current date: ${new Date().toLocaleDateString('en-US', { weekday: 'long', year: 
     actor: "HERBIE",
     entityType: "conversation",
     entityId: `herbie-${Date.now()}`,
-    afterJson: { 
+    afterJson: {
       userMessage: message.substring(0, 200),
       toolsUsed: toolCalls.map(t => t.tool),
     },

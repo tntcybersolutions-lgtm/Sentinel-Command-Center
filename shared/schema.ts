@@ -58,7 +58,6 @@ export const tenants = pgTable("tenants", {
   dbaName: text("dba_name"),
   timezone: text("timezone").notNull().default("America/New_York"),
   status: text("status").notNull().default("active"),
-  // Federal pursuit fit profile (additive — used by federal-bid-pursuit scoring)
   dollarSweetSpotMin: decimal("dollar_sweet_spot_min", { precision: 15, scale: 2 }),
   dollarSweetSpotMax: decimal("dollar_sweet_spot_max", { precision: 15, scale: 2 }),
   preferredStates: jsonb("preferred_states").default(sql`'[]'::jsonb`),
@@ -224,7 +223,8 @@ export const opportunities = pgTable("opportunities", {
   lastSeenAt: timestamp("last_seen_at").defaultNow(),
   locationJson: jsonb("location_json"),
   rawRefId: varchar("raw_ref_id", { length: 36 }).references(() => sourceItemsRaw.id),
-  // Federal pursuit fields (additive — used by federal-bid-pursuit scoring)
+  naicsCode: text("naics_code"),
+  setAsideCategory: text("set_aside_category"),
   scopeKeywords: jsonb("scope_keywords").default(sql`'[]'::jsonb`),
   placeOfPerformanceState: text("place_of_performance_state"),
   agency: text("agency"),
@@ -232,8 +232,6 @@ export const opportunities = pgTable("opportunities", {
   estimatedValue: decimal("estimated_value", { precision: 15, scale: 2 }),
   isRecompete: boolean("is_recompete").default(false),
   incumbentTenureYears: integer("incumbent_tenure_years"),
-  naicsCode: text("naics_code"),
-  setAsideCategory: text("set_aside_category"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => ({
@@ -1525,7 +1523,6 @@ export const rfis = pgTable("rfis", {
   answeredAt: timestamp("answered_at"),
   attachmentsJson: jsonb("attachments_json"),
   distributionJson: jsonb("distribution_json"),
-  draftedByHerbie: boolean("drafted_by_herbie").notNull().default(false),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => ({
@@ -1574,7 +1571,6 @@ export const submittals = pgTable("submittals", {
   attachmentsJson: jsonb("attachments_json"),
   submittedAt: timestamp("submitted_at"),
   approvedAt: timestamp("approved_at"),
-  draftedByHerbie: boolean("drafted_by_herbie").notNull().default(false),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => ({
@@ -1702,147 +1698,6 @@ export const subcontracts = pgTable("subcontracts", {
 }, (table) => ({
   subcontractNumberIdx: unique().on(table.tenantId, table.subcontractNumber),
 }));
-
-// ============================================================================
-// LIEN WAIVERS (215_lien_waivers.sql)
-// ============================================================================
-// Construction lien waivers signed by subs/vendors to release lien rights in
-// exchange for payment. Four canonical types per US convention:
-//   - conditional_partial   (lien released for partial payment, contingent on
-//                            payment clearing)
-//   - unconditional_partial (lien released for partial payment, no contingency)
-//   - conditional_final     (lien released for final payment, contingent)
-//   - unconditional_final   (lien released for final payment, no contingency)
-// Statutory lien waiver templates (state-required forms). Global (no tenantId).
-export const lienWaiverTemplates = pgTable("lien_waiver_templates", {
-  id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()`),
-  state: varchar("state", { length: 2 }).notNull(),
-  waiverType: text("waiver_type").notNull(), // conditional_progress | unconditional_progress | conditional_final | unconditional_final
-  templateBody: text("template_body").notNull(), // statutory text with {{placeholders}}
-  statutory: boolean("statutory").notNull().default(false),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-}, (table) => ({
-  stateTypeIdx: index("lwt_state_type_idx").on(table.state, table.waiverType),
-}));
-
-export const insertLienWaiverTemplateSchema = createInsertSchema(lienWaiverTemplates).omit({
-  id: true,
-  createdAt: true,
-});
-export type InsertLienWaiverTemplate = z.infer<typeof insertLienWaiverTemplateSchema>;
-export type LienWaiverTemplate = typeof lienWaiverTemplates.$inferSelect;
-
-// State machine: draft → sent → signed → received → (final). Terminal: voided.
-export const lienWaivers = pgTable("lien_waivers", {
-  id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()`),
-  tenantId: varchar("tenant_id", { length: 36 }).notNull().references(() => tenants.id, { onDelete: "cascade" }),
-  projectId: varchar("project_id", { length: 36 }).notNull().references(() => projects.id, { onDelete: "cascade" }),
-  vendorId: varchar("vendor_id", { length: 36 }).notNull().references(() => vendors.id, { onDelete: "cascade" }),
-  subcontractId: varchar("subcontract_id", { length: 36 }).references(() => subcontracts.id, { onDelete: "set null" }),
-  payAppId: varchar("pay_app_id", { length: 36 }).references(() => payApplications.id, { onDelete: "set null" }),
-  waiverNumber: text("waiver_number").notNull(),
-  waiverType: text("waiver_type").notNull(), // conditional_partial | unconditional_partial | conditional_final | unconditional_final
-  status: text("status").notNull().default("draft"), // draft | sent | signed | received | voided
-  state: varchar("state", { length: 2 }), // jurisdiction state code (CA, TX, ...) for statutory templates
-  throughDate: timestamp("through_date").notNull(),
-  paymentDate: timestamp("payment_date"),
-  paymentAmount: decimal("payment_amount", { precision: 15, scale: 2 }).notNull(),
-  exceptionsJson: jsonb("exceptions_json"), // [{description, amount}] for unpaid items
-  vendorName: text("vendor_name"),
-  vendorEmail: text("vendor_email"),
-  vendorAddress: text("vendor_address"),
-  claimantName: text("claimant_name"),
-  claimantAddress: text("claimant_address"),
-  ownerName: text("owner_name"),
-  projectDescription: text("project_description"),
-  propertyDescription: text("property_description"),
-  filledBody: text("filled_body"), // Herbie-filled waiver text
-  signerName: text("signer_name"),
-  signerTitle: text("signer_title"),
-  signerEmail: text("signer_email"),
-  signToken: varchar("sign_token", { length: 64 }), // opaque token for public e-sign URL
-  signTokenExpiresAt: timestamp("sign_token_expires_at"),
-  signatureDataUrl: text("signature_data_url"), // captured signature image (data URL)
-  signedIpAddress: varchar("signed_ip_address", { length: 64 }),
-  sentAt: timestamp("sent_at"),
-  signedAt: timestamp("signed_at"),
-  receivedAt: timestamp("received_at"),
-  voidedAt: timestamp("voided_at"),
-  expiresAt: timestamp("expires_at"),
-  documentId: varchar("document_id", { length: 36 }).references(() => projectDocuments.id, { onDelete: "set null" }),
-  notesText: text("notes_text"),
-  createdByUserId: varchar("created_by_user_id", { length: 36 }).references(() => users.id),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-  updatedAt: timestamp("updated_at").defaultNow().notNull(),
-}, (table) => ({
-  waiverNumberIdx: unique().on(table.tenantId, table.waiverNumber),
-  projectStatusIdx: index("lw_project_status_idx").on(table.projectId, table.status),
-  vendorIdx: index("lw_vendor_idx").on(table.vendorId),
-  payAppIdx: index("lw_pay_app_idx").on(table.payAppId),
-  // Partial unique index — every non-null token is unique. The partial
-  // predicate keeps inserts of waivers WITHOUT a sign token (e.g. drafts
-  // that haven't been issued a magic link) from colliding on `null`.
-  // This guarantees signByToken's atomic UPDATE...WHERE sign_token=?
-  // touches at most one row, so it is safe without an explicit tenant
-  // predicate (the unique token implicitly identifies one tenant).
-  signTokenIdx: uniqueIndex("lw_sign_token_uniq")
-    .on(table.signToken)
-    .where(sql`sign_token IS NOT NULL`),
-}));
-
-export const insertLienWaiverSchema = createInsertSchema(lienWaivers).omit({
-  id: true,
-  createdAt: true,
-  updatedAt: true,
-});
-export type InsertLienWaiver = z.infer<typeof insertLienWaiverSchema>;
-export type LienWaiver = typeof lienWaivers.$inferSelect;
-
-export const lienWaiverEvents = pgTable("lien_waiver_events", {
-  id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()`),
-  tenantId: varchar("tenant_id", { length: 36 }).notNull().references(() => tenants.id, { onDelete: "cascade" }),
-  waiverId: varchar("waiver_id", { length: 36 }).notNull().references(() => lienWaivers.id, { onDelete: "cascade" }),
-  eventType: text("event_type").notNull(), // created | sent | signed | received | voided | document_generated | updated
-  actorUserId: varchar("actor_user_id", { length: 36 }).references(() => users.id),
-  actorName: text("actor_name"),
-  payloadJson: jsonb("payload_json"),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-}, (table) => ({
-  waiverEventIdx: index("lwe_waiver_idx").on(table.waiverId, table.createdAt),
-}));
-
-export const insertLienWaiverEventSchema = createInsertSchema(lienWaiverEvents).omit({
-  id: true,
-  createdAt: true,
-});
-export type InsertLienWaiverEvent = z.infer<typeof insertLienWaiverEventSchema>;
-export type LienWaiverEvent = typeof lienWaiverEvents.$inferSelect;
-
-// Scheduled reminders for outstanding (sent-but-not-signed) waivers.
-// Default cadence: reminder #1 at +3 days, #2 at +7 days, #3 at +14 days
-// after the waiver is sent. The reminder monitor (server/index.ts) wakes
-// every minute and processes any reminder whose scheduled_for is past
-// and sent_at is null.
-export const lienWaiverReminders = pgTable("lien_waiver_reminders", {
-  id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()`),
-  lienWaiverId: varchar("lien_waiver_id", { length: 36 }).notNull().references(() => lienWaivers.id, { onDelete: "cascade" }),
-  tenantId: varchar("tenant_id", { length: 36 }).notNull().references(() => tenants.id, { onDelete: "cascade" }),
-  reminderNumber: integer("reminder_number").notNull(), // 1, 2, 3
-  scheduledFor: timestamp("scheduled_for").notNull(),
-  sentAt: timestamp("sent_at"),
-  channel: text("channel").notNull().default("email"), // email | sms | teams
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-}, (table) => ({
-  dueIdx: index("lwr_due_idx").on(table.scheduledFor, table.sentAt),
-  waiverIdx: index("lwr_waiver_idx").on(table.lienWaiverId),
-}));
-
-export const insertLienWaiverReminderSchema = createInsertSchema(lienWaiverReminders).omit({
-  id: true,
-  createdAt: true,
-});
-export type InsertLienWaiverReminder = z.infer<typeof insertLienWaiverReminderSchema>;
-export type LienWaiverReminder = typeof lienWaiverReminders.$inferSelect;
 
 // ============================================================================
 // DAILY PLANNER & BRIEFINGS (220_planner.sql)
@@ -2334,11 +2189,6 @@ export const conversationMemory = pgTable("conversation_memory", {
   id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()`),
   tenantId: varchar("tenant_id", { length: 36 }).notNull().references(() => tenants.id, { onDelete: "cascade" }),
   userId: varchar("user_id", { length: 36 }).references(() => users.id, { onDelete: "cascade" }),
-  // Optional project context — set when the memory was captured during a
-  // conversation that was scoped to a specific project (Herbie chat with the
-  // project chip selected). Lets recall queries filter by project when
-  // helpful and lets us audit cross-project leakage.
-  projectId: varchar("project_id", { length: 36 }),
   memoryType: text("memory_type").notNull(), // session, tenant_preference, user_preference, learned_fact
   memoryKey: text("memory_key").notNull(),
   memoryValue: jsonb("memory_value").notNull(),
@@ -2348,7 +2198,6 @@ export const conversationMemory = pgTable("conversation_memory", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => ({
   tenantKeyIdx: index("memory_tenant_key_idx").on(table.tenantId, table.memoryType, table.memoryKey),
-  projectIdx: index("memory_project_idx").on(table.tenantId, table.projectId),
 }));
 
 // Connector Status - Integration Connection Tracking
@@ -2723,10 +2572,6 @@ export const subcontractors = pgTable("subcontractors", {
   status: text("status").notNull().default("active"), // active, inactive, preferred
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
-  csiDivision: varchar("csi_division", { length: 2 }),
-  csiSection: varchar("csi_section", { length: 8 }),
-  csiClassificationMethod: varchar("csi_classification_method", { length: 20 }),
-  csiClassifiedAt: timestamp("csi_classified_at"),
 });
 
 // Labor Rates - Pricing database for quotes
@@ -3107,6 +2952,10 @@ export const blueprints = pgTable("blueprints", {
   mimeType: text("mime_type").default("application/pdf"),
   pageCount: integer("page_count").default(1),
   scale: text("scale"),
+  // Per-page calibration: { "1": pixelsPerFoot, "2": pixelsPerFoot } so a
+  // single drawing set with multiple pages can carry distinct scales.
+  pixelsPerFootByPage: jsonb("pixels_per_foot_by_page"),
+  calibratedAt: timestamp("calibrated_at"),
   category: text("category").notNull().default("General"),
   uploadedAt: timestamp("uploaded_at").defaultNow().notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -3358,6 +3207,10 @@ export const takeoffQuantities = pgTable("takeoff_quantities", {
   laborHours: decimal("labor_hours", { precision: 10, scale: 2 }),
   wasteFactor: decimal("waste_factor", { precision: 5, scale: 2 }).default("0"),
   extendedCost: decimal("extended_cost", { precision: 14, scale: 2 }),
+  // Procurement routing — when true, the unified-workflows handler rolls
+  // this line into an auto-generated PO. Replaces the old substring match
+  // on `notes` ("procure"/"purchase"/"order").
+  triggersProcurement: boolean("triggers_procurement").default(false).notNull(),
   // Annotation link
   annotationId: varchar("annotation_id", { length: 36 }),
   annotationJson: jsonb("annotation_json"), // shape data for reference
@@ -4260,8 +4113,14 @@ export type RetroScanCluster = typeof retroScanClusters.$inferSelect;
 export type InsertRetroScanCluster = z.infer<typeof insertRetroScanClusterSchema>;
 
 // ============================================================================
-// FOLDER TAXONOMY CONSTANTS
+// FOLDER TAXONOMY CONSTANTS — CANONICAL SOURCE OF TRUTH
 // ============================================================================
+//
+// These three constants are the only place jacket folder structure is
+// defined. The `folder_sections` DB table is a derived projection seeded
+// by server/services/taxonomy.service.ts (seedFolderSectionsFromConstants).
+// FolderTaxonomyService and any UI surface that needs the folder list
+// MUST import from here — do not hand-type folder lists elsewhere.
 
 export const COMPANY_JACKET_FOLDERS = [
   { code: "00", name: "Overview" },
@@ -4392,7 +4251,6 @@ export const PROJECT_JACKET_FOLDERS = [
   { code: "10", name: "Safety" },
   { code: "11", name: "Invoices & Pay Apps" },
   { code: "12", name: "Closeout" },
-  { code: "13", name: "Lien Waivers" },
   { code: "99", name: "Archive" },
 ] as const;
 
@@ -6215,9 +6073,7 @@ export const projectFolders = pgTable("project_folders", {
   name: text("name").notNull(),
   sortOrder: integer("sort_order").notNull().default(0),
   createdAt: timestamp("created_at").notNull().defaultNow(),
-}, (table) => ({
-  uniqByName: uniqueIndex("project_folders_tenant_project_name_uniq").on(table.tenantId, table.projectId, table.name),
-}));
+});
 
 export const insertProjectFolderSchema = createInsertSchema(projectFolders).omit({ id: true, createdAt: true });
 export type InsertProjectFolder = z.infer<typeof insertProjectFolderSchema>;
@@ -6641,25 +6497,6 @@ export const insertCoiCertificateSchema = createInsertSchema(coiCertificates).om
 export type InsertCoiCertificate = z.infer<typeof insertCoiCertificateSchema>;
 export type CoiCertificate = typeof coiCertificates.$inferSelect;
 
-// Phase D — Per-user "Mark Resolved" dismissals for Herbie digest items.
-// Items are computed live from underlying entities (COIs, approvals, RFIs)
-// so we record a dismissal that hides the item until either the underlying
-// entity changes or the dismissal TTL elapses.
-export const herbieDigestDismissals = pgTable("herbie_digest_dismissals", {
-  id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()`),
-  tenantId: varchar("tenant_id", { length: 36 }).notNull(),
-  entityType: text("entity_type").notNull(),
-  entityId: varchar("entity_id", { length: 36 }).notNull(),
-  dismissedUntil: timestamp("dismissed_until").notNull(),
-  dismissedBy: varchar("dismissed_by", { length: 36 }),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-}, (t) => ({
-  hddTenantEntityIdx: index("hdd_tenant_entity_idx").on(t.tenantId, t.entityType, t.entityId),
-  hddTenantUntilIdx: index("hdd_tenant_until_idx").on(t.tenantId, t.dismissedUntil),
-}));
-
-export type HerbieDigestDismissal = typeof herbieDigestDismissals.$inferSelect;
-
 export type HomeBucketKey = "urgent" | "needsAttention" | "highValue" | "approvals";
 export type HomePriority = "critical" | "high" | "medium" | "low";
 
@@ -6838,76 +6675,6 @@ export type HerbieDraftFollowupResponse = {
   body: string;
 };
 
-// ============================================================================
-// PORTAL SHARES (Phase 1, Roadmap Feature 11)
-// ----------------------------------------------------------------------------
-// Token-gated, read-only share links a PM creates from a project cockpit so
-// a client (or sub) can view a curated slice of project documents without
-// needing a Sentinel login. Each share is scoped to a project, an audience
-// ("client" | "sub" | "internal"), an opaque list of allowed document
-// categories (e.g. ["bid_set", "submittals"]), and an expiry. The token is
-// the public URL key — keep it long, random, and never re-emit revoked
-// tokens. `revokedAt` lets us hard-deny access without losing the audit row.
-// ============================================================================
-export const portalShares = pgTable("portal_shares", {
-  id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()`),
-  tenantId: varchar("tenant_id", { length: 36 }).notNull().references(() => tenants.id, { onDelete: "cascade" }),
-  projectId: varchar("project_id", { length: 36 }).notNull().references(() => projects.id, { onDelete: "cascade" }),
-  token: text("token").notNull(),
-  audience: text("audience").notNull(), // "client" | "sub" | "internal"
-  // Allowed document categories. We store as text[] (Postgres array) so the
-  // GET handler can index/filter without JSON unpacking. Empty array =
-  // share all categories.
-  allowedCategories: text("allowed_categories").array().notNull().default(sql`'{}'::text[]`),
-  expiresAt: timestamp("expires_at"),
-  createdByUserId: varchar("created_by_user_id", { length: 36 }).references(() => users.id),
-  revokedAt: timestamp("revoked_at"),
-  revokedByUserId: varchar("revoked_by_user_id", { length: 36 }).references(() => users.id),
-  notes: text("notes"),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-}, (t) => ({
-  portalSharesTokenIdx: unique("portal_shares_token_uidx").on(t.token),
-  portalSharesProjectIdx: index("portal_shares_project_idx").on(t.tenantId, t.projectId, t.revokedAt),
-}));
-
-export const insertPortalShareSchema = createInsertSchema(portalShares).omit({
-  id: true,
-  createdAt: true,
-  revokedAt: true,
-  revokedByUserId: true,
-});
-export type InsertPortalShare = z.infer<typeof insertPortalShareSchema>;
-export type PortalShare = typeof portalShares.$inferSelect;
-
-// ============================================================================
-// MONITOR EVENTS (Phase 1, Roadmap Feature 12)
-// ----------------------------------------------------------------------------
-// Idempotency ledger for the daily monitor jobs (coi_expiry, submittal_overdue,
-// daily_log_missing, change_order_stale, invoice_overdue). Each row marks
-// "monitor X already fired for entity Y on date Z", so a re-run of the same
-// scheduler tick (manual or recovery) does not double-notify.
-// `windowDate` is stored as ISO date string ('YYYY-MM-DD') for trivial joins.
-// ============================================================================
-export const monitorEvents = pgTable("monitor_events", {
-  id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()`),
-  tenantId: varchar("tenant_id", { length: 36 }).notNull(),
-  monitorId: text("monitor_id").notNull(), // e.g. "coi_expiry", "submittal_overdue"
-  entityId: varchar("entity_id", { length: 36 }), // null for tenant-level fires
-  windowDate: text("window_date").notNull(), // 'YYYY-MM-DD'
-  metadata: jsonb("metadata"),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-}, (t) => ({
-  monitorEventsUidx: unique("monitor_events_uidx").on(t.monitorId, t.entityId, t.windowDate),
-  monitorEventsTenantIdx: index("monitor_events_tenant_idx").on(t.tenantId, t.monitorId, t.windowDate),
-}));
-
-export const insertMonitorEventSchema = createInsertSchema(monitorEvents).omit({
-  id: true,
-  createdAt: true,
-});
-export type InsertMonitorEvent = z.infer<typeof insertMonitorEventSchema>;
-export type MonitorEvent = typeof monitorEvents.$inferSelect;
-
 export type HerbieToolAction = "tree" | "file" | "search" | "patch" | "run";
 
 export type HerbieChangeSet = {
@@ -6934,28 +6701,5 @@ export type HerbieAgentResult = {
   done: boolean;
   changeSetId?: string;
 };
-
-// SAM.gov document import audit log
-export const samImportLog = pgTable("sam_import_log", {
-  id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()`),
-  tenantId: varchar("tenant_id", { length: 36 }).notNull(),
-  bidProjectId: varchar("bid_project_id", { length: 36 }).notNull(),
-  opportunityId: varchar("opportunity_id", { length: 36 }),
-  triggerSource: text("trigger_source").notNull(),
-  triggeredByUserId: varchar("triggered_by_user_id", { length: 36 }),
-  startedAt: timestamp("started_at").notNull().defaultNow(),
-  finishedAt: timestamp("finished_at"),
-  status: text("status").notNull().default("running"),
-  filesAttempted: integer("files_attempted").notNull().default(0),
-  filesImported: integer("files_imported").notNull().default(0),
-  filesSkippedDuplicate: integer("files_skipped_duplicate").notNull().default(0),
-  bytesImported: integer("bytes_imported").notNull().default(0),
-  errorsJson: jsonb("errors_json"),
-  noticeId: text("notice_id"),
-  durationMs: integer("duration_ms"),
-  createdAt: timestamp("created_at").notNull().defaultNow(),
-});
-// ============================================================================
-// FEDERAL PURSUIT SCHEMA (re-exported from shared/schema-federal.ts)
-// ============================================================================
+// === Federal pursuit + compliance schema (v2.1) ===
 export * from "./schema-federal";

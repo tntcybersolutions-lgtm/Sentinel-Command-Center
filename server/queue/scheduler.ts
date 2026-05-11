@@ -95,46 +95,6 @@ const SCHEDULES: ScheduleConfig[] = [
     intervalMs: 5 * 60 * 1000,
     description: "Document ingestion SKIP LOCKED cycle every 5 minutes",
   },
-  {
-    // Roadmap Feature 3 — daily COI expiry monitor. For each tenant,
-    // walks getExpiringCOIs(30) and creates notifications at the
-    // 30/14/7/1-day thresholds. At 14 days it also drops a
-    // draft_external_message approval_request with a pre-populated
-    // renewal email body so the PM can one-click send.
-    jobType: "coi_expiry_monitor",
-    cronPattern: "0 9 * * *",
-    intervalMs: 24 * 60 * 60 * 1000,
-    description: "COI expiry monitor daily at 09:00",
-  },
-  // Roadmap Feature 12 — daily monitor jobs. Each fires once per
-  // tenant per day and records a `monitor_events` row keyed on
-  // (monitor_id, entity_id, window_date) for idempotency. The same
-  // (monitor, entity, day) cannot double-notify even if the scheduler
-  // tick is replayed (manual trigger, restart, etc).
-  {
-    jobType: "submittal_overdue_monitor",
-    cronPattern: "0 9 * * *",
-    intervalMs: 24 * 60 * 60 * 1000,
-    description: "Submittal overdue sweep daily at 09:00",
-  },
-  {
-    jobType: "daily_log_missing_monitor",
-    cronPattern: "0 9 * * *",
-    intervalMs: 24 * 60 * 60 * 1000,
-    description: "Daily log missing sweep daily at 09:00",
-  },
-  {
-    jobType: "change_order_stale_monitor",
-    cronPattern: "0 9 * * *",
-    intervalMs: 24 * 60 * 60 * 1000,
-    description: "Change order stale sweep daily at 09:00",
-  },
-  {
-    jobType: "invoice_overdue_monitor",
-    cronPattern: "0 9 * * *",
-    intervalMs: 24 * 60 * 60 * 1000,
-    description: "Invoice overdue sweep daily at 09:00",
-  },
 ];
 
 class Scheduler {

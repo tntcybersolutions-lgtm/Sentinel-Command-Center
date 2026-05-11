@@ -61,7 +61,7 @@ export interface SamGovSearchParams {
 }
 
 export class SamGovClient {
-  private baseUrl = "https://api.sam.gov/opportunities/v2/search";
+  private baseUrl = "https://api.sam.gov/prod/opportunities/v2/search";
   private apiKey: string;
 
   constructor(apiKey: string) {
@@ -119,7 +119,7 @@ export class SamGovClient {
       queryParams.set("noticeId", noticeId);
 
       const response = await fetch(
-        `https://api.sam.gov/opportunities/v2/search?${queryParams.toString()}`,
+        `https://api.sam.gov/prod/opportunities/v2/search?${queryParams.toString()}`,
         {
           headers: { Accept: "application/json" },
           signal: AbortSignal.timeout(30000),
@@ -456,9 +456,9 @@ export class SamGovIngestionService {
 }
 
 export async function createSamGovIngestionService(tenantId: string): Promise<SamGovIngestionService | null> {
-  const apiKey = process.env.SAM_GOV_API_KEY;
+  const apiKey = process.env.SAMGOV_API_KEY;
   if (!apiKey) {
-    console.warn("SAM_GOV_API_KEY not configured");
+    console.warn("SAMGOV_API_KEY not configured");
     return null;
   }
 

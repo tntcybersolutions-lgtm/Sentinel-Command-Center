@@ -4,8 +4,6 @@ import { storage } from "./storage";
 import { registerChatRoutes } from "./replit_integrations/chat";
 import { registerObjectStorageRoutes } from "./replit_integrations/object_storage";
 import { herbieToolsRouter } from "./routes/herbie-tools.routes";
-import { registerSentinelPhase1Routes } from "./routes-sentinel-phase1";
-import { registerLienWaiverRoutes } from "./routes-lien-waiver";
 import * as ReplitObjectStorage from "@replit/object-storage";
 import { Readable } from "node:stream";
 import OpenAI from "openai";
@@ -71,7 +69,6 @@ import {
   opportunityDecisions,
   v4Bids,
   bidReadinessSnapshots,
-  bidReadinessScores,
   v4BidDocuments,
   v4BidTasks,
   bidPartners,
@@ -112,6 +109,7 @@ import {
   changeOrders,
   dailyLogs,
   projectTasks,
+  blueprints,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, desc, asc, ilike, sql, count, isNotNull, gte, lte, lt, or, inArray } from "drizzle-orm";
@@ -119,6 +117,7 @@ import { eventStreamService } from "./services/event-stream.service";
 import crypto from "crypto";
 import { fromError } from "zod-validation-error";
 import { auditService } from "./services/audit.service";
+import { computeTakeoffExtendedCost } from "./services/takeoff-cost.service";
 import { approvalService } from "./services/approval.service";
 import { scoringService } from "./services/scoring.service";
 import { bidService } from "./services/bid.service";
@@ -1357,105 +1356,6 @@ export async function registerRoutes(
     }
   });
 
-  // Phase C — Proactive Intelligence page consumes a semantically-named
-  // surface. These are thin aliases over the dashboard_tasks endpoints
-  // above so we don't fork persistence or analysis logic.
-  app.get("/api/proactive-intelligence/tasks", async (req: Request, res: Response) => {
-    try {
-      const tenantId = DEFAULT_TENANT_ID;
-      const statusFilter = pOpt(req.query.status as string);
-      const priorityFilter = pOpt(req.query.priority as string);
-      const rows = await db
-        .select()
-        .from(dashboardTasks)
-        .where(eq(dashboardTasks.tenantId, tenantId))
-        .orderBy(asc(dashboardTasks.position), desc(dashboardTasks.createdAt))
-        .limit(200);
-      const now = new Date();
-      const filtered = rows.filter((t) => {
-        if (statusFilter && t.status !== statusFilter) return false;
-        if (priorityFilter && t.priority !== priorityFilter) return false;
-        if (t.status === "snoozed" && t.snoozeUntil && new Date(t.snoozeUntil) > now) return false;
-        // Page only shows actionable items, not items already done.
-        if (t.status === "done") return false;
-        return true;
-      });
-      res.json(filtered);
-    } catch (error) {
-      handleRouteError(res, error, "Failed to fetch proactive intelligence tasks");
-    }
-  });
-
-  app.post("/api/proactive-intelligence/run", async (_req: Request, res: Response) => {
-    try {
-      const { runProactiveAnalysis } = await import("./services/proactive-intelligence.service");
-      const result = await runProactiveAnalysis(DEFAULT_TENANT_ID);
-      res.json(result);
-    } catch (error) {
-      handleRouteError(res, error, "Failed to run proactive analysis");
-    }
-  });
-
-  app.post(
-    "/api/proactive-intelligence/tasks/:id/execute",
-    async (req: Request, res: Response) => {
-      // Forward to the shared execute handler by re-invoking the same path
-      // logic. Cleanest is to reuse via internal HTTP redirect of intent —
-      // we just call the same service directly to avoid an extra hop.
-      try {
-        const tenantId = DEFAULT_TENANT_ID;
-        const taskId = p(req.params.id, "id");
-        const [task] = await db
-          .select()
-          .from(dashboardTasks)
-          .where(and(eq(dashboardTasks.id, taskId), eq(dashboardTasks.tenantId, tenantId)));
-        if (!task) return res.status(404).json({ error: "Task not found" });
-
-        const payload = (task.actionPayload || {}) as Record<string, any>;
-        let result: any = { executed: false, reason: "Unknown action type" };
-
-        switch (task.actionType) {
-          case "run_ingestion": {
-            const bpId = payload.bidProjectId;
-            if (bpId) {
-              const { runFullIngestion } = await import(
-                "./services/ingestion-pipeline.service"
-              );
-              const ingResult = await runFullIngestion(tenantId, bpId);
-              result = { executed: true, ingestion: ingResult };
-            }
-            break;
-          }
-          case "seed_checklist": {
-            const bpId = payload.bidProjectId;
-            if (bpId) {
-              const { seedChecklistForBidProject } = await import(
-                "./services/bid-jacket-artifacts.service"
-              );
-              await seedChecklistForBidProject(tenantId, bpId);
-              result = { executed: true };
-            }
-            break;
-          }
-          default:
-            // For task types without a wired-up automation we still let the
-            // user mark the item "done" so the page stays clean.
-            result = { executed: true, note: "Marked complete (no automation wired)" };
-        }
-
-        await db
-          .update(dashboardTasks)
-          .set({ status: "done", completedAt: new Date(), completedBy: "user", updatedAt: new Date() })
-          .where(and(eq(dashboardTasks.id, taskId), eq(dashboardTasks.tenantId, tenantId)));
-        eventStreamService.emit("TASK_UPDATED", tenantId, { taskId, action: "executed" });
-
-        res.json(result);
-      } catch (error) {
-        handleRouteError(res, error, "Failed to execute proactive intelligence task");
-      }
-    },
-  );
-
   app.get("/api/dashboard/activity", async (_req: Request, res: Response) => {
     try {
       const tenantId = DEFAULT_TENANT_ID;
@@ -2278,7 +2178,7 @@ export async function registerRoutes(
         .from(opportunities)
         .where(and(
           eq(opportunities.tenantId, DEFAULT_TENANT_ID),
-          eq(opportunities.status, "open"),
+          sql`COALESCE(LOWER(${opportunities.status}), '') NOT IN ('dismissed', 'lost', 'declined', 'awarded')`,
         ))
         .orderBy(opportunities.dueAt)
         .limit(50);
@@ -4220,7 +4120,7 @@ export async function registerRoutes(
   app.patch("/api/bid-projects/:bidProjectId/jacket-checklist/:itemId", async (req: Request, res: Response) => {
     try {
       const itemId = p(req.params.itemId);
-      const { status, ownerUserId, dueAt, blockedReason } = req.body;
+      const { status, ownerUserId, dueAt, blockedReason, force } = req.body;
       const updates: Record<string, any> = { updatedAt: new Date() };
       if (status) {
         updates.status = status;
@@ -4232,6 +4132,32 @@ export async function registerRoutes(
       if (ownerUserId !== undefined) updates.ownerUserId = ownerUserId;
       if (dueAt !== undefined) updates.dueAt = dueAt ? new Date(dueAt) : null;
       if (blockedReason !== undefined) updates.blockedReason = blockedReason;
+
+      // Gate: cannot transition to "done" while required artifacts are missing.
+      if (status === "done" && force !== true) {
+        const [item] = await db.select().from(bidJacketChecklistItems)
+          .where(eq(bidJacketChecklistItems.id, itemId));
+        if (!item) return res.status(404).json({ error: "Checklist item not found" });
+
+        const artifacts = await db.select({
+          templateCode: bidJacketArtifacts.templateCode,
+          status: bidJacketArtifacts.status,
+        }).from(bidJacketArtifacts)
+          .where(eq(bidJacketArtifacts.bidProjectId, item.bidProjectId));
+
+        const { evaluateChecklistArtifactGate } = await import("./services/checklist-gate.service");
+        const gate = evaluateChecklistArtifactGate({
+          requiredArtifactCodes: item.requiredArtifactCodes,
+          bidArtifacts: artifacts,
+        });
+        if (gate.blocked) {
+          return res.status(409).json({
+            error: "Required artifacts are not ready",
+            missingArtifactCodes: gate.missingCodes,
+            hint: "Mark the missing artifacts ready/approved, or pass { force: true } to override.",
+          });
+        }
+      }
 
       const [updated] = await db
         .update(bidJacketChecklistItems)
@@ -4468,6 +4394,125 @@ export async function registerRoutes(
     }
   });
 
+  // ─── Takeoff measurement engine ────────────────────────────────────────────
+  // Calibrate a drawing page: client picks two points + supplies a known
+  // length in feet; we store pixelsPerFoot so subsequent measurements
+  // resolve to real-world quantities.
+  app.post("/api/blueprints/:id/calibrate", async (req: Request, res: Response) => {
+    try {
+      const blueprintId = p(req.params.id);
+      const schema = z.object({
+        pageNumber: z.number().int().positive().default(1),
+        p1: z.object({ x: z.number(), y: z.number() }),
+        p2: z.object({ x: z.number(), y: z.number() }),
+        knownLengthFt: z.number().positive(),
+      });
+      const validated = schema.safeParse(req.body);
+      if (!validated.success) {
+        return res.status(400).json({ error: "Validation failed", details: fromError(validated.error).toString() });
+      }
+      const { computePixelsPerFoot } = await import("./services/measurement-engine.service");
+      const ppf = computePixelsPerFoot(validated.data.p1, validated.data.p2, validated.data.knownLengthFt);
+
+      const [bp] = await db.select().from(blueprints).where(and(
+        eq(blueprints.tenantId, DEFAULT_TENANT_ID),
+        eq(blueprints.id, blueprintId),
+      ));
+      if (!bp) return res.status(404).json({ error: "Blueprint not found" });
+
+      const existing = (bp.pixelsPerFootByPage as Record<string, number> | null) || {};
+      const updated = { ...existing, [String(validated.data.pageNumber)]: ppf };
+
+      await db.update(blueprints)
+        .set({ pixelsPerFootByPage: updated, calibratedAt: new Date() })
+        .where(eq(blueprints.id, blueprintId));
+
+      res.json({ blueprintId, pageNumber: validated.data.pageNumber, pixelsPerFoot: ppf, allPages: updated });
+    } catch (error: any) {
+      console.error("[Measurement] Calibrate error:", error);
+      res.status(500).json({ error: "Failed to calibrate", message: error.message });
+    }
+  });
+
+  // Evaluate a measurement: server applies the saved pixelsPerFoot for
+  // the page and returns { quantity, unit, type, closed }.
+  app.post("/api/blueprints/:id/measure", async (req: Request, res: Response) => {
+    try {
+      const blueprintId = p(req.params.id);
+      const schema = z.object({
+        pageNumber: z.number().int().positive().default(1),
+        type: z.enum(["linear", "polyline", "area", "volume", "count"]),
+        points: z.array(z.object({ x: z.number(), y: z.number() })),
+        depthFt: z.number().positive().optional(),
+      });
+      const validated = schema.safeParse(req.body);
+      if (!validated.success) {
+        return res.status(400).json({ error: "Validation failed", details: fromError(validated.error).toString() });
+      }
+
+      const [bp] = await db.select().from(blueprints).where(and(
+        eq(blueprints.tenantId, DEFAULT_TENANT_ID),
+        eq(blueprints.id, blueprintId),
+      ));
+      if (!bp) return res.status(404).json({ error: "Blueprint not found" });
+
+      const ppfMap = (bp.pixelsPerFootByPage as Record<string, number> | null) || {};
+      const ppf = ppfMap[String(validated.data.pageNumber)];
+      if (validated.data.type !== "count") {
+        if (!ppf || ppf <= 0) {
+          return res.status(409).json({
+            error: "Page not calibrated",
+            hint: "POST /api/blueprints/:id/calibrate first.",
+            pageNumber: validated.data.pageNumber,
+          });
+        }
+      }
+      const { evaluateMeasurement } = await import("./services/measurement-engine.service");
+      const result = evaluateMeasurement(
+        { type: validated.data.type, points: validated.data.points, depthFt: validated.data.depthFt },
+        { pixelsPerFoot: ppf || 0 },
+      );
+      res.json(result);
+    } catch (error: any) {
+      console.error("[Measurement] Measure error:", error);
+      res.status(500).json({ error: "Failed to measure", message: error.message });
+    }
+  });
+
+  // AI vision count: send a base64 image of a drawing region + target
+  // type, get back { count, confidence, source, notes, model }.
+  app.post("/api/blueprints/vision-count", async (req: Request, res: Response) => {
+    try {
+      const schema = z.object({
+        imageBase64: z.string().min(1),
+        mimeType: z.string().default("image/png"),
+        targetType: z.string(),
+        hint: z.string().optional(),
+      });
+      const validated = schema.safeParse(req.body);
+      if (!validated.success) {
+        return res.status(400).json({ error: "Validation failed", details: fromError(validated.error).toString() });
+      }
+      const { realVisionCounter, VISION_TARGET_TYPES } = await import("./services/vision-counter.service");
+      if (!(VISION_TARGET_TYPES as readonly string[]).includes(validated.data.targetType)) {
+        return res.status(400).json({
+          error: "Unknown targetType",
+          allowed: VISION_TARGET_TYPES,
+        });
+      }
+      const result = await realVisionCounter.count({
+        imageBase64: validated.data.imageBase64,
+        mimeType: validated.data.mimeType,
+        targetType: validated.data.targetType as any,
+        hint: validated.data.hint,
+      });
+      res.json(result);
+    } catch (error: any) {
+      console.error("[Measurement] Vision count error:", error);
+      res.status(500).json({ error: "Failed to count via vision", message: error.message });
+    }
+  });
+
   app.get("/api/blueprints/:id/annotations", async (req: Request, res: Response) => {
     try {
       const pageNumber = req.query.page ? parseInt(req.query.page as string) : undefined;
@@ -4476,19 +4521,6 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Error fetching annotations:", error);
       res.status(500).json({ error: "Failed to fetch annotations" });
-    }
-  });
-
-  // Returns the takeoff items associated with a blueprint. Used by the
-  // "Import from Plans" flow on /estimate/takeoff so PMs can pull a
-  // plan's pre-measured items into the project's takeoff_quantities list.
-  app.get("/api/blueprints/:id/takeoff-items", async (req: Request, res: Response) => {
-    try {
-      const items = await storage.getTakeoffItems(p(req.params.id));
-      res.json(items);
-    } catch (error) {
-      console.error("Error fetching blueprint takeoff items:", error);
-      res.status(500).json({ error: "Failed to fetch blueprint takeoff items" });
     }
   });
 
@@ -4728,35 +4760,12 @@ export async function registerRoutes(
 
   app.get("/api/approvals", async (req: Request, res: Response) => {
     try {
-      const { status, type } = req.query;
+      const { status } = req.query;
       
       const validStatuses = ['pending', 'approved', 'denied'];
       const safeStatus = (status && status !== 'all' && validStatuses.includes(String(status))) ? String(status) : null;
       
       const statusClause = safeStatus ? sql`AND ar.status = ${safeStatus}` : sql``;
-
-      // ?type= filters by actionType and/or entityType. Aliases supported:
-      //   change_order  → action_type LIKE %change_order% OR entity_type='change_order'
-      //   coi           → action_type LIKE %coi% OR entity_type='coi_certificate'
-      //   bid           → action_type LIKE %bid%
-      //   vendor        → entity_type='vendor'
-      //   <other>       → exact action_type match
-      const rawType = typeof type === "string" ? type.trim() : "";
-      let typeClause = sql``;
-      if (rawType) {
-        const t = rawType.toLowerCase();
-        if (t === "change_order") {
-          typeClause = sql`AND (ar.action_type ILIKE ${"%change_order%"} OR ar.entity_type = ${"change_order"})`;
-        } else if (t === "coi") {
-          typeClause = sql`AND (ar.action_type ILIKE ${"%coi%"} OR ar.entity_type = ${"coi_certificate"})`;
-        } else if (t === "bid") {
-          typeClause = sql`AND ar.action_type ILIKE ${"%bid%"}`;
-        } else if (t === "vendor") {
-          typeClause = sql`AND ar.entity_type = ${"vendor"}`;
-        } else {
-          typeClause = sql`AND ar.action_type = ${rawType}`;
-        }
-      }
       
       const result = await db.execute(sql`
         SELECT 
@@ -4789,7 +4798,6 @@ export async function registerRoutes(
         LEFT JOIN vendors v ON (ar.entity_id = v.id AND ar.entity_type = 'vendor')
         WHERE ar.tenant_id = ${DEFAULT_TENANT_ID}
         ${statusClause}
-        ${typeClause}
         ORDER BY 
           CASE ar.priority WHEN 'urgent' THEN 1 WHEN 'high' THEN 2 WHEN 'normal' THEN 3 ELSE 4 END,
           ar.created_at DESC
@@ -4950,47 +4958,6 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Error fetching approvals:", error);
       res.status(500).json({ error: "Failed to fetch approvals" });
-    }
-  });
-
-  // PATCH /api/approvals/:id — unified status update endpoint.
-  // Body: { status: "approved" | "rejected" | "denied", notes?: string }
-  app.patch("/api/approvals/:id", async (req: Request, res: Response) => {
-    try {
-      const id = p(req.params.id);
-      const { status, notes } = req.body || {};
-      const raw = String(status || "").toLowerCase().trim();
-      const normalized = raw === "rejected" ? "denied" : raw;
-      if (normalized !== "approved" && normalized !== "denied") {
-        return res.status(400).json({ error: "status must be 'approved' or 'rejected'" });
-      }
-      const existing = await storage.getApprovalRequest(id);
-      if (!existing) {
-        return res.status(404).json({ error: "Approval request not found" });
-      }
-      if ((existing.status || "").toLowerCase() !== "pending") {
-        return res.status(409).json({
-          error: `Approval already ${existing.status}; only pending approvals can be decided.`,
-          current: existing.status,
-        });
-      }
-      const approval = await storage.updateApprovalRequest(id, { status: normalized });
-      if (!approval) {
-        return res.status(404).json({ error: "Approval request not found" });
-      }
-      await storage.createAuditEvent({
-        tenantId: DEFAULT_TENANT_ID,
-        eventType: normalized === "approved" ? "approval_granted" : "approval_denied",
-        actorType: "user",
-        entityType: "approval_request",
-        entityId: approval.id,
-        action: normalized === "approved" ? "approve" : "deny",
-        afterJson: { ...approval, notes },
-      });
-      res.json(approval);
-    } catch (error) {
-      console.error("Error patching approval:", error);
-      res.status(500).json({ error: "Failed to update approval" });
     }
   });
 
@@ -8105,7 +8072,7 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
         action: e.action,
         resource: e.entityType,
         resourceId: e.entityId,
-        status: (e as any).outcome === "success" ? "success" : (e as any).outcome === "failure" ? "failure" : "warning",
+        status: ((): "success" | "failure" | "warning" => { const t = (e.eventType || e.action || "").toLowerCase(); if (t.includes("fail") || t.includes("error") || t.includes("reject")) return "failure"; if (t.includes("warn") || t.includes("overdue") || t.includes("stale")) return "warning"; return "success"; })(),
         ipAddress: "127.0.0.1",
         details: (e as any).notes || `${e.action} on ${e.entityType}`,
       }));
@@ -8402,29 +8369,6 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
       }
 
       const stats = await service.runIngestion();
-
-      // Fire-and-forget: Herbie records a fact about the ingestion run.
-      void (async () => {
-        try {
-          const { executeHerbieTool } = await import("./services/herbie-tools");
-          const summary = `SAM.gov ingestion run: ${JSON.stringify(stats).substring(0, 280)}`;
-          await executeHerbieTool(
-            {
-              tool: "record_fact",
-              args: {
-                projectId: "samgov-ingest",
-                fact: summary,
-                category: "observation",
-                source: "samgov_ingest",
-              },
-            },
-            { tenantId: DEFAULT_TENANT_ID, userId: "herbie" } as any,
-          );
-        } catch (e) {
-          console.warn("[herbie auto-hook samgov_ingest]", e instanceof Error ? e.message : e);
-        }
-      })();
-
       res.json({ success: true, stats });
     } catch (error) {
       console.error("Error running SAM.gov ingestion:", error);
@@ -9579,48 +9523,6 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
     }
   });
 
-  // Manual daily-log creation. Maps the 5 quick-entry fields from the
-  // Voice Daily Log page into the dailyLogs JSONB columns. We register
-  // this BEFORE registerSimpleProjectModuleRoutes so this concrete handler
-  // wins for the dailyLogs table (the generic loop targets a different
-  // table called projectDailyLogs).
-  app.post("/api/projects/:id/daily-logs", async (req: Request, res: Response) => {
-    try {
-      const projectId = p(req.params.id);
-      const b = req.body ?? {};
-      const toLines = (v: unknown): string[] => {
-        if (Array.isArray(v)) return v.map(String).map((s) => s.trim()).filter(Boolean);
-        if (typeof v === "string") return v.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
-        return [];
-      };
-      const tasksCompleted = toLines(b.tasks_completed ?? b.tasksCompleted);
-      const issues = toLines(b.issues);
-      const safetyNotes = toLines(b.safety_notes ?? b.safetyNotes);
-      const crewCount = b.crew_count ?? b.crewCount;
-      const crewNum = crewCount !== undefined && crewCount !== null && crewCount !== ""
-        ? Number(crewCount)
-        : undefined;
-      const weather = typeof b.weather === "string" ? b.weather.trim() : "";
-      const logDate = b.logDate ? new Date(b.logDate) : new Date();
-      const log = await projectsService.createDailyLog(DEFAULT_TENANT_ID, {
-        projectId,
-        logDate,
-        weatherJson: weather ? { summary: weather } : undefined,
-        workPerformedJson: tasksCompleted.length ? tasksCompleted : undefined,
-        laborJson: crewNum !== undefined && Number.isFinite(crewNum) && crewNum >= 0
-          ? [{ count: crewNum }]
-          : undefined,
-        issuesJson: issues.length ? issues : undefined,
-        safetyNotesJson: safetyNotes.length ? safetyNotes : undefined,
-        notes: typeof b.notes === "string" ? b.notes : undefined,
-      });
-      res.json(log);
-    } catch (error: any) {
-      console.error("Error creating daily log:", error);
-      res.status(500).json({ error: error?.message ?? "Failed to create daily log" });
-    }
-  });
-
   // ============================================================================
   // PROJECT IMPORT ROUTES
   // ============================================================================
@@ -9858,129 +9760,6 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
   // ============================================================================
 
   const { vendorService } = await import("./services/vendor.service");
-
-  // ============================================================================
-  // VENDOR CONFIDENCE — derived AI-style score for the Vendor Confidence
-  // dashboard. Confidence is computed from existing rating columns plus signals
-  // (insurance/license freshness, prequalification status, vendor status).
-  // ============================================================================
-  function computeVendorConfidence(v: any) {
-    const ratings: number[] = [];
-    const perf = v.performanceRating ? parseFloat(v.performanceRating) : NaN;
-    const safety = v.safetyRating ? parseFloat(v.safetyRating) : NaN;
-    const quality = v.qualityRating ? parseFloat(v.qualityRating) : NaN;
-    if (Number.isFinite(perf)) ratings.push(perf);
-    if (Number.isFinite(safety)) ratings.push(safety);
-    if (Number.isFinite(quality)) ratings.push(quality);
-    // Ratings are 0–5; convert to a 0–100 base.
-    const ratedAvg = ratings.length ? (ratings.reduce((a, b) => a + b, 0) / ratings.length) : 3;
-    let score = ratedAvg * 20;
-    // Insurance freshness: fresh > 30d → +5, expired → -15
-    const now = Date.now();
-    const ins = v.insuranceExpiresAt ? new Date(v.insuranceExpiresAt).getTime() : null;
-    if (ins) {
-      const daysLeft = Math.round((ins - now) / 86400000);
-      if (daysLeft >= 30) score += 5;
-      else if (daysLeft < 0) score -= 15;
-      else score -= 5;
-    }
-    // License freshness mirrors insurance with smaller weight.
-    const lic = v.licenseExpiresAt ? new Date(v.licenseExpiresAt).getTime() : null;
-    if (lic) {
-      const daysLeft = Math.round((lic - now) / 86400000);
-      if (daysLeft >= 30) score += 3;
-      else if (daysLeft < 0) score -= 10;
-    }
-    const prequal = (v.prequalificationStatus || "").toLowerCase();
-    if (prequal === "approved") score += 8;
-    else if (prequal === "pending") score -= 2;
-    else if (prequal === "rejected" || prequal === "blacklisted") score -= 25;
-    const status = (v.status || "").toLowerCase();
-    if (status === "inactive" || status === "suspended" || status === "blacklisted") score -= 30;
-    score = Math.max(0, Math.min(100, Math.round(score)));
-    let tier: "Preferred" | "Approved" | "Watch" | "At-Risk";
-    if (score >= 85) tier = "Preferred";
-    else if (score >= 70) tier = "Approved";
-    else if (score >= 50) tier = "Watch";
-    else tier = "At-Risk";
-    return { score, tier };
-  }
-
-  app.get("/api/vendor-confidence/vendors", async (_req: Request, res: Response) => {
-    try {
-      const all = await vendorService.listVendors(DEFAULT_TENANT_ID);
-      if (!Array.isArray(all)) {
-        return res.status(500).json({ error: "Vendor service returned no data" });
-      }
-      const enriched = all.map((v: any) => {
-        const { score, tier } = computeVendorConfidence(v);
-        return {
-          id: v.id,
-          vendorNumber: v.vendorNumber,
-          companyName: v.companyName,
-          vendorType: v.vendorType,
-          status: v.status,
-          trade: v.vendorType === "subcontractor" ? "Subcontractor" : v.vendorType,
-          confidenceScore: score,
-          tier,
-          performanceRating: v.performanceRating ? parseFloat(v.performanceRating) : null,
-          safetyRating: v.safetyRating ? parseFloat(v.safetyRating) : null,
-          qualityRating: v.qualityRating ? parseFloat(v.qualityRating) : null,
-          prequalificationStatus: v.prequalificationStatus,
-          insuranceExpiresAt: v.insuranceExpiresAt,
-          licenseExpiresAt: v.licenseExpiresAt,
-          updatedAt: v.updatedAt,
-        };
-      });
-      enriched.sort((a: any, b: any) => b.confidenceScore - a.confidenceScore);
-      res.json(enriched);
-    } catch (error) {
-      console.error("Error fetching vendor-confidence vendors:", error);
-      res.status(500).json({ error: "Failed to fetch vendor confidence list" });
-    }
-  });
-
-  app.get("/api/vendor-confidence/stats", async (_req: Request, res: Response) => {
-    try {
-      const all = await vendorService.listVendors(DEFAULT_TENANT_ID);
-      if (!Array.isArray(all)) {
-        return res.status(500).json({ error: "Vendor service returned no data" });
-      }
-      const tiers = { Preferred: 0, Approved: 0, Watch: 0, "At-Risk": 0 };
-      let scoreSum = 0;
-      let scoreCount = 0;
-      let expiredInsurance = 0;
-      let expiringInsurance = 0;
-      const now = Date.now();
-      for (const v of all) {
-        const { score, tier } = computeVendorConfidence(v);
-        tiers[tier]++;
-        scoreSum += score;
-        scoreCount++;
-        if (v.insuranceExpiresAt) {
-          const t = new Date(v.insuranceExpiresAt).getTime();
-          const daysLeft = Math.round((t - now) / 86400000);
-          if (daysLeft < 0) expiredInsurance++;
-          else if (daysLeft < 30) expiringInsurance++;
-        }
-      }
-      const avgConfidence = scoreCount ? Math.round(scoreSum / scoreCount) : 0;
-      res.json({
-        total: scoreCount,
-        avgConfidence,
-        tiers,
-        preferred: tiers.Preferred,
-        approved: tiers.Approved,
-        watch: tiers.Watch,
-        atRisk: tiers["At-Risk"],
-        expiredInsurance,
-        expiringInsurance,
-      });
-    } catch (error) {
-      console.error("Error fetching vendor-confidence stats:", error);
-      res.status(500).json({ error: "Failed to fetch vendor confidence stats" });
-    }
-  });
 
   app.get("/api/vendors/stats", async (req: Request, res: Response) => {
     try {
@@ -16011,6 +15790,22 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
         : `inline; filename="${fileName}"`;
       res.setHeader("Content-Disposition", cd);
 
+      try {
+        await storage.createAuditLogEntry({
+          tenantId: DEFAULT_TENANT_ID,
+          action: disposition === "attachment" ? "download" : "view",
+          documentId: doc.id,
+          actorType: "user",
+          detailsJson: {
+            fileName: doc.fileName,
+            ip: req.ip || req.socket?.remoteAddress || "unknown",
+            userAgent: req.headers["user-agent"] || "unknown",
+          },
+        });
+      } catch (auditErr) {
+        console.error("[doc-content] audit log write failed:", auditErr);
+      }
+
       stream.pipe(res);
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : "Stream failed";
@@ -16793,62 +16588,33 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
     }
   });
 
-  // Seed standard folder sections
+  // Seed standard folder sections from the canonical schema constants.
+  // Single source of truth: shared/schema.ts BID_JACKET_FOLDERS /
+  // COMPANY_JACKET_FOLDERS / PROJECT_JACKET_FOLDERS. Idempotent — already-
+  // seeded rows are skipped.
   app.post("/api/seed/folder-sections", async (req: Request, res: Response) => {
     try {
-      const bidSections = [
-        { code: "01", name: "Bid_Request", displayName: "Bid Request", requiredForSubmit: true },
-        { code: "02", name: "Plans_and_Specs", displayName: "Plans & Specifications", requiredForSubmit: true },
-        { code: "03", name: "RFIs", displayName: "RFIs", requiredForSubmit: false },
-        { code: "04", name: "Addenda", displayName: "Addenda", requiredForSubmit: false },
-        { code: "05", name: "Takeoff_and_Estimating", displayName: "Takeoff & Estimating", requiredForSubmit: true },
-        { code: "06", name: "Subcontractor_Quotes", displayName: "Subcontractor Quotes", requiredForSubmit: false },
-        { code: "07", name: "Final_Bid_Submission", displayName: "Final Bid Submission", requiredForSubmit: true },
-        { code: "08", name: "Bid_Communications", displayName: "Bid Communications", requiredForSubmit: false },
-      ];
-      
-      const projectSections = [
-        { code: "01", name: "Converted_Bid_Documents", displayName: "Converted Bid Documents" },
-        { code: "02", name: "Contract_and_Agreements", displayName: "Contract & Agreements" },
-        { code: "03", name: "Change_Orders", displayName: "Change Orders" },
-        { code: "04", name: "Purchase_Orders", displayName: "Purchase Orders" },
-        { code: "05", name: "Schedules", displayName: "Schedules" },
-        { code: "06", name: "Invoices_and_Payments", displayName: "Invoices & Payments" },
-        { code: "07", name: "Photos_and_Field_Reports", displayName: "Photos & Field Reports" },
-        { code: "08", name: "Compliance_and_Safety", displayName: "Compliance & Safety" },
-        { code: "09", name: "Emails_and_Communication", displayName: "Emails & Communication" },
-        { code: "10", name: "Closeout_and_Warranty", displayName: "Closeout & Warranty" },
-      ];
-      
-      for (let i = 0; i < bidSections.length; i++) {
-        const s = bidSections[i];
-        await storage.createFolderSection({
-          tenantId: DEFAULT_TENANT_ID,
-          jacketType: "bid",
-          sortOrder: i + 1,
-          code: s.code,
-          name: s.name,
-          displayName: s.displayName,
-          requiredForSubmit: s.requiredForSubmit,
-        });
-      }
-      
-      for (let i = 0; i < projectSections.length; i++) {
-        const s = projectSections[i];
-        await storage.createFolderSection({
-          tenantId: DEFAULT_TENANT_ID,
-          jacketType: "project",
-          sortOrder: i + 1,
-          code: s.code,
-          name: s.name,
-          displayName: s.displayName,
-        });
-      }
-      
-      res.json({ success: true, message: "Folder sections seeded" });
-    } catch (error) {
+      const { seedFolderSectionsFromConstants } = await import("./services/taxonomy.service");
+      const result = await seedFolderSectionsFromConstants(DEFAULT_TENANT_ID);
+      res.json({ success: true, ...result });
+    } catch (error: any) {
       console.error("Error seeding folder sections:", error);
-      res.status(500).json({ error: "Failed to seed folder sections" });
+      res.status(500).json({ error: "Failed to seed folder sections", message: error.message });
+    }
+  });
+
+  // Drift report — does the DB folder_sections table match the constants?
+  app.get("/api/seed/folder-sections/diff", async (req: Request, res: Response) => {
+    try {
+      const { diffFolderSectionsAgainstConstants } = await import("./services/taxonomy.service");
+      const diff = await diffFolderSectionsAgainstConstants(DEFAULT_TENANT_ID);
+      res.json({
+        ok: diff.missing.length === 0 && diff.extraInDb.length === 0 && diff.nameMismatches.length === 0,
+        ...diff,
+      });
+    } catch (error: any) {
+      console.error("Error diffing folder sections:", error);
+      res.status(500).json({ error: "Failed to diff folder sections", message: error.message });
     }
   });
 
@@ -17735,28 +17501,17 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
 
   app.post("/api/notifications/mark-all-read", async (req: Request, res: Response) => {
     try {
-      const tenantId = p(req.headers["x-tenant-id"] as string) || DEFAULT_TENANT_ID;
-      const { userId } = req.body ?? {};
-
-      // When the bell omits userId (system-wide notifications like COI
-      // alerts that have userId=null), mark every unread row in the
-      // tenant. When userId is provided, scope to that user. We never
-      // pass `eq(col, undefined)` to Drizzle because it produces
-      // unpredictable SQL across drivers.
-      const conditions = [
-        eq(notifications.tenantId, tenantId),
-        eq(notifications.read, false),
-      ];
-      if (typeof userId === "string" && userId.length > 0) {
-        conditions.push(eq(notifications.userId, userId));
-      }
-
-      const updated = await db.update(notifications)
+      const { userId } = req.body;
+      
+      await db.update(notifications)
         .set({ read: true })
-        .where(and(...conditions))
-        .returning({ id: notifications.id });
-
-      res.json({ success: true, updated: updated.length });
+        .where(and(
+          eq(notifications.tenantId, DEFAULT_TENANT_ID),
+          eq(notifications.userId, userId),
+          eq(notifications.read, false)
+        ));
+      
+      res.json({ success: true });
     } catch (error) {
       console.error("Error marking all notifications read:", error);
       res.status(500).json({ error: "Failed to mark all notifications read" });
@@ -18142,22 +17897,6 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
         entityId: sheet.id,
         afterJson: sheet as unknown as Record<string, unknown>,
       });
-
-      // Fire-and-forget: ask Herbie to extract structured fields from the sheet.
-      void (async () => {
-        try {
-          const { executeHerbieTool } = await import("./services/herbie-tools");
-          await executeHerbieTool(
-            {
-              tool: "extract_fields",
-              args: { documentId: sheet.id, extractionType: "drawing_sheet" },
-            },
-            { tenantId: DEFAULT_TENANT_ID, userId: "herbie" } as any,
-          );
-        } catch (e) {
-          console.warn("[herbie auto-hook drawing_sheet]", e instanceof Error ? e.message : e);
-        }
-      })();
       
       res.status(201).json(sheet);
     } catch (error) {
@@ -18240,69 +17979,42 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
           eq(drawingSheets.tenantId, DEFAULT_TENANT_ID),
           eq(drawingSheets.id, p(req.params.id))
         ));
-
+      
       if (!sheet) {
         return res.status(404).json({ error: "Drawing sheet not found" });
       }
-
+      
       if (!sheet.storageKey) {
         return res.status(404).json({ error: "No file attached to this sheet" });
       }
-
+      
+      // Stream the file using ObjectStorageService
       const { ObjectStorageService, objectStorageClient } = await import("./replit_integrations/object_storage");
       const storageService = new ObjectStorageService();
-
-      // Resolve the storage key against three supported conventions:
-      //   1) "/objects/<entityId>"   – ObjectUploader normalized form
-      //   2) "/<bucket>/<objectName>" – raw signed-URL pathname (current
-      //      shape returned by /api/uploads/request-url)
-      //   3) "<relativePath>"        – legacy/seed paths; resolve against
-      //      PUBLIC_OBJECT_SEARCH_PATHS
+      
+      // Parse the storage key to get bucket and object name
       const storageKey = sheet.storageKey;
-      let file: import("@google-cloud/storage").File | null = null;
-
-      try {
-        if (storageKey.startsWith("/objects/")) {
-          file = await storageService.getObjectEntityFile(storageKey);
-        } else if (storageKey.startsWith("/")) {
-          const parts = storageKey.slice(1).split("/");
-          if (parts.length >= 2) {
-            const bucketName = parts[0];
-            const objectName = parts.slice(1).join("/");
-            const candidate = objectStorageClient.bucket(bucketName).file(objectName);
-            const [exists] = await candidate.exists();
-            if (exists) file = candidate;
-          }
-        } else {
-          file = await storageService.searchPublicObject(storageKey);
-        }
-      } catch (resolveErr) {
-        console.error(`[drawing-sheets/download] resolve error for key="${storageKey}":`, resolveErr);
-        file = null;
+      const parts = storageKey.startsWith("/") ? storageKey.slice(1).split("/") : storageKey.split("/");
+      const bucketName = parts[0];
+      const objectName = parts.slice(1).join("/");
+      
+      const bucket = objectStorageClient.bucket(bucketName);
+      const file = bucket.file(objectName);
+      
+      const [exists] = await file.exists();
+      if (!exists) {
+        return res.status(404).json({ error: "File not found in storage" });
       }
-
-      if (!file) {
-        return res.status(404).json({
-          error: "No file uploaded for this drawing sheet",
-          sheetId: sheet.id,
-          sheetNumber: sheet.sheetNumber,
-          hint: "Upload a PDF for this sheet via the Blueprint Hub upload action.",
-        });
-      }
-
-      // Inline disposition so opening the URL in a new tab renders the PDF
-      // in the browser viewer instead of forcing a download.
-      const safeFilename = `${sheet.sheetNumber}_${sheet.sheetTitle}.${sheet.fileType}`
-        .replace(/[^\w.\- ]+/g, "_");
-      res.setHeader("Content-Disposition", `inline; filename="${safeFilename}"`);
-      res.setHeader(
-        "Content-Type",
-        sheet.fileType === "pdf" ? "application/pdf" : "application/octet-stream",
-      );
-
+      
+      // Set headers for download
+      const filename = `${sheet.sheetNumber}_${sheet.sheetTitle}.${sheet.fileType}`;
+      res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+      res.setHeader("Content-Type", sheet.fileType === "pdf" ? "application/pdf" : "application/octet-stream");
+      
+      // Stream the file
       const stream = file.createReadStream();
       stream.on("error", (err) => {
-        console.error("[drawing-sheets/download] stream error:", err);
+        console.error("Stream error:", err);
         if (!res.headersSent) {
           res.status(500).json({ error: "Error streaming file" });
         }
@@ -18310,9 +18022,7 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
       stream.pipe(res);
     } catch (error) {
       console.error("Error downloading sheet:", error);
-      if (!res.headersSent) {
-        res.status(500).json({ error: "Failed to download sheet" });
-      }
+      res.status(500).json({ error: "Failed to download sheet" });
     }
   });
 
@@ -18384,319 +18094,21 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
     }
   });
 
-  // Takeoff: bulk-import from one or more blueprints.
-  // Body: { blueprintIds: string[], projectId?: string }
-  // For each blueprint, pulls its measured takeoff_items, maps each item's
-  // free-text `category` to a takeoff_categories row by case-insensitive name,
-  // and inserts into takeoff_quantities. Items with no matching category are
-  // reported as "skipped" so the client can surface what didn't come over.
-  app.post("/api/takeoffs/import-from-blueprints", async (req: Request, res: Response) => {
-    try {
-      const bodySchema = z.object({
-        blueprintIds: z.array(z.string().min(1)).min(1, "At least one blueprint is required"),
-        projectId: z.string().optional(),
-      });
-      const parsed = bodySchema.safeParse(req.body);
-      if (!parsed.success) {
-        return res.status(400).json({ error: "Invalid request body", details: parsed.error.flatten() });
-      }
-      const { blueprintIds, projectId } = parsed.data;
-
-      // Pull category list once and key by lowercased name for case-insensitive match.
-      const cats = await db.select().from(takeoffCategories)
-        .where(eq(takeoffCategories.tenantId, DEFAULT_TENANT_ID));
-      const catByName = new Map(cats.map(c => [c.name.toLowerCase(), c]));
-
-      type PerBp = { blueprintId: string; blueprintTitle: string; created: number; skipped: string[]; failed: Array<{ name: string; error: string }> };
-      const perBlueprint: PerBp[] = [];
-      let totalCreated = 0;
-      const totalSkipped: string[] = [];
-      const totalFailed: Array<{ name: string; error: string }> = [];
-
-      for (const bpId of blueprintIds) {
-        const bp = await storage.getBlueprint(bpId);
-        // Tenant boundary: refuse to import items from a blueprint that
-        // doesn't belong to the caller's tenant. Treated identically to
-        // "not found" so we never leak blueprint existence across tenants.
-        if (!bp || bp.tenantId !== DEFAULT_TENANT_ID) {
-          perBlueprint.push({ blueprintId: bpId, blueprintTitle: "(missing)", created: 0, skipped: [], failed: [{ name: "(blueprint)", error: "Blueprint not found" }] });
-          totalFailed.push({ name: bpId, error: "Blueprint not found" });
-          continue;
-        }
-        const items = await storage.getTakeoffItems(bpId);
-        const entry: PerBp = { blueprintId: bpId, blueprintTitle: bp.title, created: 0, skipped: [], failed: [] };
-
-        for (const it of items) {
-          const cat = catByName.get((it.category || "").toLowerCase());
-          if (!cat) {
-            entry.skipped.push(`${it.name} (category: ${it.category})`);
-            totalSkipped.push(`${it.name} (category: ${it.category})`);
-            continue;
-          }
-          try {
-            const qty = String(it.quantity ?? "0");
-            const uc = String(it.unitCost ?? "0");
-            const ext = computeExtendedCost(qty, uc);
-            await db.insert(takeoffQuantities).values({
-              tenantId: DEFAULT_TENANT_ID,
-              projectId: projectId || it.bidProjectId || null,
-              categoryId: cat.id,
-              room: `${bp.title} — ${it.name}`,
-              quantity: qty,
-              unit: it.unit || "EA",
-              unitCost: uc,
-              extendedCost: ext,
-              notes: it.notes || null,
-            } as any);
-            entry.created += 1;
-            totalCreated += 1;
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            entry.failed.push({ name: it.name, error: msg });
-            totalFailed.push({ name: it.name, error: msg });
-          }
-        }
-        perBlueprint.push(entry);
-      }
-
-      res.json({
-        created: totalCreated,
-        skipped: totalSkipped,
-        failed: totalFailed,
-        perBlueprint,
-      });
-    } catch (error) {
-      console.error("Error importing takeoffs from blueprints:", error);
-      res.status(500).json({ error: "Failed to import takeoffs from blueprints" });
-    }
-  });
-
-  // Takeoff PDF Export
-  // GET /api/takeoffs/export/pdf[?projectId=...] — streams a Black Hawk-branded
-  // PDF report with header, summary-by-category, and full line-item table.
-  app.get("/api/takeoffs/export/pdf", async (req: Request, res: Response) => {
-    try {
-      const PDFDocument = (await import("pdfkit")).default;
-      const projectId = typeof req.query.projectId === "string" ? req.query.projectId : undefined;
-
-      // Pull data: takeoff items (optionally filtered by project), categories,
-      // and the project name for the header.
-      let qtyQuery = db.select().from(takeoffQuantities)
-        .where(
-          projectId
-            ? and(eq(takeoffQuantities.tenantId, DEFAULT_TENANT_ID), eq(takeoffQuantities.projectId, projectId))
-            : eq(takeoffQuantities.tenantId, DEFAULT_TENANT_ID)
-        );
-      const [items, categories, projectRow, allProjects] = await Promise.all([
-        qtyQuery.orderBy(asc(takeoffQuantities.categoryId), desc(takeoffQuantities.createdAt)),
-        db.select().from(takeoffCategories).where(eq(takeoffCategories.tenantId, DEFAULT_TENANT_ID)),
-        projectId
-          ? db.select().from(projects).where(eq(projects.id, projectId)).limit(1).then(r => r[0])
-          : Promise.resolve(undefined as any),
-        // Pull all projects so we can show per-row project names in the PDF
-        // when the export covers multiple projects (no projectId filter).
-        db.select({ id: projects.id, name: projects.name }).from(projects),
-      ]);
-
-      const catById = new Map(categories.map(c => [c.id, c]));
-      const projectNameById = new Map<string, string>(allProjects.map(p => [p.id, p.name]));
-      const projectName = projectRow?.name || (projectId ? `Project ${projectId.slice(0, 8)}` : "All Projects");
-      const generatedAt = new Date();
-      const fmtDate = generatedAt.toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
-      const fmtMoney = (n: number) => `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-      const fmtNum = (n: number) => n.toLocaleString(undefined, { maximumFractionDigits: 2 });
-
-      // Build per-category aggregates for the summary table.
-      type Agg = { name: string; trade: string; itemCount: number; totalQty: number; unit: string; totalCost: number };
-      const aggByCat = new Map<string, Agg>();
-      let grandQty = 0;
-      let grandCost = 0;
-      for (const it of items) {
-        const cat = it.categoryId ? catById.get(it.categoryId) : undefined;
-        const key = it.categoryId || "__uncat__";
-        const qty = Number(it.quantity ?? 0) || 0;
-        const ext = it.extendedCost != null ? Number(it.extendedCost) : qty * (Number(it.unitCost ?? 0) || 0);
-        const agg = aggByCat.get(key) ?? { name: cat?.name || "Uncategorized", trade: cat?.trade || "—", itemCount: 0, totalQty: 0, unit: it.unit || "", totalCost: 0 };
-        agg.itemCount += 1;
-        agg.totalQty += qty;
-        agg.totalCost += isFinite(ext) ? ext : 0;
-        aggByCat.set(key, agg);
-        grandQty += qty;
-        grandCost += isFinite(ext) ? ext : 0;
-      }
-      const summaryRows = Array.from(aggByCat.values()).sort((a, b) => a.name.localeCompare(b.name));
-
-      // Stream PDF to response.
-      const filename = `takeoff-report-${generatedAt.toISOString().slice(0, 10)}.pdf`;
-      res.setHeader("Content-Type", "application/pdf");
-      res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
-
-      const doc = new PDFDocument({ size: "LETTER", layout: "landscape", margin: 36 });
-      doc.on("error", (err: Error) => {
-        console.error("PDFKit error:", err);
-        try { res.end(); } catch {}
-      });
-      doc.pipe(res);
-
-      // ── Header ───────────────────────────────────────────────────────────
-      doc.fontSize(18).font("Helvetica-Bold").fillColor("#000").text("BLACK HAWK CONSTRUCTION LLC", { align: "left" });
-      doc.fontSize(11).font("Helvetica").fillColor("#444").text("Takeoff Report", { align: "left" });
-      doc.moveDown(0.4);
-      doc.fontSize(10).fillColor("#000")
-        .text(`Project: ${projectName}`, { continued: true })
-        .text(`     Generated: ${fmtDate}`, { align: "left" });
-      doc.moveTo(doc.page.margins.left, doc.y + 6).lineTo(doc.page.width - doc.page.margins.right, doc.y + 6).strokeColor("#000").lineWidth(0.8).stroke();
-      doc.moveDown(0.8);
-
-      // Helper: draw a single table (header row + body rows) with paging.
-      // Columns are pre-measured (x positions and widths) by the caller.
-      const drawTable = (
-        title: string,
-        cols: Array<{ label: string; key: string; w: number; align?: "left" | "right" }>,
-        rows: Array<Record<string, string>>,
-      ) => {
-        const left = doc.page.margins.left;
-        const right = doc.page.width - doc.page.margins.right;
-        const tableWidth = right - left;
-        // Scale column widths so they sum to tableWidth.
-        const declared = cols.reduce((s, c) => s + c.w, 0);
-        const scale = tableWidth / declared;
-        const xs: number[] = [];
-        let cx = left;
-        for (const c of cols) { xs.push(cx); cx += c.w * scale; }
-        const widths = cols.map(c => c.w * scale);
-
-        const rowH = 16;
-        const headerH = 18;
-
-        const newPageIfNeeded = (need: number) => {
-          if (doc.y + need > doc.page.height - doc.page.margins.bottom) {
-            doc.addPage();
-          }
-        };
-
-        // Title
-        doc.fontSize(12).font("Helvetica-Bold").fillColor("#000").text(title, left, doc.y);
-        doc.moveDown(0.3);
-
-        // Header row
-        newPageIfNeeded(headerH + rowH);
-        const drawHeader = () => {
-          const y = doc.y;
-          doc.rect(left, y, tableWidth, headerH).fillColor("#1f2937").fill();
-          doc.fillColor("#fff").font("Helvetica-Bold").fontSize(9);
-          for (let i = 0; i < cols.length; i++) {
-            doc.text(cols[i].label, xs[i] + 4, y + 5, { width: widths[i] - 8, align: cols[i].align || "left", lineBreak: false });
-          }
-          doc.fillColor("#000").font("Helvetica").fontSize(9);
-          doc.y = y + headerH;
-        };
-        drawHeader();
-
-        let zebra = false;
-        for (const row of rows) {
-          newPageIfNeeded(rowH);
-          // If we just paged, redraw the header on the new page.
-          if (doc.y === doc.page.margins.top) drawHeader();
-          const y = doc.y;
-          if (zebra) { doc.rect(left, y, tableWidth, rowH).fillColor("#f3f4f6").fill().fillColor("#000"); }
-          zebra = !zebra;
-          for (let i = 0; i < cols.length; i++) {
-            doc.text(row[cols[i].key] ?? "", xs[i] + 4, y + 4, { width: widths[i] - 8, align: cols[i].align || "left", lineBreak: false, ellipsis: true });
-          }
-          doc.y = y + rowH;
-        }
-        // Bottom border
-        doc.moveTo(left, doc.y).lineTo(right, doc.y).strokeColor("#999").lineWidth(0.5).stroke();
-        doc.moveDown(0.6);
-      };
-
-      // ── Summary by Category ──────────────────────────────────────────────
-      drawTable(
-        "Summary by Category",
-        [
-          { label: "Category", key: "name", w: 28 },
-          { label: "Trade", key: "trade", w: 20 },
-          { label: "Items", key: "items", w: 12, align: "right" },
-          { label: "Total Qty", key: "qty", w: 16, align: "right" },
-          { label: "Total Cost", key: "cost", w: 18, align: "right" },
-          { label: "% of Project", key: "pct", w: 14, align: "right" },
-        ],
-        [
-          ...summaryRows.map(r => ({
-            name: r.name,
-            trade: r.trade,
-            items: String(r.itemCount),
-            qty: `${fmtNum(r.totalQty)} ${r.unit}`,
-            cost: fmtMoney(r.totalCost),
-            pct: grandCost > 0 ? `${((r.totalCost / grandCost) * 100).toFixed(1)}%` : "—",
-          })),
-          {
-            name: "GRAND TOTAL",
-            trade: "",
-            items: String(items.length),
-            qty: fmtNum(grandQty),
-            cost: fmtMoney(grandCost),
-            pct: "100%",
-          },
-        ],
-      );
-
-      // ── Line Items ───────────────────────────────────────────────────────
-      // Column order matches the CSV export: Item Name, Category, Trade, Qty,
-      // Unit, Unit Cost, Extended, Notes, Project.
-      drawTable(
-        "Line Items",
-        [
-          { label: "Item Name", key: "name", w: 24 },
-          { label: "Category", key: "category", w: 16 },
-          { label: "Trade", key: "trade", w: 12 },
-          { label: "Qty", key: "qty", w: 9, align: "right" },
-          { label: "Unit", key: "unit", w: 7 },
-          { label: "Unit Cost", key: "uc", w: 11, align: "right" },
-          { label: "Extended", key: "ext", w: 13, align: "right" },
-          { label: "Notes", key: "notes", w: 20 },
-          { label: "Project", key: "project", w: 16 },
-        ],
-        items.map(it => {
-          const cat = it.categoryId ? catById.get(it.categoryId) : undefined;
-          const qty = Number(it.quantity ?? 0) || 0;
-          const uc = Number(it.unitCost ?? 0) || 0;
-          const ext = it.extendedCost != null ? Number(it.extendedCost) : qty * uc;
-          return {
-            name: it.room || "—",
-            category: cat?.name || "Uncategorized",
-            trade: cat?.trade || "—",
-            qty: fmtNum(qty),
-            unit: it.unit || "",
-            uc: uc ? fmtMoney(uc) : "—",
-            ext: isFinite(ext) ? fmtMoney(ext) : "—",
-            notes: it.notes || "",
-            project: it.projectId ? (projectNameById.get(it.projectId) || "") : "",
-          };
-        }),
-      );
-
-      // Footer note
-      doc.moveDown(0.5);
-      doc.fontSize(8).fillColor("#666").text(`Generated by BLACKHAWK SENTINEL · ${generatedAt.toISOString()}`, { align: "right" });
-
-      doc.end();
-    } catch (error) {
-      console.error("Error generating takeoff PDF:", error);
-      if (!res.headersSent) res.status(500).json({ error: "Failed to generate PDF" });
-      else try { res.end(); } catch {}
-    }
-  });
-
   // Takeoff Quantities
   app.get("/api/takeoff-quantities", async (req: Request, res: Response) => {
     try {
-      const { projectId, categoryId, sheetId } = req.query;
-      let query = db.select().from(takeoffQuantities)
-        .where(eq(takeoffQuantities.tenantId, DEFAULT_TENANT_ID));
-      
-      const quantities = await query.orderBy(desc(takeoffQuantities.createdAt));
+      const projectId = pOpt(req.query.projectId as string | undefined);
+      const categoryId = pOpt(req.query.categoryId as string | undefined);
+      const sheetId = pOpt(req.query.sheetId as string | undefined);
+
+      const conditions = [eq(takeoffQuantities.tenantId, DEFAULT_TENANT_ID)];
+      if (projectId) conditions.push(eq(takeoffQuantities.projectId, projectId));
+      if (categoryId) conditions.push(eq(takeoffQuantities.categoryId, categoryId));
+      if (sheetId) conditions.push(eq(takeoffQuantities.sheetId, sheetId));
+
+      const quantities = await db.select().from(takeoffQuantities)
+        .where(and(...conditions))
+        .orderBy(desc(takeoffQuantities.createdAt));
       res.json(quantities);
     } catch (error) {
       console.error("Error fetching takeoff quantities:", error);
@@ -18714,24 +18126,13 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
     floor: z.string().optional(),
     phase: z.string().optional(),
     zone: z.string().optional(),
-    unitCost: z.string().or(z.number()).optional().transform(v => v == null || v === "" ? undefined : String(v)),
+    unitCost: z.string().optional(),
     laborRate: z.string().optional(),
     laborHours: z.string().optional(),
+    wasteFactor: z.string().optional(),
     notes: z.string().optional(),
+    triggersProcurement: z.boolean().optional(),
   });
-
-  // Server-authoritative extended-cost calculator. Uses qty * unit_cost so the
-  // server is the single source of truth — the client may pre-compute for UX
-  // but the value persisted to the DB is always recomputed here.
-  const computeExtendedCost = (
-    quantity: string | number | null | undefined,
-    unitCost: string | number | null | undefined,
-  ): string | null => {
-    const q = quantity == null || quantity === "" ? NaN : Number(quantity);
-    const u = unitCost == null || unitCost === "" ? NaN : Number(unitCost);
-    if (!isFinite(q) || !isFinite(u)) return null;
-    return (q * u).toFixed(2);
-  };
 
   app.post("/api/takeoff-quantities", async (req: Request, res: Response) => {
     try {
@@ -18740,14 +18141,20 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
         return res.status(400).json({ error: "Validation failed", details: fromError(validated.error).toString() });
       }
 
-      const extendedCost = computeExtendedCost(validated.data.quantity, validated.data.unitCost);
+      const extendedCost = computeTakeoffExtendedCost({
+        quantity: validated.data.quantity,
+        unitCost: validated.data.unitCost,
+        laborRate: validated.data.laborRate,
+        laborHours: validated.data.laborHours,
+        wasteFactor: validated.data.wasteFactor,
+      });
 
       const [quantity] = await db.insert(takeoffQuantities).values({
         tenantId: DEFAULT_TENANT_ID,
         ...validated.data,
-        extendedCost: extendedCost ?? undefined,
+        extendedCost,
       }).returning();
-      
+
       await auditService.logEvent({
         tenantId: DEFAULT_TENANT_ID,
         eventType: "takeoff_quantity.created",
@@ -18757,30 +18164,6 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
         afterJson: quantity as unknown as Record<string, unknown>,
       });
 
-      // Fire-and-forget: if no unit cost, have Herbie flag it for review.
-      const unitCostNum = quantity.unitCost == null ? 0 : Number(quantity.unitCost);
-      if (!unitCostNum || unitCostNum <= 0) {
-        void (async () => {
-          try {
-            const { executeHerbieTool } = await import("./services/herbie-tools");
-            await executeHerbieTool(
-              {
-                tool: "flag_for_review",
-                args: {
-                  entityType: "takeoff_quantity",
-                  entityId: quantity.id,
-                  reason: `Takeoff item created without a unit cost (qty ${quantity.quantity} ${quantity.unit ?? ""}). PM should set pricing before bid.`,
-                  priority: "normal",
-                },
-              },
-              { tenantId: DEFAULT_TENANT_ID, userId: "herbie" } as any,
-            );
-          } catch (e) {
-            console.warn("[herbie auto-hook takeoff_quantity]", e instanceof Error ? e.message : e);
-          }
-        })();
-      }
-      
       res.status(201).json(quantity);
     } catch (error) {
       console.error("Error creating takeoff quantity:", error);
@@ -18790,44 +18173,81 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
 
   app.patch("/api/takeoff-quantities/:id", async (req: Request, res: Response) => {
     try {
-      const validated = takeoffQuantityInputSchema.partial().safeParse(req.body);
-      if (!validated.success) {
-        return res.status(400).json({ error: "Validation failed", details: fromError(validated.error).toString() });
-      }
+      const id = p(req.params.id);
+      const updates: Record<string, unknown> = { ...req.body, updatedAt: new Date() };
+      delete (updates as any).id;
+      delete (updates as any).tenantId;
 
-      // Recompute extended cost server-side using the resulting (post-update)
-      // quantity & unit_cost. Read the existing row first so a partial update
-      // (e.g. just unit_cost) still produces a correct extended_cost.
-      const [existing] = await db
-        .select()
-        .from(takeoffQuantities)
-        .where(and(
+      // Recompute extendedCost when any cost-input field changes.
+      const costFields = ["quantity", "unitCost", "laborRate", "laborHours", "wasteFactor"];
+      const costFieldChanged = costFields.some((k) => Object.prototype.hasOwnProperty.call(req.body, k));
+      if (costFieldChanged) {
+        const [current] = await db.select().from(takeoffQuantities).where(and(
           eq(takeoffQuantities.tenantId, DEFAULT_TENANT_ID),
-          eq(takeoffQuantities.id, p(req.params.id)),
+          eq(takeoffQuantities.id, id),
         ));
-      if (!existing) {
-        return res.status(404).json({ error: "Takeoff quantity not found" });
+        if (!current) return res.status(404).json({ error: "Takeoff quantity not found" });
+        updates.extendedCost = computeTakeoffExtendedCost({
+          quantity: (req.body.quantity ?? current.quantity) as string,
+          unitCost: (req.body.unitCost ?? current.unitCost) as string | null | undefined,
+          laborRate: (req.body.laborRate ?? current.laborRate) as string | null | undefined,
+          laborHours: (req.body.laborHours ?? current.laborHours) as string | null | undefined,
+          wasteFactor: (req.body.wasteFactor ?? current.wasteFactor) as string | null | undefined,
+        });
       }
-
-      const nextQuantity = validated.data.quantity ?? existing.quantity;
-      const nextUnitCost = validated.data.unitCost ?? existing.unitCost;
-      const extendedCost = computeExtendedCost(nextQuantity, nextUnitCost);
 
       const [quantity] = await db.update(takeoffQuantities)
-        .set({
-          ...validated.data,
-          extendedCost: extendedCost ?? undefined,
-          updatedAt: new Date(),
-        })
+        .set(updates)
         .where(and(
           eq(takeoffQuantities.tenantId, DEFAULT_TENANT_ID),
-          eq(takeoffQuantities.id, p(req.params.id))
+          eq(takeoffQuantities.id, id),
         ))
         .returning();
+      if (!quantity) return res.status(404).json({ error: "Takeoff quantity not found" });
       res.json(quantity);
     } catch (error) {
       console.error("Error updating takeoff quantity:", error);
       res.status(500).json({ error: "Failed to update takeoff quantity" });
+    }
+  });
+
+  // AI takeoff assistant: suggest line items from a scope blurb.
+  app.post("/api/takeoff/suggest", async (req: Request, res: Response) => {
+    try {
+      const { projectTitle, scopeText, existingItemNames, maxItems } = req.body ?? {};
+      if (typeof projectTitle !== "string" || typeof scopeText !== "string") {
+        return res.status(400).json({ error: "projectTitle (string) and scopeText (string) are required" });
+      }
+      const { suggestTakeoffItems } = await import("./services/takeoff-assistant.service");
+      const result = await suggestTakeoffItems({
+        projectTitle,
+        scopeText,
+        existingItemNames: Array.isArray(existingItemNames) ? existingItemNames.filter((n) => typeof n === "string") : undefined,
+        maxItems: typeof maxItems === "number" && maxItems > 0 ? Math.min(maxItems, 30) : undefined,
+      });
+      res.json(result);
+    } catch (error: any) {
+      console.error("[Takeoff] Suggest error:", error);
+      res.status(500).json({ error: "Failed to suggest takeoff items", message: error.message });
+    }
+  });
+
+  // AI takeoff assistant: classify a single item into a trade.
+  app.post("/api/takeoff/categorize", async (req: Request, res: Response) => {
+    try {
+      const { name, description } = req.body ?? {};
+      if (typeof name !== "string" || name.trim().length === 0) {
+        return res.status(400).json({ error: "name (string) is required" });
+      }
+      const { categorizeTakeoffItem } = await import("./services/takeoff-assistant.service");
+      const result = await categorizeTakeoffItem({
+        name: name.trim(),
+        description: typeof description === "string" ? description : undefined,
+      });
+      res.json(result);
+    } catch (error: any) {
+      console.error("[Takeoff] Categorize error:", error);
+      res.status(500).json({ error: "Failed to categorize takeoff item", message: error.message });
     }
   });
 
@@ -18895,29 +18315,6 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
         entityId: system.id,
         afterJson: system as unknown as Record<string, unknown>,
       });
-
-      // Fire-and-forget: Herbie records a fact so the system shows up in project memory.
-      if (system.projectId) {
-        void (async () => {
-          try {
-            const { executeHerbieTool } = await import("./services/herbie-tools");
-            await executeHerbieTool(
-              {
-                tool: "record_fact",
-                args: {
-                  projectId: system.projectId,
-                  fact: `Building system added: ${system.systemName} (${system.systemType}). Status: ${system.status ?? "not_started"}.`,
-                  category: "observation",
-                  source: "design-systems UI",
-                },
-              },
-              { tenantId: DEFAULT_TENANT_ID, userId: "herbie" } as any,
-            );
-          } catch (e) {
-            console.warn("[herbie auto-hook building_system]", e instanceof Error ? e.message : e);
-          }
-        })();
-      }
       
       res.status(201).json(system);
     } catch (error) {
@@ -19224,211 +18621,32 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
       let title = "";
       
       switch (type) {
-        case "trade_scope": {
+        case "trade_scope":
           title = "Trade Scope Document";
           const quantities = await db.select().from(takeoffQuantities)
             .where(eq(takeoffQuantities.tenantId, DEFAULT_TENANT_ID));
           content = { quantities, generatedAt: new Date().toISOString() };
           break;
-        }
-        case "material_list": {
+        case "material_list":
           title = "Material List Export";
           const materials = await db.select().from(takeoffQuantities)
             .where(eq(takeoffQuantities.tenantId, DEFAULT_TENANT_ID));
           content = { materials, generatedAt: new Date().toISOString() };
           break;
-        }
-        case "cable_schedule": {
+        case "cable_schedule":
           title = "Cable Schedule Export";
-          const cablesRaw = await db.select().from(cableSchedules)
+          const cables = await db.select().from(cableSchedules)
             .where(eq(cableSchedules.tenantId, DEFAULT_TENANT_ID));
-          if (cablesRaw.length === 0) {
-            const lfItems = await db.select().from(takeoffQuantities)
-              .where(and(
-                eq(takeoffQuantities.tenantId, DEFAULT_TENANT_ID),
-                eq(takeoffQuantities.unit, 'LF'),
-              ));
-            content = {
-              cables: lfItems,
-              source: 'takeoff_quantities_lf',
-              note: 'No cable entries found, showing LF takeoff items as cable runs',
-              generatedAt: new Date().toISOString(),
-            };
-          } else {
-            content = { cables: cablesRaw, generatedAt: new Date().toISOString() };
-          }
+          content = { cables, generatedAt: new Date().toISOString() };
           break;
-        }
-        case "device_schedule": {
+        case "device_schedule":
           title = "Device Schedule Export";
-          // Auto-seed devices for any building system that has none
-          const systems = await db.select().from(buildingSystems)
-            .where(eq(buildingSystems.tenantId, DEFAULT_TENANT_ID));
-          for (const sys of systems) {
-            const existing = await db.select().from(systemDevices)
-              .where(and(eq(systemDevices.tenantId, DEFAULT_TENANT_ID), eq(systemDevices.systemId, sys.id)));
-            if (existing.length === 0) {
-              const presets: Record<string, Array<{ deviceType: string; manufacturer: string; model: string; quantity: number; location: string }>> = {
-                structural: [
-                  { deviceType: "anchor_bolt", manufacturer: "Hilti", model: "HSL3-G", quantity: 240, location: "Foundation" },
-                  { deviceType: "shear_connector", manufacturer: "Nelson", model: "H4L 3/4x4", quantity: 480, location: "Beams" },
-                ],
-                electrical: [
-                  { deviceType: "panel", manufacturer: "Square D", model: "QO142M200PC", quantity: 2, location: "Electrical Room" },
-                  { deviceType: "outlet", manufacturer: "Leviton", model: "TR8300-W", quantity: 48, location: "All Floors" },
-                  { deviceType: "switch", manufacturer: "Lutron", model: "MA-600", quantity: 24, location: "All Floors" },
-                ],
-                plumbing: [
-                  { deviceType: "fixture_water_closet", manufacturer: "Kohler", model: "K-3531", quantity: 12, location: "Restrooms" },
-                  { deviceType: "fixture_lavatory", manufacturer: "American Standard", model: "0356", quantity: 12, location: "Restrooms" },
-                ],
-                hvac: [
-                  { deviceType: "thermostat", manufacturer: "Honeywell", model: "T7350H1009", quantity: 6, location: "Each Zone" },
-                  { deviceType: "vav_box", manufacturer: "Trane", model: "VCCF", quantity: 8, location: "Ceiling Plenum" },
-                ],
-                drywall: [
-                  { deviceType: "metal_stud", manufacturer: "ClarkDietrich", model: "362S162-30", quantity: 1200, location: "All Walls" },
-                ],
-                doors: [
-                  { deviceType: "door_assembly", manufacturer: "Steelcraft", model: "F18", quantity: 24, location: "All Rooms" },
-                  { deviceType: "lockset", manufacturer: "Schlage", model: "L9080", quantity: 24, location: "All Rooms" },
-                ],
-                windows: [
-                  { deviceType: "window_unit", manufacturer: "Kawneer", model: "TriFab 451T", quantity: 16, location: "Exterior Walls" },
-                ],
-                lighting: [
-                  { deviceType: "fixture_2x4", manufacturer: "Lithonia", model: "BLT-2x4", quantity: 36, location: "Open Office Areas" },
-                  { deviceType: "fixture_downlight", manufacturer: "Lithonia", model: "LDN6", quantity: 24, location: "Corridors + Lobby" },
-                ],
-                lv_data: [
-                  { deviceType: "data_jack", manufacturer: "Panduit", model: "Mini-Com CJ688", quantity: 32, location: "Workstations" },
-                  { deviceType: "patch_panel", manufacturer: "Panduit", model: "DP24688TGY", quantity: 2, location: "IDF Closet" },
-                  { deviceType: "rack", manufacturer: "Chatsworth", model: "55053-703", quantity: 1, location: "MDF Room" },
-                ],
-                security: [
-                  { deviceType: "camera_dome", manufacturer: "Axis", model: "P3245-LVE", quantity: 8, location: "Perimeter + Lobby" },
-                  { deviceType: "card_reader", manufacturer: "HID", model: "iCLASS R10", quantity: 6, location: "Entry Doors" },
-                ],
-                audio: [
-                  { deviceType: "ceiling_speaker", manufacturer: "Bose", model: "DesignMax DM5C", quantity: 24, location: "All Floors" },
-                  { deviceType: "amplifier", manufacturer: "QSC", model: "CXD4.5", quantity: 1, location: "AV Rack" },
-                ],
-                smart_building: [
-                  { deviceType: "bacnet_controller", manufacturer: "Distech", model: "ECB-PTU", quantity: 6, location: "Mechanical Room" },
-                  { deviceType: "occupancy_sensor", manufacturer: "Wattstopper", model: "DT-300", quantity: 18, location: "All Rooms" },
-                ],
-                fire_life_safety: [
-                  { deviceType: "smoke_detector", manufacturer: "Notifier", model: "FSP-851", quantity: 18, location: "All Floors" },
-                  { deviceType: "horn_strobe", manufacturer: "System Sensor", model: "P2RH", quantity: 12, location: "Corridors" },
-                ],
-              };
-              const preset = presets[sys.systemType] || [
-                { deviceType: "device", manufacturer: "Generic", model: "Standard", quantity: 4, location: "TBD" },
-              ];
-              for (const d of preset) {
-                await db.insert(systemDevices).values({
-                  tenantId: DEFAULT_TENANT_ID,
-                  systemId: sys.id,
-                  deviceType: d.deviceType,
-                  manufacturer: d.manufacturer,
-                  model: d.model,
-                  quantity: d.quantity,
-                  location: d.location,
-                });
-              }
-            }
-          }
           const devices = await db.select().from(systemDevices)
             .where(eq(systemDevices.tenantId, DEFAULT_TENANT_ID));
           content = { devices, generatedAt: new Date().toISOString() };
           break;
-        }
-        case "as_built": {
-          title = "As-Built Sets";
-          // Mark all building systems' as-built status as submitted
-          await db.update(buildingSystems)
-            .set({ asBuiltStatus: "submitted" })
-            .where(eq(buildingSystems.tenantId, DEFAULT_TENANT_ID));
-          const systems = await db.select().from(buildingSystems)
-            .where(eq(buildingSystems.tenantId, DEFAULT_TENANT_ID));
-          const sheets = await db.select().from(drawingSheets)
-            .where(eq(drawingSheets.tenantId, DEFAULT_TENANT_ID));
-          content = { systems, sheets, generatedAt: new Date().toISOString() };
-          break;
-        }
-        case "bid_package": {
-          title = "Bid Package Export";
-          const bidOpportunities = await db.select().from(opportunities)
-            .where(eq(opportunities.tenantId, DEFAULT_TENANT_ID))
-            .orderBy(desc(opportunities.createdAt))
-            .limit(10);
-          content = {
-            opportunities: bidOpportunities,
-            totalCount: bidOpportunities.length,
-            generatedAt: new Date().toISOString(),
-          };
-          break;
-        }
-        case "rack_elevation": {
-          title = "Rack Elevation Export";
-          const rackSpecific = await db.select().from(systemDevices)
-            .where(and(
-              eq(systemDevices.tenantId, DEFAULT_TENANT_ID),
-              inArray(systemDevices.deviceType, ['panel', 'switch', 'server', 'ups', 'patch_panel', 'router', 'firewall', 'rack_unit', 'rack']),
-            ))
-            .orderBy(systemDevices.location);
-          const rackDevices = rackSpecific.length > 0
-            ? rackSpecific
-            : await db.select().from(systemDevices)
-                .where(eq(systemDevices.tenantId, DEFAULT_TENANT_ID));
-          content = { rackDevices, generatedAt: new Date().toISOString() };
-          break;
-        }
-        case "owner_handoff": {
-          title = "Owner Handoff Package";
-          const [handoffSheets, handoffSystems] = await Promise.all([
-            db.select().from(drawingSheets).where(eq(drawingSheets.tenantId, DEFAULT_TENANT_ID)),
-            db.select().from(buildingSystems).where(eq(buildingSystems.tenantId, DEFAULT_TENANT_ID)),
-          ]);
-          content = {
-            sheets: handoffSheets,
-            systems: handoffSystems.map((s) => ({
-              id: s.id,
-              systemName: s.systemName,
-              systemType: s.systemType,
-              status: s.status,
-              completionPercent: s.completionPercent,
-              commissioningStatus: s.commissioningStatus,
-              asBuiltStatus: s.asBuiltStatus,
-            })),
-            totalSheets: handoffSheets.length,
-            totalSystems: handoffSystems.length,
-            generatedAt: new Date().toISOString(),
-          };
-          break;
-        }
-        case "smart_building_config": {
-          title = "Smart Building Config Export";
-          const smartRaw = await db.select().from(buildingSystems)
-            .where(and(
-              eq(buildingSystems.tenantId, DEFAULT_TENANT_ID),
-              inArray(buildingSystems.systemType, ['smart_building', 'lv_data', 'low_voltage', 'automation', 'fire_life_safety']),
-            ));
-          const allSmartDevices = await db.select().from(systemDevices)
-            .where(eq(systemDevices.tenantId, DEFAULT_TENANT_ID));
-          const smartSystems = smartRaw.length > 0
-            ? smartRaw
-            : await db.select().from(buildingSystems)
-                .where(eq(buildingSystems.tenantId, DEFAULT_TENANT_ID));
-          content = {
-            smartSystems,
-            devices: allSmartDevices,
-            generatedAt: new Date().toISOString(),
-          };
-          break;
-        }
         default:
-          title = `${type.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase())} Export`;
+          title = `${type.replace("_", " ")} Export`;
           content = { type, generatedAt: new Date().toISOString() };
       }
       
@@ -19445,7 +18663,7 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
       res.status(201).json(deliverable);
     } catch (error) {
       console.error("Error generating deliverable:", error);
-      res.status(500).json({ error: "Failed to generate deliverable", message: (error as Error)?.message });
+      res.status(500).json({ error: "Failed to generate deliverable" });
     }
   });
 
@@ -19476,122 +18694,24 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
   app.get("/api/project-deliverables/download/:type", async (req: Request, res: Response) => {
     try {
       const type = p(req.params.type);
-      let [deliverable] = await db.select().from(projectDeliverables)
-        .where(and(
-          eq(projectDeliverables.tenantId, DEFAULT_TENANT_ID),
-          eq(projectDeliverables.deliverableType, type),
-        ))
+      const [deliverable] = await db.select().from(projectDeliverables)
+        .where(eq(projectDeliverables.deliverableType, type))
         .orderBy(desc(projectDeliverables.createdAt))
         .limit(1);
-
-      // Auto-generate on first download if missing
+      
       if (!deliverable) {
-        let content: Record<string, unknown> = {};
-        let title = `${type.replace(/_/g, " ")} Export`;
-        switch (type) {
-          case "trade_scope":
-          case "material_list": {
-            const rows = await db.select().from(takeoffQuantities)
-              .where(eq(takeoffQuantities.tenantId, DEFAULT_TENANT_ID));
-            content = { [type === "trade_scope" ? "quantities" : "materials"]: rows, generatedAt: new Date().toISOString() };
-            break;
-          }
-          case "cable_schedule": {
-            const cables = await db.select().from(cableSchedules)
-              .where(eq(cableSchedules.tenantId, DEFAULT_TENANT_ID));
-            content = { cables, generatedAt: new Date().toISOString() };
-            break;
-          }
-          case "device_schedule": {
-            const devices = await db.select().from(systemDevices)
-              .where(eq(systemDevices.tenantId, DEFAULT_TENANT_ID));
-            content = { devices, generatedAt: new Date().toISOString() };
-            break;
-          }
-          default:
-            content = { type, generatedAt: new Date().toISOString() };
-        }
-        [deliverable] = await db.insert(projectDeliverables).values({
-          tenantId: DEFAULT_TENANT_ID,
-          deliverableType: type,
-          title,
-          contentJson: content,
-          status: "generated",
-          generatedAt: new Date(),
-        }).returning();
+        return res.status(404).json({ error: "No deliverable found. Generate it first." });
       }
-
-      const today = new Date().toISOString().split("T")[0];
-      const content = (deliverable.contentJson as Record<string, unknown>) || {};
-
-      // Helper: convert row array to CSV
-      const toCSV = (rows: Record<string, unknown>[]): string => {
-        if (!rows || rows.length === 0) return "(no data)\n";
-        const cols = Array.from(rows.reduce((acc, r) => { Object.keys(r).forEach(k => acc.add(k)); return acc; }, new Set<string>()));
-        const esc = (v: unknown) => {
-          const s = v === null || v === undefined ? "" : (typeof v === "object" ? JSON.stringify(v) : String(v));
-          return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-        };
-        const header = cols.join(",");
-        const body = rows.map(r => cols.map(c => esc(r[c])).join(",")).join("\n");
-        return "\ufeff" + header + "\n" + body + "\n";
-      };
-
-      // Tabular types → CSV
-      const csvTypes: Record<string, string> = {
-        material_list: "materials",
-        cable_schedule: "cables",
-        device_schedule: "devices",
-        trade_scope: "quantities",
-      };
-      if (csvTypes[type]) {
-        const rows = (content[csvTypes[type]] as Record<string, unknown>[]) || [];
-        const csv = toCSV(rows);
-        res.setHeader("Content-Type", "text/csv; charset=utf-8");
-        res.setHeader("Content-Disposition", `attachment; filename="${type}_${today}.csv"`);
-        return res.send(csv);
-      }
-
-      // Document types → human-readable .txt
-      const lines: string[] = [];
-      const titleStr = (deliverable.title as string) || type;
-      lines.push("=".repeat(72));
-      lines.push(`  BLACKHAWK SENTINEL — ${titleStr.toUpperCase()}`);
-      lines.push(`  Generated: ${new Date().toISOString()}`);
-      lines.push("=".repeat(72));
-      lines.push("");
-      const stringify = (obj: unknown, indent = 0): void => {
-        const pad = "  ".repeat(indent);
-        if (Array.isArray(obj)) {
-          obj.forEach((item, i) => {
-            lines.push(`${pad}[${i + 1}]`);
-            stringify(item, indent + 1);
-          });
-        } else if (obj && typeof obj === "object") {
-          for (const [k, v] of Object.entries(obj as Record<string, unknown>)) {
-            if (v && typeof v === "object") {
-              lines.push(`${pad}${k}:`);
-              stringify(v, indent + 1);
-            } else {
-              lines.push(`${pad}${k}: ${v ?? ""}`);
-            }
-          }
-        } else {
-          lines.push(`${pad}${obj}`);
-        }
-      };
-      stringify(content);
-      lines.push("");
-      lines.push("=".repeat(72));
-      lines.push("  END OF DOCUMENT");
-      lines.push("=".repeat(72));
-      const txt = lines.join("\n");
-      res.setHeader("Content-Type", "text/plain; charset=utf-8");
-      res.setHeader("Content-Disposition", `attachment; filename="${type}_${today}.txt"`);
-      res.send(txt);
+      
+      const content = deliverable.contentJson || { error: "No content available" };
+      const filename = `${type}_${new Date().toISOString().split("T")[0]}.json`;
+      
+      res.setHeader("Content-Type", "application/json");
+      res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+      res.send(JSON.stringify(content, null, 2));
     } catch (error) {
       console.error("Error downloading deliverable:", error);
-      res.status(500).json({ error: "Failed to download deliverable", message: (error as Error)?.message });
+      res.status(500).json({ error: "Failed to download deliverable" });
     }
   });
 
@@ -19791,14 +18911,7 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
         }
       }
 
-      // Pending approvals — counted from approval_requests so the
-      // Approvals nav badge reflects real "needs your attention" totals.
-      const pendingApprovalConditions: any[] = [
-        eq(schema.approvalRequests.tenantId, DEFAULT_TENANT_ID),
-        eq(schema.approvalRequests.status, "pending"),
-      ];
-
-      const [overdueTaskRows, openRfiRows, pendingSubmittalRows, orphanPoRows, unpaidInvoiceRows, missingArtifactRows, checklistTodoRows, pendingApprovalRows] = await Promise.all([
+      const [overdueTaskRows, openRfiRows, pendingSubmittalRows, orphanPoRows, unpaidInvoiceRows, missingArtifactRows, checklistTodoRows] = await Promise.all([
         db.select({ count: sql<number>`count(*)::int` }).from(schema.projectTasks).where(and(...taskConditions)),
         db.select({ count: sql<number>`count(*)::int` }).from(schema.rfis).where(and(...rfiConditions)),
         db.select({ count: sql<number>`count(*)::int` }).from(schema.submittals).where(and(...submittalConditions)),
@@ -19806,21 +18919,15 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
         db.select({ count: sql<number>`count(*)::int` }).from(schema.invoices).where(and(...invoiceConditions)),
         db.select({ count: sql<number>`count(*)::int` }).from(bidJacketArtifacts).where(and(...missingArtifactConditions)),
         db.select({ count: sql<number>`count(*)::int` }).from(bidJacketChecklistItems).where(and(...checklistTodoConditions)),
-        db.select({ count: sql<number>`count(*)::int` }).from(schema.approvalRequests).where(and(...pendingApprovalConditions)),
       ]);
 
-      const overdueTaskCount = overdueTaskRows[0]?.count ?? 0;
-      const pendingApprovalCount = pendingApprovalRows[0]?.count ?? 0;
-
       res.json({
-        overdueTaskCount,
+        overdueTaskCount: overdueTaskRows[0]?.count ?? 0,
         openRfiCount: openRfiRows[0]?.count ?? 0,
         pendingSubmittalCount: pendingSubmittalRows[0]?.count ?? 0,
         orphanPurchaseOrderCount: orphanPoRows[0]?.count ?? 0,
         unpaidInvoiceCount: unpaidInvoiceRows[0]?.count ?? 0,
-        // Approvals badge = pending approval requests + overdue items needing attention.
-        approvalsNeededCount: pendingApprovalCount + overdueTaskCount,
-        pendingApprovalCount,
+        approvalsNeededCount: 0,
         missingArtifactsCount: missingArtifactRows[0]?.count ?? 0,
         checklistTodoCount: checklistTodoRows[0]?.count ?? 0,
       });
@@ -19833,7 +18940,7 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
   // Financial Data API Routes (Invoices, Purchase Orders, Submittals, Tasks)
   app.get("/api/invoices", async (req: Request, res: Response) => {
     try {
-      const { invoices: invoicesTable, projects: projectsTable, vendors: vendorsTable } = await import("@shared/schema");
+      const { invoices: invoicesTable, projects: projectsTable } = await import("@shared/schema");
       const { eq, desc, and } = await import("drizzle-orm");
       const typeFilter = req.query.type as string | undefined;
       const projectId = req.query.projectId as string | undefined;
@@ -19842,8 +18949,6 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
       const typeMap: Record<string, string> = { ap: "payable", ar: "receivable" };
       const mappedType = typeFilter ? (typeMap[typeFilter] || typeFilter) : undefined;
       if (mappedType) conditions.push(eq(invoicesTable.invoiceType, mappedType));
-      // Join vendors so the Bills tab on /financial/invoices can show
-      // the actual vendor name without scraping notes_json on the client.
       let query = db.select({
         id: invoicesTable.id,
         invoiceNumber: invoicesTable.invoiceNumber,
@@ -19858,10 +18963,8 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
         notesJson: invoicesTable.notesJson,
         createdAt: invoicesTable.createdAt,
         projectName: projectsTable.name,
-        vendorName: vendorsTable.companyName,
       }).from(invoicesTable)
         .leftJoin(projectsTable, eq(invoicesTable.projectId, projectsTable.id))
-        .leftJoin(vendorsTable, eq(invoicesTable.vendorId, vendorsTable.id))
         .where(and(...conditions))
         .orderBy(desc(invoicesTable.createdAt))
         .$dynamic();
@@ -19870,49 +18973,6 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
     } catch (error) {
       console.error("Error fetching invoices:", error);
       res.status(500).json({ error: "Failed to fetch invoices" });
-    }
-  });
-
-  // Lightweight invoice creation used by the "+ New Invoice" dialog on
-  // /financial/invoices. Validates the minimal field set, persists the
-  // row directly, and returns the created invoice so the client can
-  // optimistically refresh the list.
-  const createInvoiceSchema = z.object({
-    invoiceNumber: z.string().min(1, "Invoice number required"),
-    invoiceType: z.enum(["receivable", "payable"]),
-    projectId: z.string().min(1).optional().nullable(),
-    vendorId: z.string().min(1).optional().nullable(),
-    totalAmount: z.string().or(z.number()).optional().transform(v => v == null || v === "" ? "0" : String(v)),
-    dueDate: z.string().optional().nullable(),
-    status: z.string().optional().default("draft"),
-  });
-
-  app.post("/api/invoices", async (req: Request, res: Response) => {
-    try {
-      const validated = createInvoiceSchema.safeParse(req.body);
-      if (!validated.success) {
-        return res.status(400).json({ error: "Validation failed", details: fromError(validated.error).toString() });
-      }
-      const { invoices: invoicesTable } = await import("@shared/schema");
-      const data = validated.data;
-      const [created] = await db.insert(invoicesTable).values({
-        tenantId: DEFAULT_TENANT_ID,
-        invoiceNumber: data.invoiceNumber,
-        invoiceType: data.invoiceType,
-        projectId: data.projectId || null,
-        vendorId: data.vendorId || null,
-        totalAmount: data.totalAmount,
-        dueDate: data.dueDate ? new Date(data.dueDate) : null,
-        status: data.status || "draft",
-      }).returning();
-      res.status(201).json(created);
-    } catch (error: any) {
-      console.error("Error creating invoice:", error);
-      // Friendly handling for unique-constraint violations (duplicate invoice number per tenant).
-      if (error?.code === "23505") {
-        return res.status(409).json({ error: "An invoice with that number already exists." });
-      }
-      res.status(500).json({ error: "Failed to create invoice" });
     }
   });
 
@@ -20670,106 +19730,6 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
     } catch (error) {
       console.error("SAM daily ingest error:", error);
       res.status(500).json({ error: "SAM daily ingest failed" });
-    }
-  });
-
-  // GET /api/proactive-tasks — real action items derived from DB state
-  app.get("/api/proactive-tasks", async (req: Request, res: Response) => {
-    try {
-      const tenantId = p(req.headers["x-tenant-id"] as string) || DEFAULT_TENANT_ID;
-      const now = new Date();
-      const items: any[] = [];
-
-      // 1. Overdue tasks (project_tasks uses `name`, not `title`)
-      const overdueTasks = await db.select({ id: projectTasks.id, title: projectTasks.name, dueDate: projectTasks.dueDate, status: projectTasks.status })
-        .from(projectTasks)
-        .where(and(eq(projectTasks.tenantId, tenantId), sql`${projectTasks.dueDate} < NOW() AND ${projectTasks.status} != 'completed'`))
-        .limit(5);
-      overdueTasks.forEach((t: any) => {
-        items.push({ id: `task-${t.id}`, title: `Overdue task: ${t.title}`, description: `This task was due ${t.dueDate ? new Date(t.dueDate).toLocaleDateString() : "in the past"} and is still open.`, priority: "high", source: "system", actionType: "follow_up", dueAt: t.dueDate, sourceEntityType: "task", createdAt: now.toISOString() });
-      });
-
-      // 2. Open RFIs (rfis uses `subject`, not `title`)
-      const openRfis = await db.select({ id: rfis.id, title: rfis.subject, status: rfis.status, dueDate: rfis.dueDate })
-        .from(rfis)
-        .where(and(eq(rfis.tenantId, tenantId), sql`${rfis.status} = 'open'`))
-        .limit(5);
-      openRfis.forEach((r: any) => {
-        items.push({ id: `rfi-${r.id}`, title: `Open RFI: ${r.title}`, description: `RFI is open and awaiting response.`, priority: r.dueDate && new Date(r.dueDate) < now ? "critical" : "medium", source: "system", actionType: "compliance_review", dueAt: r.dueDate, sourceEntityType: "rfi", createdAt: now.toISOString() });
-      });
-
-      // 3. Bids without readiness scores (need attention).
-      // bid_projects has no `title` column — pull the human-readable
-      // title from the joined opportunity (project convention; matches
-      // /api/bids/readiness-dashboard).
-      const bidsWithoutScores = await db.select({ id: bidProjects.id, title: opportunities.title })
-        .from(bidProjects)
-        .leftJoin(opportunities, eq(bidProjects.opportunityId, opportunities.id))
-        .where(and(
-          eq(bidProjects.tenantId, tenantId),
-          sql`NOT EXISTS (SELECT 1 FROM bid_readiness_scores brs WHERE brs.bid_project_id = ${bidProjects.id})`
-        ))
-        .limit(3);
-      bidsWithoutScores.forEach((b: any) => {
-        items.push({ id: `bid-score-${b.id}`, title: `Score bid: ${b.title ?? b.id.slice(0, 8)}`, description: `This bid project has no readiness score. Run Herbie analysis to score it.`, priority: "medium", source: "ai", actionType: "run_ingestion", sourceEntityType: "bid_project", createdAt: now.toISOString() });
-      });
-
-      // Sort by priority: critical > high > medium > low
-      const ORDER = { critical: 0, high: 1, medium: 2, low: 3 };
-      items.sort((a, b) => (ORDER[a.priority as keyof typeof ORDER] ?? 4) - (ORDER[b.priority as keyof typeof ORDER] ?? 4));
-
-      res.json(items.slice(0, 20));
-    } catch (error: any) {
-      console.error("Error fetching proactive tasks:", error);
-      res.status(500).json({ error: "Failed to fetch proactive tasks", message: error?.message });
-    }
-  });
-
-  // GET /api/bids/readiness-dashboard — list all bid_projects with readiness scores
-  app.get("/api/bids/readiness-dashboard", async (req: Request, res: Response) => {
-    try {
-      const tenantHeader = req.headers["x-tenant-id"];
-      const tenantId = (Array.isArray(tenantHeader) ? tenantHeader[0] : tenantHeader) || DEFAULT_TENANT_ID;
-      const bids = await db
-        .select({
-          id: bidProjects.id,
-          status: bidProjects.status,
-          opportunityId: bidProjects.opportunityId,
-          createdAt: bidProjects.createdAt,
-          opportunityTitle: opportunities.title,
-          dueDate: opportunities.dueAt,
-        })
-        .from(bidProjects)
-        .leftJoin(opportunities, eq(bidProjects.opportunityId, opportunities.id))
-        .where(eq(bidProjects.tenantId, tenantId))
-        .orderBy(desc(bidProjects.createdAt));
-
-      const scores = await db
-        .select()
-        .from(bidReadinessScores)
-        .where(eq(bidReadinessScores.tenantId, tenantId));
-
-      const scoreMap = new Map(scores.map((s: any) => [s.bidProjectId, s]));
-
-      const result = bids.map((bid: any) => {
-        const score = scoreMap.get(bid.id) as any;
-        return {
-          id: bid.id,
-          title: bid.opportunityTitle || `Bid ${String(bid.id).slice(0, 8)}`,
-          status: bid.status,
-          dueDate: bid.dueDate,
-          opportunityId: bid.opportunityId,
-          overallScore: score?.overallScore ?? null,
-          readinessStatus: score?.status ?? null,
-          missingItems: score?.missingItemsJson ?? [],
-          hasScore: !!score,
-        };
-      });
-
-      res.json(result);
-    } catch (error: any) {
-      console.error("Error fetching bid readiness dashboard:", error);
-      res.status(500).json({ error: "Failed to fetch bid readiness dashboard", message: error?.message });
     }
   });
 
@@ -21531,15 +20491,22 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
 
   // ============================================================================
   // HERBIE AUTO-BUILD JACKET / AUTOPOPULATE
+  // Both routes call the same handler. /autopopulate is the canonical path
+  // used by the bid-jacket UI; /auto-build is kept for API compatibility.
   // ============================================================================
+  async function handleJacketAutoBuild(bidProjectId: string, modeRaw: unknown, res: Response) {
+    const mode = (modeRaw === "repair" ? "repair" : "build") as "build" | "repair";
+    const { buildBidJacket } = await import("./services/herbie-jacket-builder.service");
+    const result = await buildBidJacket(bidProjectId, mode);
+    if (!result.success) {
+      return res.status(400).json(result);
+    }
+    res.json(result);
+  }
+
   app.post("/api/jackets/bid/:bidProjectId/auto-build", async (req: Request, res: Response) => {
     try {
-      const { buildBidJacket } = await import("./services/herbie-jacket-builder.service");
-      const result = await buildBidJacket(p(req.params.bidProjectId));
-      if (!result.success) {
-        return res.status(400).json(result);
-      }
-      res.json(result);
+      await handleJacketAutoBuild(p(req.params.bidProjectId), req.query.mode, res);
     } catch (error: any) {
       console.error("[Jackets] Error auto-building jacket:", error);
       res.status(500).json({ error: "Failed to auto-build jacket", message: error.message });
@@ -21548,14 +20515,7 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
 
   app.post("/api/bids/:id/jacket/autopopulate", async (req: Request, res: Response) => {
     try {
-      const bidProjectId = p(req.params.id);
-      const mode = (req.query.mode === "repair" ? "repair" : "build") as "build" | "repair";
-      const { buildBidJacket } = await import("./services/herbie-jacket-builder.service");
-      const result = await buildBidJacket(bidProjectId, mode);
-      if (!result.success) {
-        return res.status(400).json(result);
-      }
-      res.json(result);
+      await handleJacketAutoBuild(p(req.params.id), req.query.mode, res);
     } catch (error: any) {
       console.error("[Autopopulate] Error:", error);
       res.status(500).json({ error: "Failed to autopopulate jacket", message: error.message });
@@ -21571,6 +20531,62 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
       res.json(jobs);
     } catch (error: any) {
       res.status(500).json({ error: "Failed to fetch build jobs", message: error.message });
+    }
+  });
+
+  // Manually trigger the SAM.gov auto-create pipeline. Each cron tick of
+  // samgov_ingest also runs this; the route is for on-demand use.
+  // Body: { minFitScore?, postedWithinDays?, maxPerRun? }.
+  app.post("/api/samgov/auto-create", async (req: Request, res: Response) => {
+    try {
+      const { runAutoCreate, productionAutoCreateDeps } = await import(
+        "./services/samgov-auto-create.service"
+      );
+      const config: Record<string, number> = {};
+      if (typeof req.body?.minFitScore === "number") config.minFitScore = req.body.minFitScore;
+      if (typeof req.body?.postedWithinDays === "number") config.postedWithinDays = req.body.postedWithinDays;
+      if (typeof req.body?.maxPerRun === "number") config.maxPerRun = req.body.maxPerRun;
+      const result = await runAutoCreate(DEFAULT_TENANT_ID, productionAutoCreateDeps, config);
+      res.json(result);
+    } catch (error: any) {
+      console.error("[samgov/auto-create] error:", error);
+      res.status(500).json({ error: "Failed to run auto-create", message: error.message });
+    }
+  });
+
+  // Surface Blackhawk's win profile so the UI can show "we win when…"
+  app.get("/api/samgov/win-profile", async (req: Request, res: Response) => {
+    try {
+      const { productionAutoCreateDeps } = await import("./services/samgov-auto-create.service");
+      const { buildWinProfileFromRows } = await import("./services/win-profile.service");
+      const wins = await productionAutoCreateDeps.loadWinHistory(DEFAULT_TENANT_ID);
+      const profile = buildWinProfileFromRows(wins);
+      res.json({
+        totalWins: profile.totalWins,
+        topNaics: Array.from(profile.naicsFreq.entries()).sort((a, b) => b[1] - a[1]).slice(0, 5),
+        topAgencies: Array.from(profile.agencyFreq.entries()).sort((a, b) => b[1] - a[1]).slice(0, 5),
+        setAsideMix: Array.from(profile.setAsideFreq.entries()).sort((a, b) => b[1] - a[1]),
+        valueRange: profile.valueRange,
+        medianValue: profile.medianValue,
+      });
+    } catch (error: any) {
+      console.error("[samgov/win-profile] error:", error);
+      res.status(500).json({ error: "Failed to load win profile", message: error.message });
+    }
+  });
+
+  // File any unfiled SAM/HigherGov artifacts for a bid into its jacket
+  // folders. Idempotent: artifacts that already have a storageKey are
+  // skipped. Returns { filed, skipped, failed, results[] }.
+  app.post("/api/jackets/bid/:bidProjectId/file-artifacts", async (req: Request, res: Response) => {
+    try {
+      const bidProjectId = p(req.params.bidProjectId);
+      const { fileUnfiledArtifactsForBid, productionFilingDeps } = await import("./services/bid-jacket-filing.service");
+      const summary = await fileUnfiledArtifactsForBid(DEFAULT_TENANT_ID, bidProjectId, productionFilingDeps);
+      res.json(summary);
+    } catch (error: any) {
+      console.error("[Filing] Error filing artifacts:", error);
+      res.status(500).json({ error: "Failed to file artifacts", message: error.message });
     }
   });
 
@@ -21973,7 +20989,7 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
       const [oppCount] = await db.select({ value: count() }).from(opportunities);
       const [bidCount] = await db.select({ value: count() }).from(bidProjects);
 
-      const samApiConfigured = !!process.env.SAM_GOV_API_KEY;
+      const samApiConfigured = !!(process.env.SAM_API_KEY || process.env.SAM_GOV_API_KEY);
 
       res.json({
         lastIngestRun: latestRun
@@ -24556,92 +23572,6 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
   registerSimpleProjectModuleRoutes(projectDailyLogs, "daily-logs");
   registerSimpleProjectModuleRoutes(projectTimesheets, "timesheets");
 
-  // ── COI Tracker: Project-scoped routes (Roadmap Feature 3) ─────
-  // These are aliases over server/services/coi.service.ts. The /api/coi/*
-  // surface in routes/coi.routes.ts handles tenant-wide and vendor-scoped
-  // queries; these routes give the project workspace a clean
-  // /api/projects/:projectId/coi shape.
-  app.get("/api/projects/:projectId/coi", async (req: Request, res: Response) => {
-    try {
-      const projectId = p(req.params.projectId);
-      const { listForProject, partitionByTier, expiryTier, tierSeverity } =
-        await import("./services/coi.service");
-      const all = await listForProject(DEFAULT_TENANT_ID, projectId);
-      // Per Feature 3 spec: GET returns non-expired only.
-      const rows = all.filter((r) => r.status !== "expired");
-      const rollup = partitionByTier(rows);
-      res.json({
-        rows: rows.map((r) => {
-          const tier = expiryTier(r);
-          return { ...r, tier, severity: tierSeverity(tier) };
-        }),
-        rollup: {
-          total: rows.length,
-          expired: rollup.expired.length,
-          critical_1d: rollup.critical_1d.length,
-          critical_7d: rollup.critical_7d.length,
-          warning_14d: rollup.warning_14d.length,
-          warning_30d: rollup.warning_30d.length,
-          ok: rollup.ok.length,
-        },
-      });
-    } catch (error: any) {
-      console.error("GET /api/projects/:projectId/coi error:", error);
-      res.status(500).json({ error: error?.message ?? "Failed to list project COIs" });
-    }
-  });
-
-  app.post("/api/projects/:projectId/coi", async (req: Request, res: Response) => {
-    try {
-      const projectId = p(req.params.projectId);
-      const { upsertCOI } = await import("./services/coi.service");
-      const body = req.body ?? {};
-      if (!body.policyType || typeof body.policyType !== "string") {
-        return res.status(400).json({ error: "policyType required" });
-      }
-      if (!body.expiryDate) {
-        return res.status(400).json({ error: "expiryDate required" });
-      }
-      const expiryDate = new Date(body.expiryDate);
-      const { coiId } = await upsertCOI(DEFAULT_TENANT_ID, {
-        projectId,
-        vendorId: body.vendorId ?? null,
-        policyType: body.policyType,
-        carrier: body.carrier ?? null,
-        policyNumber: body.policyNumber ?? null,
-        limitsJson: body.limitsJson ?? null,
-        effectiveDate: body.effectiveDate ? new Date(body.effectiveDate) : null,
-        expiryDate,
-        documentId: body.documentId ?? null,
-        status: body.status ?? "active",
-        notes: body.notes ?? null,
-      } as any);
-      // Fire-and-forget Herbie memory write — never block the response.
-      void (async () => {
-        try {
-          const { writeFact } = await import("./services/herbie-memory.service");
-          await writeFact(
-            { tenantId: DEFAULT_TENANT_ID, projectId },
-            {
-              subjectType: "coi",
-              subjectId: coiId,
-              predicate: "coi_expiry",
-              object: expiryDate.toISOString(),
-              sourceType: "user",
-              confidence: 1.0,
-            },
-          );
-        } catch (e) {
-          console.error("[coi] writeFact hook failed:", e);
-        }
-      })();
-      res.status(201).json({ coiId });
-    } catch (error: any) {
-      console.error("POST /api/projects/:projectId/coi error:", error);
-      res.status(500).json({ error: error?.message ?? "Failed to create COI" });
-    }
-  });
-
   // ── Documents Center: Folders ──────────────────────────────────
   app.get("/api/projects/:projectId/doc-folders", async (req: Request, res: Response) => {
     try {
@@ -24805,20 +23735,6 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
     } catch (error: any) {
       console.error("Phase 3 seed error:", error);
       res.status(500).json({ error: error?.message ?? "Seed failed" });
-    }
-  });
-
-  app.post("/api/admin/seed-demo", async (_req: Request, res: Response) => {
-    if (process.env.NODE_ENV === "production" && process.env.ALLOW_DEMO_SEED !== "true") {
-      return res.status(403).json({ error: "Demo seed disabled in production. Set ALLOW_DEMO_SEED=true to enable." });
-    }
-    try {
-      const { seedDemo } = await import("../scripts/seed-demo");
-      const result = await seedDemo();
-      res.json({ success: true, seeded: result });
-    } catch (error: any) {
-      console.error("Demo seed error:", error);
-      res.status(500).json({ error: error?.message ?? "Demo seed failed" });
     }
   });
 
@@ -25213,14 +24129,6 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
       res.status(500).json({ error: (error as Error)?.message ?? "Failed to fetch workforce stats" });
     }
   });
-
-  // ============================================================
-  // Phase 1 — Sentinel Command Center routes
-  // (Voice daily log, Herbie LLM-backed RFI/Submittal drafts,
-  //  PATCH approve/reject aliases, Portal share links.)
-  // ============================================================
-  registerSentinelPhase1Routes(app);
-  registerLienWaiverRoutes(app);
 
   app.use((err: Error, _req: Request, res: Response, next: Function) => {
     if (err instanceof ParamError) {

@@ -290,24 +290,9 @@ type ApprovalCardProps = {
   setExpandedId: React.Dispatch<React.SetStateAction<string | null>>;
   notes: Record<string, string>;
   setNotes: React.Dispatch<React.SetStateAction<Record<string, string>>>;
-  draftBodies: Record<string, string>;
-  setDraftBodies: React.Dispatch<React.SetStateAction<Record<string, string>>>;
-  showFacts: Record<string, boolean>;
-  setShowFacts: React.Dispatch<React.SetStateAction<Record<string, boolean>>>;
-  approveMutation: { mutate: (args: { id: string; note: string; draftBody?: string }) => void; isPending: boolean };
+  approveMutation: { mutate: (args: { id: string; note: string }) => void; isPending: boolean };
   denyMutation: { mutate: (args: { id: string; note: string }) => void; isPending: boolean };
 };
-
-function isOutboundDraftAction(actionType: string): boolean {
-  const a = (actionType || "").toLowerCase();
-  return (
-    a === "draft_external_message" ||
-    a === "draft_rfi" ||
-    a === "draft_submittal" ||
-    a === "outbound_rfi" ||
-    a === "outbound_submittal"
-  );
-}
 
 function ApprovalCardDocument({
   approval,
@@ -315,10 +300,6 @@ function ApprovalCardDocument({
   setExpandedId,
   notes,
   setNotes,
-  draftBodies,
-  setDraftBodies,
-  showFacts,
-  setShowFacts,
   approveMutation,
   denyMutation,
 }: ApprovalCardProps) {
@@ -326,17 +307,6 @@ function ApprovalCardDocument({
 
   const isExpanded = expandedId === approval.id;
   const currentNote = notes[approval.id] || "";
-  const isOutbound = isOutboundDraftAction(approval.actionType);
-  const ctx = (approval.context || {}) as Record<string, any>;
-  const initialDraftBody: string = typeof ctx.draftBody === "string" ? ctx.draftBody : "";
-  const draftBody =
-    approval.id in draftBodies ? draftBodies[approval.id] : initialDraftBody;
-  const sourceFacts: Array<{ predicate?: string; value?: string; source?: string; confidence?: number }> =
-    Array.isArray(ctx.sourceFacts) ? ctx.sourceFacts : [];
-  const factsOpen = showFacts[approval.id] === true;
-  const recipient = ctx.recipient || ctx.to || ctx.audience || null;
-  const channel = ctx.channel || ctx.medium || null;
-  const subject = ctx.subject || ctx.name || ctx.rfiNumber || ctx.submittalNumber || null;
 
   const actionLabel = useMemo(() => toActionLabel(approval.actionType), [approval.actionType]);
   const actionVerb = useMemo(() => toActionVerb(approval.actionType), [approval.actionType]);
@@ -426,59 +396,6 @@ function ApprovalCardDocument({
         <>
           <Separator className="opacity-40" />
           <CardContent className="pt-4" data-testid={`approval-detail-${approval.id}`}>
-            {isOutbound ? (
-              <div className="mb-4 rounded-xl border border-primary/40 bg-primary/5 p-4 space-y-3" data-testid={`outbound-panel-${approval.id}`}>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <Badge variant="default" className="gap-1">
-                    <Send className="h-3 w-3" /> Outbound Draft
-                  </Badge>
-                  {recipient ? (
-                    <Badge variant="outline" data-testid={`badge-recipient-${approval.id}`}>To: {String(recipient)}</Badge>
-                  ) : null}
-                  {channel ? (
-                    <Badge variant="outline" data-testid={`badge-channel-${approval.id}`}>Channel: {String(channel)}</Badge>
-                  ) : null}
-                  {subject ? (
-                    <Badge variant="secondary" data-testid={`badge-subject-${approval.id}`}>{String(subject)}</Badge>
-                  ) : null}
-                </div>
-                <div>
-                  <button
-                    type="button"
-                    onClick={() => setShowFacts((s) => ({ ...s, [approval.id]: !s[approval.id] }))}
-                    className="text-xs font-semibold tracking-wide text-muted-foreground inline-flex items-center gap-1 hover:text-foreground"
-                    data-testid={`button-toggle-facts-${approval.id}`}
-                  >
-                    {factsOpen ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
-                    HERBIE KNEW {sourceFacts.length ? `(${sourceFacts.length})` : ""}
-                  </button>
-                  {factsOpen && (
-                    <ul className="mt-2 text-xs text-muted-foreground list-disc pl-5 space-y-1" data-testid={`list-source-facts-${approval.id}`}>
-                      {sourceFacts.length === 0 ? (
-                        <li>No prior project facts surfaced for this draft.</li>
-                      ) : sourceFacts.map((f, i) => (
-                        <li key={i}>
-                          <span className="font-medium text-foreground">{f.predicate || "fact"}:</span>{" "}
-                          {f.value || "(no value)"}
-                          {f.source ? ` — source: ${f.source}` : ""}
-                          {typeof f.confidence === "number" ? ` (conf ${f.confidence.toFixed(2)})` : ""}
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-                <div>
-                  <div className="text-xs font-semibold tracking-wide text-muted-foreground mb-1">DRAFT BODY (editable)</div>
-                  <Textarea
-                    value={draftBody}
-                    onChange={(e) => setDraftBodies((prev) => ({ ...prev, [approval.id]: e.target.value }))}
-                    rows={8}
-                    className="text-sm font-mono"
-                    data-testid={`textarea-draft-body-${approval.id}`}
-                  />
-                </div>
-              </div>
-            ) : null}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
               <div className="rounded-xl border border-muted/60 bg-muted/10 p-4">
                 <div className="text-xs font-semibold tracking-wide text-muted-foreground">DECISION</div>
@@ -569,11 +486,11 @@ function ApprovalCardDocument({
               <div className="mt-3 flex flex-wrap items-center gap-2">
                 <Button
                   disabled={isMutating || approval.status !== "pending"}
-                  onClick={() => approveMutation.mutate({ id: approval.id, note: currentNote, draftBody: isOutbound ? draftBody : undefined })}
+                  onClick={() => approveMutation.mutate({ id: approval.id, note: currentNote })}
                   data-testid={`button-approve-${approval.id}`}
                 >
                   <CheckCircle2 className="h-4 w-4 mr-2" />
-                  {isOutbound ? actionVerb : "Approve"}
+                  Approve
                 </Button>
                 <Button
                   variant="outline"
@@ -582,7 +499,7 @@ function ApprovalCardDocument({
                   data-testid={`button-deny-${approval.id}`}
                 >
                   <XCircle className="h-4 w-4 mr-2" />
-                  {isOutbound ? "Cancel Draft" : "Send Back"}
+                  Send Back
                 </Button>
                 <div className="text-xs text-muted-foreground ml-auto">
                   {approval.requestedByType === "herbie" ? "Requested by HERBIE" : "Requested by user"} \u2022 {approval.requestedBy}
@@ -595,12 +512,12 @@ function ApprovalCardDocument({
         <CardContent className="pt-0 pb-4">
           <div className="flex flex-wrap items-center gap-2">
             <Button
-              onClick={() => approveMutation.mutate({ id: approval.id, note: currentNote, draftBody: isOutbound ? draftBody : undefined })}
+              onClick={() => approveMutation.mutate({ id: approval.id, note: currentNote })}
               disabled={isMutating || approval.status !== "pending"}
               data-testid={`button-quick-approve-${approval.id}`}
             >
               <CheckCircle2 className="h-4 w-4 mr-2" />
-              {isOutbound ? actionVerb : "Approve"}
+              Approve
             </Button>
             <Button
               variant="outline"
@@ -628,8 +545,6 @@ export default function Approvals() {
   const [selectedTab, setSelectedTab] = useState("pending");
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [notes, setNotes] = useState<Record<string, string>>({});
-  const [draftBodies, setDraftBodies] = useState<Record<string, string>>({});
-  const [showFacts, setShowFacts] = useState<Record<string, boolean>>({});
   const [searchQuery, setSearchQuery] = useState("");
   const [filterType, setFilterType] = useState<string>("all");
   const [filterPriority, setFilterPriority] = useState<string>("all");
@@ -646,14 +561,8 @@ export default function Approvals() {
   });
 
   const approveMutation = useMutation({
-    mutationFn: async ({ id, note, draftBody }: { id: string; note: string; draftBody?: string }) => {
-      // PATCH alias goes through the unified 409-guarded path that calls
-      // approvalService.processDecision so registered dispatchers fire.
-      // For outbound drafts we send draftBody explicitly so the backend
-      // can merge it into contextJson before the dispatcher reads it.
-      const body: Record<string, unknown> = { notes: note };
-      if (draftBody && draftBody.trim()) body.draftBody = draftBody;
-      const res = await apiRequest("PATCH", `/api/approvals/${id}/approve`, body);
+    mutationFn: async ({ id, note }: { id: string; note: string }) => {
+      const res = await apiRequest("POST", `/api/approvals/${id}/approve`, { notes: note });
       return res.json();
     },
     onSuccess: (_data, variables) => {
@@ -663,7 +572,6 @@ export default function Approvals() {
       toast({ title: "Approved", description: "Action has been approved and will be executed." });
       setExpandedId(null);
       setNotes((prev) => { const n = { ...prev }; delete n[variables.id]; return n; });
-      setDraftBodies((prev) => { const n = { ...prev }; delete n[variables.id]; return n; });
     },
     onError: () => {
       toast({ title: "Error", description: "Failed to approve. Please try again.", variant: "destructive" });
@@ -672,7 +580,7 @@ export default function Approvals() {
 
   const denyMutation = useMutation({
     mutationFn: async ({ id, note }: { id: string; note: string }) => {
-      const res = await apiRequest("PATCH", `/api/approvals/${id}/reject`, { notes: note });
+      const res = await apiRequest("POST", `/api/approvals/${id}/deny`, { notes: note });
       return res.json();
     },
     onSuccess: (_data, variables) => {
@@ -682,7 +590,6 @@ export default function Approvals() {
       toast({ title: "Denied", description: "Action has been denied and blocked." });
       setExpandedId(null);
       setNotes((prev) => { const n = { ...prev }; delete n[variables.id]; return n; });
-      setDraftBodies((prev) => { const n = { ...prev }; delete n[variables.id]; return n; });
     },
     onError: () => {
       toast({ title: "Error", description: "Failed to deny. Please try again.", variant: "destructive" });
@@ -903,10 +810,6 @@ export default function Approvals() {
                     setExpandedId={setExpandedId}
                     notes={notes}
                     setNotes={setNotes}
-                    draftBodies={draftBodies}
-                    setDraftBodies={setDraftBodies}
-                    showFacts={showFacts}
-                    setShowFacts={setShowFacts}
                     approveMutation={approveMutation}
                     denyMutation={denyMutation}
                   />

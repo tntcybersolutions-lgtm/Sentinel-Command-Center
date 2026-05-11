@@ -60,17 +60,14 @@ async function buildAll() {
     bundle: true,
     format: "cjs",
     outfile: "dist/index.cjs",
-    // CJS doesn't expose `import.meta`. Synthesize the two values our
-    // server code uses (`import.meta.dirname` and `import.meta.url`)
-    // from the always-present CJS globals so the bundled output starts
-    // up cleanly under `node dist/index.cjs`.
-    banner: {
-      js: 'const __import_meta_url = require("url").pathToFileURL(__filename).href;',
-    },
     define: {
       "process.env.NODE_ENV": '"production"',
-      "import.meta.dirname": "__dirname",
       "import.meta.url": "__import_meta_url",
+      "import.meta.dirname": "__dirname",
+      "import.meta.filename": "__filename",
+    },
+    banner: {
+      js: "var __import_meta_url = require('url').pathToFileURL(__filename).href;",
     },
     minify: true,
     external: externals,

@@ -10,11 +10,9 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogClose } from "@/components/ui/dialog";
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Progress } from "@/components/ui/progress";
 import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { ObjectUploader } from "@/components/ObjectUploader";
@@ -25,7 +23,6 @@ import {
   Cpu,
   Workflow,
   Upload,
-  Loader2,
   FileText,
   Lock,
   Unlock,
@@ -53,13 +50,6 @@ import {
   RefreshCw,
   FileSpreadsheet,
   Package,
-  Wand2,
-  Bot,
-  Trash2,
-  ChevronUp,
-  ChevronDown,
-  ChevronsUpDown,
-  X,
 } from "lucide-react";
 
 const DISCIPLINES = [
@@ -140,16 +130,12 @@ interface DrawingSheet {
 interface TakeoffQuantity {
   id: string;
   categoryId: string;
-  projectId?: string;
   room?: string;
   floor?: string;
   quantity: string;
   unit: string;
   unitCost?: string;
   extendedCost?: string;
-  notes?: string;
-  createdAt?: string;
-  updatedAt?: string;
 }
 
 interface BuildingSystem {
@@ -162,70 +148,16 @@ interface BuildingSystem {
   asBuiltStatus: string;
 }
 
-// Subset of the blueprints row needed by the Import-from-Plans flow.
-interface Blueprint {
-  id: string;
-  title: string;
-  fileName?: string;
-  pageCount?: number;
-  uploadedAt?: string;
-  createdAt?: string;
-}
-
-// Shape of takeoff_items returned by GET /api/blueprints/:id/takeoff-items.
-interface BlueprintTakeoffItem {
-  id: string;
-  name: string;
-  category: string;
-  quantity: string;
-  unit: string;
-  unitCost?: string;
-}
-
-// Deterministic muted-color palette for category badges. Each category name
-// hashes to a fixed slot in the palette, so the same category always renders
-// in the same color across reloads. Colors are explicit light/dark pairs so
-// they read well in both themes without relying on Tailwind's `dark:`
-// auto-handling for non-utility custom classes.
-const CATEGORY_BADGE_PALETTE = [
-  "bg-blue-100 text-blue-900 border-blue-200 dark:bg-blue-950/50 dark:text-blue-200 dark:border-blue-900",
-  "bg-emerald-100 text-emerald-900 border-emerald-200 dark:bg-emerald-950/50 dark:text-emerald-200 dark:border-emerald-900",
-  "bg-amber-100 text-amber-900 border-amber-200 dark:bg-amber-950/50 dark:text-amber-200 dark:border-amber-900",
-  "bg-violet-100 text-violet-900 border-violet-200 dark:bg-violet-950/50 dark:text-violet-200 dark:border-violet-900",
-  "bg-rose-100 text-rose-900 border-rose-200 dark:bg-rose-950/50 dark:text-rose-200 dark:border-rose-900",
-  "bg-cyan-100 text-cyan-900 border-cyan-200 dark:bg-cyan-950/50 dark:text-cyan-200 dark:border-cyan-900",
-  "bg-orange-100 text-orange-900 border-orange-200 dark:bg-orange-950/50 dark:text-orange-200 dark:border-orange-900",
-  "bg-teal-100 text-teal-900 border-teal-200 dark:bg-teal-950/50 dark:text-teal-200 dark:border-teal-900",
-  "bg-pink-100 text-pink-900 border-pink-200 dark:bg-pink-950/50 dark:text-pink-200 dark:border-pink-900",
-  "bg-indigo-100 text-indigo-900 border-indigo-200 dark:bg-indigo-950/50 dark:text-indigo-200 dark:border-indigo-900",
-  "bg-lime-100 text-lime-900 border-lime-200 dark:bg-lime-950/50 dark:text-lime-200 dark:border-lime-900",
-  "bg-sky-100 text-sky-900 border-sky-200 dark:bg-sky-950/50 dark:text-sky-200 dark:border-sky-900",
-];
-function categoryBadgeClass(name: string | undefined | null): string {
-  const key = (name || "Unknown").trim().toLowerCase();
-  let h = 0;
-  for (let i = 0; i < key.length; i++) {
-    h = (h * 31 + key.charCodeAt(i)) | 0;
-  }
-  return CATEGORY_BADGE_PALETTE[Math.abs(h) % CATEGORY_BADGE_PALETTE.length];
-}
-
 export default function DesignSystems() {
   const [, navigate] = useLocation();
   const { toast } = useToast();
   const [location] = useLocation();
   
   const getTabFromPath = (path: string): string => {
-    // Support explicit ?tab= query string
-    if (typeof window !== "undefined") {
-      const tab = new URLSearchParams(window.location.search).get("tab");
-      if (tab && ["overview", "blueprint-hub", "takeoff", "systems", "deliverables"].includes(tab)) return tab;
-    }
-    if (path === "/blueprint-hub" || path === "/estimate/blueprint-hub") return "blueprint-hub";
-    if (path === "/takeoff-engine" || path === "/estimate/takeoff") return "takeoff";
-    if (path === "/systems-matrix" || path === "/estimate/systems") return "systems";
-    if (path === "/auto-build" || path === "/estimate/auto-build") return "overview";
-    if (path === "/deliverables" || path === "/estimate/deliverables") return "deliverables";
+    if (path === "/blueprint-hub") return "blueprint-hub";
+    if (path === "/takeoff-engine") return "takeoff";
+    if (path === "/systems-matrix") return "systems";
+    if (path === "/auto-build") return "overview";
     return "overview";
   };
   
@@ -239,24 +171,11 @@ export default function DesignSystems() {
   const [isUploadOpen, setIsUploadOpen] = useState(false);
   const [isAutoBuildOpen, setIsAutoBuildOpen] = useState(false);
   const [isNewTakeoffOpen, setIsNewTakeoffOpen] = useState(false);
-  const [isImportTakeoffOpen, setIsImportTakeoffOpen] = useState(false);
-  const [selectedBlueprintIds, setSelectedBlueprintIds] = useState<Set<string>>(new Set());
   const [isAddSystemOpen, setIsAddSystemOpen] = useState(false);
   const [isEditTakeoffOpen, setIsEditTakeoffOpen] = useState(false);
   const [isEditSystemOpen, setIsEditSystemOpen] = useState(false);
   const [isViewSheetOpen, setIsViewSheetOpen] = useState(false);
   const [editingTakeoff, setEditingTakeoff] = useState<TakeoffQuantity | null>(null);
-  const [deletingTakeoff, setDeletingTakeoff] = useState<TakeoffQuantity | null>(null);
-  // Sort state for takeoff table. `sortBy === null` means use the default sort
-  // (Category asc, then Trade asc as tiebreaker). Clicking a header sets the
-  // sort key and toggles direction.
-  const [takeoffSortBy, setTakeoffSortBy] = useState<null | "category" | "trade" | "name" | "quantity" | "unit" | "unitCost" | "extended" | "notes">(null);
-  const [takeoffSortDir, setTakeoffSortDir] = useState<"asc" | "desc">("asc");
-  const [takeoffSearch, setTakeoffSearch] = useState("");
-  // Controlled state for the New Takeoff Item dialog so we can do inline validation.
-  const emptyNewTakeoff = { categoryId: "", projectId: "", room: "", quantity: "", unit: "EA", unitCost: "", notes: "" };
-  const [newTakeoffForm, setNewTakeoffForm] = useState(emptyNewTakeoff);
-  const [newTakeoffErrors, setNewTakeoffErrors] = useState<Record<string, string>>({});
   const [editingSystem, setEditingSystem] = useState<BuildingSystem | null>(null);
   const [viewingSheet, setViewingSheet] = useState<DrawingSheet | null>(null);
   const [selectedSystemId, setSelectedSystemId] = useState<string | null>(null);
@@ -279,18 +198,6 @@ export default function DesignSystems() {
 
   const { data: takeoffCategoriesData = [] } = useQuery<TakeoffCategory[]>({
     queryKey: ["/api/takeoff-categories"],
-  });
-
-  const { data: projectsData = [] } = useQuery<Array<{ id: string; name: string }>>({
-    queryKey: ["/api/projects"],
-  });
-
-  const { data: blueprintsData = [] } = useQuery<Blueprint[]>({
-    queryKey: ["/api/blueprints"],
-  });
-
-  const { data: systemDevicesAll = [] } = useQuery<Array<{ id: string; systemId: string; deviceType: string; manufacturer?: string; model?: string; quantity: number; location?: string; installedCount?: number }>>({
-    queryKey: ["/api/system-devices"],
   });
 
   const takeoffCategories = takeoffCategoriesData.map(c => ({ id: c.id, name: c.name, trade: c.trade, unit: c.defaultUnit }));
@@ -375,16 +282,12 @@ export default function DesignSystems() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/building-systems"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/system-devices"] });
       toast({ title: "Systems synced", description: "All system statuses refreshed" });
-    },
-    onError: (error: Error) => {
-      toast({ title: "Sync failed", description: error.message || "Could not refresh systems", variant: "destructive" });
     },
   });
 
   const updateTakeoffMutation = useMutation({
-    mutationFn: async (data: { id: string; categoryId: string; room: string; floor: string; quantity: string; unit: string; unitCost: string; notes: string }) => {
+    mutationFn: async (data: { id: string; categoryId: string; room: string; floor: string; quantity: string; unit: string; unitCost: string }) => {
       const extendedCost = (parseFloat(data.quantity) * parseFloat(data.unitCost || "0")).toFixed(2);
       return apiRequest("PATCH", `/api/takeoff-quantities/${data.id}`, { ...data, extendedCost });
     },
@@ -409,54 +312,6 @@ export default function DesignSystems() {
     },
     onError: (error: Error) => {
       toast({ title: "Error", description: error.message, variant: "destructive" });
-    },
-  });
-
-  // Bulk-imports takeoff items from one or more selected blueprints.
-  // Delegates the per-item work to the server route
-  // POST /api/takeoffs/import-from-blueprints, which maps each blueprint
-  // item's free-text `category` to a takeoff_category by name. Items whose
-  // category doesn't match an existing category come back as "skipped".
-  const importTakeoffFromBlueprintsMutation = useMutation({
-    mutationFn: async (blueprintIds: string[]) => {
-      if (blueprintIds.length === 0) throw new Error("No blueprints selected");
-      const result = await apiRequest("POST", "/api/takeoffs/import-from-blueprints", { blueprintIds });
-      const data = await result.json() as {
-        created: number;
-        skipped: string[];
-        failed: Array<{ name: string; error: string }>;
-        perBlueprint: Array<{ blueprintId: string; blueprintTitle: string; created: number; skipped: string[]; failed: Array<{ name: string; error: string }> }>;
-      };
-      if (data.created > 0) {
-        await queryClient.invalidateQueries({ queryKey: ["/api/takeoff-quantities"] });
-      }
-      return data;
-    },
-    onSuccess: ({ created, skipped, failed, perBlueprint }) => {
-      const bpCount = perBlueprint.length;
-      if (created === 0) {
-        const reason = skipped.length > 0
-          ? `No matching takeoff categories. Missing: ${skipped.slice(0, 3).join(", ")}${skipped.length > 3 ? "…" : ""}.`
-          : failed.length > 0
-            ? `All ${failed.length} item(s) failed: ${failed[0].error}`
-            : `Selected blueprint${bpCount === 1 ? "" : "s"} ha${bpCount === 1 ? "s" : "ve"} no takeoff items to import.`;
-        toast({ title: "Nothing imported", description: reason, variant: "destructive" });
-        return;
-      }
-      const parts: string[] = [`Created ${created} takeoff item${created === 1 ? "" : "s"} from ${bpCount} blueprint${bpCount === 1 ? "" : "s"}`];
-      if (skipped.length > 0) parts.push(`skipped ${skipped.length} (no matching category)`);
-      if (failed.length > 0) parts.push(`${failed.length} failed`);
-      const isPartial = skipped.length > 0 || failed.length > 0;
-      toast({
-        title: isPartial ? "Import partially complete" : "Import complete",
-        description: parts.join(", ") + ".",
-        variant: isPartial ? "destructive" : "default",
-      });
-      setIsImportTakeoffOpen(false);
-      setSelectedBlueprintIds(new Set());
-    },
-    onError: (error: Error) => {
-      toast({ title: "Import failed", description: error.message, variant: "destructive" });
     },
   });
 
@@ -515,13 +370,6 @@ export default function DesignSystems() {
     },
     onSuccess: (_, type) => {
       queryClient.invalidateQueries({ queryKey: ["/api/project-deliverables"] });
-      // device_schedule seeds devices; as_built updates building system status
-      if (type === "device_schedule") {
-        queryClient.invalidateQueries({ queryKey: ["/api/system-devices"] });
-      }
-      if (type === "as_built") {
-        queryClient.invalidateQueries({ queryKey: ["/api/building-systems"] });
-      }
       const titles: Record<string, string> = {
         trade_scope: "Trade Scopes",
         bid_package: "Bid Packages",
@@ -531,7 +379,7 @@ export default function DesignSystems() {
         rack_elevation: "Rack Elevations",
         as_built: "As-Built Sets",
         owner_handoff: "Owner Handoff",
-        smart_building_config: "Smart Building Config",
+        smart_config: "Smart Building Config",
       };
       toast({ title: "Deliverable generated", description: `${titles[type] || type} created successfully` });
       setGeneratingDeliverable(null);
@@ -544,7 +392,7 @@ export default function DesignSystems() {
 
   const generateAllDeliverablesMutation = useMutation({
     mutationFn: async () => {
-      const types = ["trade_scope", "bid_package", "material_list", "cable_schedule", "device_schedule", "rack_elevation", "as_built", "owner_handoff", "smart_building_config"];
+      const types = ["trade_scope", "bid_package", "material_list", "cable_schedule", "device_schedule", "rack_elevation", "as_built", "owner_handoff", "smart_config"];
       for (const type of types) {
         await apiRequest("POST", `/api/generate-deliverable/${type}`, { projectId: "current" });
       }
@@ -559,96 +407,30 @@ export default function DesignSystems() {
     },
   });
 
-  const askHerbieAutoDocMutation = useMutation({
-    mutationFn: async () => {
-      const res = await apiRequest("POST", "/api/herbie/chat", {
-        message: "Auto-document this project. Generate all 9 deliverables and enrich each with an executive summary for the PM.",
-        history: [],
-      });
-      return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/project-deliverables"] });
-      toast({ title: "Herbie is on it", description: "Generating + enriching all 9 deliverables." });
-    },
-    onError: (error: Error) => {
-      toast({ title: "Herbie failed", description: error.message, variant: "destructive" });
-    },
-  });
-
-  const askHerbieDeliverableMutation = useMutation({
-    mutationFn: async (type: string) => {
-      const titles: Record<string, string> = {
-        trade_scope: "trade scope", bid_package: "bid package", material_list: "material list",
-        cable_schedule: "cable schedule", device_schedule: "device schedule", rack_elevation: "rack elevation",
-        as_built: "as-built set", owner_handoff: "owner handoff", smart_building_config: "smart building config",
-      };
-      const res = await apiRequest("POST", "/api/herbie/chat", {
-        message: `Generate the ${titles[type] || type} deliverable for this project, enrich it with a sharp PM-facing summary, and tell me what's in it. Flag anything missing.`,
-        history: [],
-      });
-      return res.json();
-    },
-    onSuccess: (_data, type) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/project-deliverables"] });
-      toast({ title: `Herbie generated ${type}`, description: "Check the deliverable summary." });
-    },
-    onError: (error: Error) => {
-      toast({ title: "Herbie failed", description: error.message, variant: "destructive" });
-    },
-  });
-
   const exportTakeoffCSV = () => {
-    try {
-      if (!takeoffQuantities || takeoffQuantities.length === 0) {
-        toast({ title: "Nothing to export", description: "No takeoff items found.", variant: "destructive" });
-        return;
-      }
-      const esc = (v: unknown) => {
-        const s = v === null || v === undefined ? "" : String(v);
-        return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-      };
-      // CSV column order locked to: Item Name, Category, Trade, Quantity,
-      // Unit, Unit Cost, Extended Cost, Notes, Project. "Item Name" maps to
-      // the `room` field, which is what both the New Takeoff dialog and the
-      // Import-from-Plans flow use as the human-readable line label.
-      // Project comes last so legacy importers reading the first 8 cols still work.
-      const projectById = new Map(projectsData.map(p => [p.id, p.name]));
-      const headers = ["Item Name", "Category", "Trade", "Quantity", "Unit", "Unit Cost", "Extended Cost", "Notes", "Project"];
-      const rows = takeoffQuantities.map(tq => {
-        const cat = takeoffCategories.find(c => c.id === tq.categoryId);
-        const qty = Number(tq.quantity ?? 0);
-        const unitCost = Number(tq.unitCost ?? 0);
-        const extended = tq.extendedCost != null ? Number(tq.extendedCost) : qty * unitCost;
-        const projectName = tq.projectId ? (projectById.get(tq.projectId) || "") : "";
-        return [
-          tq.room || "",
-          cat?.name || "Unknown",
-          cat?.trade || "Unknown",
-          qty.toFixed(2),
-          tq.unit,
-          unitCost.toFixed(2),
-          extended.toFixed(2),
-          tq.notes || "",
-          projectName,
-        ].map(esc).join(",");
-      });
-      const csv = "\ufeff" + [headers.join(","), ...rows].join("\n");
-      const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `takeoff_export_${new Date().toISOString().split("T")[0]}.csv`;
-      a.style.display = "none";
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
-      toast({ title: "Export complete", description: `${rows.length} takeoff items exported.` });
-    } catch (err) {
-      console.error("CSV export failed:", err);
-      toast({ title: "Export failed", description: err instanceof Error ? err.message : "Unknown error", variant: "destructive" });
-    }
+    const headers = ["Category", "Trade", "Room", "Floor", "Quantity", "Unit", "Unit Cost", "Extended Cost"];
+    const rows = takeoffQuantities.map(tq => {
+      const cat = takeoffCategories.find(c => c.id === tq.categoryId);
+      return [
+        cat?.name || "Unknown",
+        cat?.trade || "Unknown",
+        tq.room || "",
+        tq.floor || "",
+        tq.quantity,
+        tq.unit,
+        tq.unitCost || "",
+        tq.extendedCost || "",
+      ].join(",");
+    });
+    const csv = [headers.join(","), ...rows].join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `takeoff_export_${new Date().toISOString().split("T")[0]}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast({ title: "Export complete", description: "Takeoff data exported to CSV" });
   };
 
   const downloadDeliverable = (type: string) => {
@@ -661,7 +443,7 @@ export default function DesignSystems() {
       rack_elevation: "Rack Elevations",
       as_built: "As-Built Sets",
       owner_handoff: "Owner Handoff",
-      smart_building_config: "Smart Building Config",
+      smart_config: "Smart Building Config",
     };
     const link = document.createElement("a");
     link.href = `/api/project-deliverables/download/${type}`;
@@ -696,79 +478,9 @@ export default function DesignSystems() {
     return acc;
   }, {} as Record<string, DrawingSheet[]>);
 
-  const filteredTakeoffs = (() => {
-    const byCategory = takeoffFilter === "all"
-      ? takeoffQuantities
-      : takeoffQuantities.filter(t => t.categoryId === takeoffFilter);
-    const q = takeoffSearch.trim().toLocaleLowerCase();
-    if (!q) return byCategory;
-    return byCategory.filter(t => {
-      const cat = takeoffCategories.find(c => c.id === t.categoryId);
-      return (
-        (t.room ?? "").toLocaleLowerCase().includes(q) ||
-        (cat?.name ?? "").toLocaleLowerCase().includes(q) ||
-        (cat?.trade ?? "").toLocaleLowerCase().includes(q)
-      );
-    });
-  })();
-
-  // Toggle helper: same column flips direction; new column resets to asc.
-  const handleSortTakeoff = (key: NonNullable<typeof takeoffSortBy>) => {
-    if (takeoffSortBy === key) {
-      setTakeoffSortDir(d => d === "asc" ? "desc" : "asc");
-    } else {
-      setTakeoffSortBy(key);
-      setTakeoffSortDir("asc");
-    }
-  };
-
-  // Sort derivation. Default (`sortBy === null`) → Category asc, then Trade asc.
-  // Otherwise sort by the chosen column then fall back to Category/Trade for
-  // stable ordering within ties.
-  const sortedTakeoffs = (() => {
-    const cmp = (a: TakeoffQuantity, b: TakeoffQuantity, key: NonNullable<typeof takeoffSortBy>): number => {
-      const catA = takeoffCategories.find(c => c.id === a.categoryId);
-      const catB = takeoffCategories.find(c => c.id === b.categoryId);
-      const num = (v: string | undefined | null) => {
-        const n = parseFloat(v ?? "");
-        return isFinite(n) ? n : -Infinity;
-      };
-      const str = (v: string | undefined | null) => (v ?? "").toLocaleLowerCase();
-      switch (key) {
-        case "category": return str(catA?.name).localeCompare(str(catB?.name));
-        case "trade": return str(catA?.trade).localeCompare(str(catB?.trade));
-        case "name": return str(a.room).localeCompare(str(b.room));
-        case "quantity": return num(a.quantity) - num(b.quantity);
-        case "unit": return str(a.unit).localeCompare(str(b.unit));
-        case "unitCost": return num(a.unitCost) - num(b.unitCost);
-        case "extended": {
-          const extA = a.extendedCost != null && a.extendedCost !== "" ? num(a.extendedCost) : num(a.quantity) * num(a.unitCost);
-          const extB = b.extendedCost != null && b.extendedCost !== "" ? num(b.extendedCost) : num(b.quantity) * num(b.unitCost);
-          return extA - extB;
-        }
-        case "notes": return str(a.notes).localeCompare(str(b.notes));
-      }
-    };
-    const dirMul = takeoffSortDir === "asc" ? 1 : -1;
-    return [...filteredTakeoffs].sort((a, b) => {
-      if (takeoffSortBy) {
-        const primary = cmp(a, b, takeoffSortBy) * dirMul;
-        if (primary !== 0) return primary;
-      }
-      // Default tiebreakers: Category asc, then Trade asc.
-      const catTie = cmp(a, b, "category");
-      if (catTie !== 0) return catTie;
-      return cmp(a, b, "trade");
-    });
-  })();
-
-  // Most-recent modification timestamp across all loaded takeoff items.
-  // Uses updatedAt when present, falling back to createdAt. Returns 0 when
-  // no items exist or no parseable timestamps are found.
-  const lastTakeoffUpdate = takeoffQuantities.reduce<number>((max, item) => {
-    const ts = Date.parse(item.updatedAt || item.createdAt || "");
-    return isFinite(ts) && ts > max ? ts : max;
-  }, 0);
+  const filteredTakeoffs = takeoffFilter === "all" 
+    ? takeoffQuantities 
+    : takeoffQuantities.filter(t => t.categoryId === takeoffFilter);
 
   const takeoffSummary = takeoffCategories.map(cat => {
     const items = takeoffQuantities.filter(t => t.categoryId === cat.id);
@@ -804,11 +516,13 @@ export default function DesignSystems() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Button onClick={() => setIsUploadOpen(true)} data-testid="button-upload-plans">
-            <Upload className="h-4 w-4 mr-2" />
-            Upload Plans
-          </Button>
           <Dialog open={isUploadOpen} onOpenChange={setIsUploadOpen}>
+            <DialogTrigger asChild>
+              <Button data-testid="button-upload-plans">
+                <Upload className="h-4 w-4 mr-2" />
+                Upload Plans
+              </Button>
+            </DialogTrigger>
             <DialogContent>
               <DialogHeader>
                 <DialogTitle>Upload Drawing Sheets</DialogTitle>
@@ -819,20 +533,12 @@ export default function DesignSystems() {
               <form onSubmit={(e) => {
                 e.preventDefault();
                 const formData = new FormData(e.currentTarget);
-                if (!uploadedStorageKey) {
-                  toast({
-                    title: "File required",
-                    description: "Please upload a drawing file before creating the sheet record.",
-                    variant: "destructive",
-                  });
-                  return;
-                }
                 uploadSheetMutation.mutate({
                   sheetNumber: formData.get("sheetNumber") as string,
                   sheetTitle: formData.get("sheetTitle") as string,
                   discipline: formData.get("discipline") as string,
                   fileType: formData.get("fileType") as string,
-                  storageKey: uploadedStorageKey,
+                  storageKey: uploadedStorageKey || undefined,
                 });
               }} className="space-y-4">
                 <div className="grid grid-cols-2 gap-4">
@@ -913,7 +619,7 @@ export default function DesignSystems() {
                   )}
                 </div>
                 <input type="hidden" name="storageKey" value={uploadedStorageKey || ""} />
-                <Button type="submit" className="w-full" disabled={uploadSheetMutation.isPending} data-testid="button-submit-upload">
+                <Button type="submit" className="w-full" disabled={uploadSheetMutation.isPending || !uploadedStorageKey} data-testid="button-submit-upload">
                   {uploadSheetMutation.isPending ? "Creating Sheet..." : "Create Sheet Record"}
                 </Button>
               </form>
@@ -1139,7 +845,7 @@ export default function DesignSystems() {
                   <Upload className="h-4 w-4 mr-2" />
                   Upload New Drawings
                 </Button>
-                <Button variant="outline" className="w-full justify-start" onClick={() => setActiveTab("takeoff")} data-testid="button-quick-takeoff">
+                <Button variant="outline" className="w-full justify-start" onClick={() => navigate("/takeoff-engine")} data-testid="button-quick-takeoff">
                   <Calculator className="h-4 w-4 mr-2" />
                   Start Takeoff
                 </Button>
@@ -1332,92 +1038,37 @@ export default function DesignSystems() {
         </TabsContent>
 
         <TabsContent value="takeoff" className="space-y-6">
-          {/* Last-modified hint just under the page subtitle, scoped to takeoff data. */}
-          <div className="text-xs text-muted-foreground -mt-2" data-testid="text-takeoff-last-updated">
-            {lastTakeoffUpdate > 0
-              ? `Last updated ${new Date(lastTakeoffUpdate).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}`
-              : "Last updated: never — no takeoff items yet"}
-          </div>
-          {/* Responsive toolbar: actions on the left, search/filter/export on the right. */}
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-            <div className="flex flex-wrap items-center gap-2">
-              <Dialog open={isNewTakeoffOpen} onOpenChange={(open) => {
-                setIsNewTakeoffOpen(open);
-                if (!open) { setNewTakeoffForm(emptyNewTakeoff); setNewTakeoffErrors({}); }
-              }}>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Dialog open={isNewTakeoffOpen} onOpenChange={setIsNewTakeoffOpen}>
                 <DialogTrigger asChild>
                   <Button variant="outline" disabled={takeoffCategories.length === 0} data-testid="button-new-takeoff">
                     <Plus className="h-4 w-4 mr-2" />
                     {takeoffCategories.length === 0 ? "Loading Categories..." : "New Takeoff Item"}
                   </Button>
                 </DialogTrigger>
-                <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+                <DialogContent>
                   <DialogHeader>
                     <DialogTitle>Add Takeoff Quantity</DialogTitle>
                     <DialogDescription>Record a new quantity measurement</DialogDescription>
                   </DialogHeader>
-                  <form
-                    onSubmit={(e) => {
-                      e.preventDefault();
-                      // Inline validation for required fields.
-                      const errs: Record<string, string> = {};
-                      if (!newTakeoffForm.room.trim()) errs.room = "Item name is required";
-                      if (!newTakeoffForm.categoryId) errs.categoryId = "Category is required";
-                      const qty = parseFloat(newTakeoffForm.quantity);
-                      if (!newTakeoffForm.quantity.trim() || !isFinite(qty) || qty <= 0) errs.quantity = "Quantity must be greater than 0";
-                      if (!newTakeoffForm.unit) errs.unit = "Unit is required";
-                      if (newTakeoffForm.unitCost.trim()) {
-                        const uc = parseFloat(newTakeoffForm.unitCost);
-                        if (!isFinite(uc) || uc < 0) errs.unitCost = "Unit cost must be a non-negative number";
-                      }
-                      setNewTakeoffErrors(errs);
-                      if (Object.keys(errs).length > 0) return;
-                      createTakeoffQuantityMutation.mutate(
-                        {
-                          categoryId: newTakeoffForm.categoryId,
-                          projectId: newTakeoffForm.projectId || undefined,
-                          room: newTakeoffForm.room.trim(),
-                          quantity: newTakeoffForm.quantity,
-                          unit: newTakeoffForm.unit,
-                          unitCost: newTakeoffForm.unitCost || undefined,
-                          notes: newTakeoffForm.notes || undefined,
-                        } as any,
-                        {
-                          onSuccess: () => {
-                            setNewTakeoffForm(emptyNewTakeoff);
-                            setNewTakeoffErrors({});
-                          },
-                        }
-                      );
-                    }}
-                    className="space-y-4"
-                  >
-                    <div className="space-y-2">
-                      <Label htmlFor="new-takeoff-room">
-                        Item Name <span className="text-destructive">*</span>
-                      </Label>
-                      <Input
-                        id="new-takeoff-room"
-                        value={newTakeoffForm.room}
-                        onChange={(e) => setNewTakeoffForm(f => ({ ...f, room: e.target.value }))}
-                        placeholder="e.g. 4-inch concrete slab"
-                        aria-invalid={!!newTakeoffErrors.room}
-                        data-testid="input-takeoff-name"
-                      />
-                      {newTakeoffErrors.room && (
-                        <p className="text-sm text-destructive" data-testid="error-takeoff-name">{newTakeoffErrors.room}</p>
-                      )}
-                    </div>
+                  <form onSubmit={(e) => {
+                    e.preventDefault();
+                    const formData = new FormData(e.currentTarget);
+                    createTakeoffQuantityMutation.mutate({
+                      categoryId: formData.get("categoryId") as string,
+                      room: formData.get("room") as string,
+                      floor: formData.get("floor") as string,
+                      quantity: formData.get("quantity") as string,
+                      unit: formData.get("unit") as string,
+                      unitCost: formData.get("unitCost") as string,
+                    });
+                  }} className="space-y-4">
                     <div className="grid grid-cols-2 gap-4">
                       <div className="space-y-2">
-                        <Label htmlFor="new-takeoff-category">
-                          Category <span className="text-destructive">*</span>
-                        </Label>
-                        <Select
-                          value={newTakeoffForm.categoryId}
-                          onValueChange={(v) => setNewTakeoffForm(f => ({ ...f, categoryId: v }))}
-                        >
-                          <SelectTrigger id="new-takeoff-category" aria-invalid={!!newTakeoffErrors.categoryId} data-testid="select-takeoff-category">
+                        <Label htmlFor="categoryId">Category</Label>
+                        <Select name="categoryId" required>
+                          <SelectTrigger data-testid="select-takeoff-category">
                             <SelectValue placeholder="Select category" />
                           </SelectTrigger>
                           <SelectContent>
@@ -1426,111 +1077,41 @@ export default function DesignSystems() {
                             ))}
                           </SelectContent>
                         </Select>
-                        {newTakeoffErrors.categoryId && (
-                          <p className="text-sm text-destructive" data-testid="error-takeoff-category">{newTakeoffErrors.categoryId}</p>
-                        )}
                       </div>
                       <div className="space-y-2">
-                        <Label>Trade</Label>
-                        <Input
-                          value={takeoffCategories.find(c => c.id === newTakeoffForm.categoryId)?.trade || ""}
-                          readOnly
-                          disabled
-                          placeholder="Auto-filled from category"
-                          data-testid="input-takeoff-trade"
-                        />
-                      </div>
-                    </div>
-                    <div className="grid grid-cols-3 gap-4">
-                      <div className="space-y-2">
-                        <Label htmlFor="new-takeoff-quantity">
-                          Quantity <span className="text-destructive">*</span>
-                        </Label>
-                        <Input
-                          id="new-takeoff-quantity"
-                          type="number"
-                          step="0.01"
-                          value={newTakeoffForm.quantity}
-                          onChange={(e) => setNewTakeoffForm(f => ({ ...f, quantity: e.target.value }))}
-                          placeholder="0.00"
-                          aria-invalid={!!newTakeoffErrors.quantity}
-                          data-testid="input-takeoff-quantity"
-                        />
-                        {newTakeoffErrors.quantity && (
-                          <p className="text-sm text-destructive" data-testid="error-takeoff-quantity">{newTakeoffErrors.quantity}</p>
-                        )}
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="new-takeoff-unit">
-                          Unit <span className="text-destructive">*</span>
-                        </Label>
-                        <Select
-                          value={newTakeoffForm.unit}
-                          onValueChange={(v) => setNewTakeoffForm(f => ({ ...f, unit: v }))}
-                        >
-                          <SelectTrigger id="new-takeoff-unit" aria-invalid={!!newTakeoffErrors.unit} data-testid="select-takeoff-unit">
+                        <Label htmlFor="unit">Unit</Label>
+                        <Select name="unit" defaultValue="EA">
+                          <SelectTrigger data-testid="select-takeoff-unit">
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
                             <SelectItem value="EA">EA (Each)</SelectItem>
-                            <SelectItem value="LF">LF (Linear Ft)</SelectItem>
                             <SelectItem value="SF">SF (Sq Ft)</SelectItem>
+                            <SelectItem value="LF">LF (Linear Ft)</SelectItem>
                             <SelectItem value="CY">CY (Cubic Yd)</SelectItem>
-                            <SelectItem value="LB">LB (Pound)</SelectItem>
-                            <SelectItem value="HR">HR (Hour)</SelectItem>
-                            <SelectItem value="LS">LS (Lump Sum)</SelectItem>
-                            <SelectItem value="TON">TON</SelectItem>
-                            <SelectItem value="GAL">GAL (Gallon)</SelectItem>
                           </SelectContent>
                         </Select>
-                        {newTakeoffErrors.unit && (
-                          <p className="text-sm text-destructive" data-testid="error-takeoff-unit">{newTakeoffErrors.unit}</p>
-                        )}
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <Label htmlFor="room">Room/Area</Label>
+                        <Input id="room" name="room" placeholder="e.g. Room 101" data-testid="input-takeoff-room" />
                       </div>
                       <div className="space-y-2">
-                        <Label htmlFor="new-takeoff-unit-cost">Unit Cost ($)</Label>
-                        <Input
-                          id="new-takeoff-unit-cost"
-                          type="number"
-                          step="0.01"
-                          value={newTakeoffForm.unitCost}
-                          onChange={(e) => setNewTakeoffForm(f => ({ ...f, unitCost: e.target.value }))}
-                          placeholder="0.00"
-                          aria-invalid={!!newTakeoffErrors.unitCost}
-                          data-testid="input-takeoff-cost"
-                        />
-                        {newTakeoffErrors.unitCost && (
-                          <p className="text-sm text-destructive" data-testid="error-takeoff-cost">{newTakeoffErrors.unitCost}</p>
-                        )}
+                        <Label htmlFor="floor">Floor</Label>
+                        <Input id="floor" name="floor" placeholder="e.g. Floor 1" data-testid="input-takeoff-floor" />
                       </div>
                     </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="new-takeoff-project">Project</Label>
-                      <Select
-                        value={newTakeoffForm.projectId || "__none__"}
-                        onValueChange={(v) => setNewTakeoffForm(f => ({ ...f, projectId: v === "__none__" ? "" : v }))}
-                      >
-                        <SelectTrigger id="new-takeoff-project" data-testid="select-takeoff-project">
-                          <SelectValue placeholder="Optional — leave blank for unassigned" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="__none__">— Unassigned —</SelectItem>
-                          {projectsData.map(p => (
-                            <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="new-takeoff-notes">Notes</Label>
-                      <Textarea
-                        id="new-takeoff-notes"
-                        value={newTakeoffForm.notes}
-                        onChange={(e) => setNewTakeoffForm(f => ({ ...f, notes: e.target.value }))}
-                        placeholder="Optional notes for this line item"
-                        rows={3}
-                        data-testid="input-takeoff-notes"
-                      />
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <Label htmlFor="quantity">Quantity</Label>
+                        <Input id="quantity" name="quantity" type="number" step="0.01" required placeholder="0.00" data-testid="input-takeoff-quantity" />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="unitCost">Unit Cost ($)</Label>
+                        <Input id="unitCost" name="unitCost" type="number" step="0.01" placeholder="0.00" data-testid="input-takeoff-cost" />
+                      </div>
                     </div>
                     <Button type="submit" className="w-full" disabled={createTakeoffQuantityMutation.isPending} data-testid="button-submit-takeoff">
                       {createTakeoffQuantityMutation.isPending ? "Adding..." : "Add Takeoff Item"}
@@ -1538,151 +1119,10 @@ export default function DesignSystems() {
                   </form>
                 </DialogContent>
               </Dialog>
-              <Button variant="outline" onClick={() => { setSelectedBlueprintIds(new Set()); setIsImportTakeoffOpen(true); }} data-testid="button-import-takeoff">
+              <Button variant="outline" onClick={() => setIsUploadOpen(true)} data-testid="button-import-takeoff">
                 <Upload className="h-4 w-4 mr-2" />
                 Import from Plans
               </Button>
-              <Dialog open={isImportTakeoffOpen} onOpenChange={setIsImportTakeoffOpen}>
-                <DialogContent className="max-w-2xl">
-                  <DialogHeader>
-                    <DialogTitle>Import Takeoff from Plans</DialogTitle>
-                    <DialogDescription>
-                      Select one or more blueprints. Their measured takeoff items will be matched to your existing takeoff categories by name and added to this list.
-                    </DialogDescription>
-                  </DialogHeader>
-                  <form
-                    onSubmit={(e) => {
-                      e.preventDefault();
-                      const ids = Array.from(selectedBlueprintIds);
-                      if (ids.length === 0) {
-                        toast({ title: "No blueprints selected", description: "Pick at least one blueprint to import from.", variant: "destructive" });
-                        return;
-                      }
-                      importTakeoffFromBlueprintsMutation.mutate(ids);
-                    }}
-                    className="space-y-4"
-                  >
-                    {/* Select-all / clear-all header for the blueprint checkbox list. */}
-                    {blueprintsData.length > 0 && (
-                      <div className="flex items-center justify-between text-xs text-muted-foreground">
-                        <span data-testid="text-blueprint-selection-count">
-                          {selectedBlueprintIds.size} of {blueprintsData.length} selected
-                        </span>
-                        <div className="flex gap-3">
-                          <button
-                            type="button"
-                            className="hover:text-foreground underline-offset-2 hover:underline"
-                            onClick={() => setSelectedBlueprintIds(new Set(blueprintsData.map(b => b.id)))}
-                            data-testid="button-select-all-blueprints"
-                          >
-                            Select all
-                          </button>
-                          <button
-                            type="button"
-                            className="hover:text-foreground underline-offset-2 hover:underline"
-                            onClick={() => setSelectedBlueprintIds(new Set())}
-                            data-testid="button-clear-blueprints"
-                          >
-                            Clear
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                    <div className="rounded-md border max-h-80 overflow-y-auto divide-y" data-testid="list-blueprints">
-                      {blueprintsData.length === 0 ? (
-                        <div className="px-3 py-6 text-sm text-muted-foreground text-center">
-                          No blueprints available — upload one in Blueprint Hub first.
-                        </div>
-                      ) : (
-                        blueprintsData.map((b) => {
-                          const checked = selectedBlueprintIds.has(b.id);
-                          const uploaded = b.uploadedAt || b.createdAt;
-                          const uploadedLabel = uploaded
-                            ? new Date(uploaded).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" })
-                            : "Unknown date";
-                          const pages = b.pageCount ?? 1;
-                          return (
-                            <label
-                              key={b.id}
-                              htmlFor={`bp-${b.id}`}
-                              className="flex items-start gap-3 px-3 py-2.5 hover-elevate cursor-pointer"
-                              data-testid={`row-blueprint-${b.id}`}
-                            >
-                              <Checkbox
-                                id={`bp-${b.id}`}
-                                checked={checked}
-                                onCheckedChange={(v) => {
-                                  setSelectedBlueprintIds((prev) => {
-                                    const next = new Set(prev);
-                                    if (v) next.add(b.id); else next.delete(b.id);
-                                    return next;
-                                  });
-                                }}
-                                data-testid={`checkbox-blueprint-${b.id}`}
-                              />
-                              <div className="flex-1 min-w-0">
-                                <div className="text-sm font-medium truncate" data-testid={`text-blueprint-title-${b.id}`}>{b.title}</div>
-                                <div className="text-xs text-muted-foreground flex items-center gap-3 mt-0.5">
-                                  <span data-testid={`text-blueprint-uploaded-${b.id}`}>Uploaded {uploadedLabel}</span>
-                                  <span>·</span>
-                                  <span data-testid={`text-blueprint-pages-${b.id}`}>{pages} page{pages === 1 ? "" : "s"}</span>
-                                </div>
-                              </div>
-                            </label>
-                          );
-                        })
-                      )}
-                    </div>
-                    <Button
-                      type="submit"
-                      className="w-full"
-                      disabled={selectedBlueprintIds.size === 0 || importTakeoffFromBlueprintsMutation.isPending}
-                      data-testid="button-confirm-import-takeoff"
-                    >
-                      {importTakeoffFromBlueprintsMutation.isPending ? (
-                        <>
-                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                          Importing...
-                        </>
-                      ) : (
-                        <>
-                          <Upload className="h-4 w-4 mr-2" />
-                          Import from {selectedBlueprintIds.size || 0} Blueprint{selectedBlueprintIds.size === 1 ? "" : "s"}
-                        </>
-                      )}
-                    </Button>
-                  </form>
-                </DialogContent>
-              </Dialog>
-              <AlertDialog open={!!deletingTakeoff} onOpenChange={(open) => { if (!open) setDeletingTakeoff(null); }}>
-                <AlertDialogContent data-testid="dialog-confirm-delete-takeoff">
-                  <AlertDialogHeader>
-                    <AlertDialogTitle>Delete this takeoff item?</AlertDialogTitle>
-                    <AlertDialogDescription>
-                      {(() => {
-                        const cat = deletingTakeoff ? takeoffCategories.find(c => c.id === deletingTakeoff.categoryId) : null;
-                        const label = deletingTakeoff?.room?.trim() || cat?.name || "this item";
-                        return `"${label}" will be permanently removed from the takeoff. This action cannot be undone.`;
-                      })()}
-                    </AlertDialogDescription>
-                  </AlertDialogHeader>
-                  <AlertDialogFooter>
-                    <AlertDialogCancel data-testid="button-cancel-delete-takeoff">Cancel</AlertDialogCancel>
-                    <AlertDialogAction
-                      onClick={() => {
-                        if (deletingTakeoff) {
-                          deleteTakeoffMutation.mutate(deletingTakeoff.id);
-                          setDeletingTakeoff(null);
-                        }
-                      }}
-                      className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                      data-testid="button-confirm-delete-takeoff"
-                    >
-                      Delete
-                    </AlertDialogAction>
-                  </AlertDialogFooter>
-                </AlertDialogContent>
-              </AlertDialog>
               <Dialog open={isEditTakeoffOpen} onOpenChange={(open) => { setIsEditTakeoffOpen(open); if (!open) setEditingTakeoff(null); }}>
                 <DialogContent>
                   <DialogHeader>
@@ -1701,7 +1141,6 @@ export default function DesignSystems() {
                         quantity: formData.get("quantity") as string,
                         unit: formData.get("unit") as string,
                         unitCost: formData.get("unitCost") as string,
-                        notes: (formData.get("notes") as string) || "",
                       });
                     }} className="space-y-4">
                       <div className="grid grid-cols-2 gap-4">
@@ -1753,10 +1192,6 @@ export default function DesignSystems() {
                           <Input id="edit-unitCost" name="unitCost" type="number" step="0.01" defaultValue={editingTakeoff.unitCost || ""} placeholder="0.00" data-testid="input-edit-takeoff-cost" />
                         </div>
                       </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="edit-notes">Notes</Label>
-                        <Textarea id="edit-notes" name="notes" defaultValue={editingTakeoff.notes || ""} placeholder="Optional notes for this line item" rows={2} data-testid="input-edit-takeoff-notes" />
-                      </div>
                       <div className="flex gap-2">
                         <Button type="submit" className="flex-1" disabled={updateTakeoffMutation.isPending} data-testid="button-update-takeoff">
                           {updateTakeoffMutation.isPending ? "Updating..." : "Update Item"}
@@ -1770,29 +1205,7 @@ export default function DesignSystems() {
                 </DialogContent>
               </Dialog>
             </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <div className="relative flex-1 min-w-[200px] lg:flex-none lg:w-72">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                <Input
-                  type="text"
-                  placeholder="Search by item name, category, or trade..."
-                  className="pl-9 pr-9"
-                  value={takeoffSearch}
-                  onChange={(e) => setTakeoffSearch(e.target.value)}
-                  data-testid="input-takeoff-search"
-                />
-                {takeoffSearch && (
-                  <button
-                    type="button"
-                    onClick={() => setTakeoffSearch("")}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground rounded-md p-1 hover-elevate active-elevate-2"
-                    aria-label="Clear search"
-                    data-testid="button-clear-takeoff-search"
-                  >
-                    <X className="h-3.5 w-3.5" />
-                  </button>
-                )}
-              </div>
+            <div className="flex items-center gap-2">
               <Select value={takeoffFilter} onValueChange={setTakeoffFilter}>
                 <SelectTrigger className="w-40" data-testid="select-takeoff-filter">
                   <SelectValue placeholder="Filter by..." />
@@ -1808,84 +1221,24 @@ export default function DesignSystems() {
                 <Download className="h-4 w-4 mr-2" />
                 Export CSV
               </Button>
-              <Button
-                variant="outline"
-                onClick={() => {
-                  if (!takeoffQuantities || takeoffQuantities.length === 0) {
-                    toast({ title: "Nothing to export", description: "No takeoff items found.", variant: "destructive" });
-                    return;
-                  }
-                  // The PDF route is server-side; trigger a navigation so the
-                  // browser handles the download via Content-Disposition.
-                  window.location.href = "/api/takeoffs/export/pdf";
-                }}
-                data-testid="button-export-takeoff-pdf"
-              >
-                <Download className="h-4 w-4 mr-2" />
-                Export PDF
-              </Button>
             </div>
           </div>
 
-          <div className="grid grid-cols-5 gap-4">
-            {/* Render the FULL summary so cards stay visible even when a single
-                category is selected — clicking a card filters the table; clicking
-                the same card again clears the filter. */}
-            {(() => {
-              const grandTotal = takeoffSummary.reduce((s, c) => s + c.totalCost, 0);
-              return takeoffSummary.map(cat => {
-                const active = takeoffFilter === cat.id;
-                const pct = grandTotal > 0 ? (cat.totalCost / grandTotal) * 100 : 0;
-                return (
-                  <Card
-                    key={cat.id}
-                    className={`hover-elevate cursor-pointer transition-colors ${active ? "ring-2 ring-primary border-primary bg-primary/5" : ""}`}
-                    onClick={() => setTakeoffFilter(active ? "all" : cat.id)}
-                    data-testid={`card-takeoff-${cat.id}`}
-                    aria-pressed={active}
-                  >
-                    <CardHeader className="pb-2">
-                      <CardTitle className={`text-sm font-medium ${active ? "text-primary" : ""}`}>{cat.name}</CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                      <div className="text-2xl font-bold">{cat.totalQty.toLocaleString()} {cat.unit}</div>
-                      <p className="text-sm text-muted-foreground">{cat.count} line items</p>
-                      {cat.totalCost > 0 && (
-                        <>
-                          <p className="text-sm font-medium mt-1">${cat.totalCost.toLocaleString()}</p>
-                          <p className="text-xs text-muted-foreground" data-testid={`text-takeoff-pct-${cat.id}`}>
-                            {pct < 0.1 ? "<0.1" : pct.toFixed(pct < 10 ? 1 : 0)}% of project total
-                          </p>
-                        </>
-                      )}
-                    </CardContent>
-                  </Card>
-                );
-              });
-            })()}
-            {/* Grand-total card: always shows the project-wide totals across all
-                categories. Clicking it clears the active category filter. */}
-            <Card
-              className={`hover-elevate cursor-pointer border-primary/40 bg-primary/5 ${takeoffFilter === "all" ? "ring-2 ring-primary" : ""}`}
-              onClick={() => setTakeoffFilter("all")}
-              data-testid="card-takeoff-total-project"
-              aria-pressed={takeoffFilter === "all"}
-            >
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-primary">Total Project</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold" data-testid="text-takeoff-grand-total-cost">
-                  ${takeoffSummary.reduce((s, c) => s + c.totalCost, 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                </div>
-                <p className="text-sm text-muted-foreground" data-testid="text-takeoff-grand-total-count">
-                  {takeoffQuantities.length.toLocaleString()} {takeoffQuantities.length === 1 ? "line item" : "line items"}
-                </p>
-                <p className="text-xs text-muted-foreground mt-1">
-                  across {takeoffSummary.filter(c => c.count > 0).length} {takeoffSummary.filter(c => c.count > 0).length === 1 ? "category" : "categories"}
-                </p>
-              </CardContent>
-            </Card>
+          <div className="grid grid-cols-4 gap-4">
+            {filteredSummary.map(cat => (
+              <Card key={cat.id} className="hover-elevate cursor-pointer" onClick={() => setTakeoffFilter(cat.id)} data-testid={`card-takeoff-${cat.id}`}>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-medium">{cat.name}</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="text-2xl font-bold">{cat.totalQty.toLocaleString()} {cat.unit}</div>
+                  <p className="text-sm text-muted-foreground">{cat.count} line items</p>
+                  {cat.totalCost > 0 && (
+                    <p className="text-sm font-medium mt-1">${cat.totalCost.toLocaleString()}</p>
+                  )}
+                </CardContent>
+              </Card>
+            ))}
           </div>
 
           <Card>
@@ -1898,145 +1251,45 @@ export default function DesignSystems() {
                 <table className="w-full">
                   <thead className="bg-muted/50">
                     <tr>
-                      {([
-                        { key: "category", label: "Category", align: "left" },
-                        { key: "trade", label: "Trade", align: "left" },
-                        { key: "name", label: "Item Name", align: "left" },
-                        { key: "quantity", label: "Quantity", align: "right" },
-                        { key: "unit", label: "Unit", align: "left" },
-                        { key: "unitCost", label: "Unit Cost", align: "right" },
-                        { key: "extended", label: "Extended", align: "right" },
-                        { key: "notes", label: "Notes", align: "left" },
-                      ] as const).map(col => {
-                        const active = takeoffSortBy === col.key;
-                        const Indicator = active
-                          ? (takeoffSortDir === "asc" ? ChevronUp : ChevronDown)
-                          : ChevronsUpDown;
-                        return (
-                          <th
-                            key={col.key}
-                            className={`p-3 font-medium ${col.align === "right" ? "text-right" : "text-left"}`}
-                          >
-                            <button
-                              type="button"
-                              className={`inline-flex items-center gap-1 ${col.align === "right" ? "ml-auto" : ""} hover-elevate active-elevate-2 px-1.5 py-0.5 rounded select-none`}
-                              onClick={() => handleSortTakeoff(col.key)}
-                              aria-sort={active ? (takeoffSortDir === "asc" ? "ascending" : "descending") : "none"}
-                              data-testid={`sort-takeoff-${col.key}`}
-                            >
-                              <span>{col.label}</span>
-                              <Indicator className={`h-3.5 w-3.5 ${active ? "text-foreground" : "text-muted-foreground/60"}`} />
-                            </button>
-                          </th>
-                        );
-                      })}
+                      <th className="text-left p-3 font-medium">Category</th>
+                      <th className="text-left p-3 font-medium">Trade</th>
+                      <th className="text-right p-3 font-medium">Quantity</th>
+                      <th className="text-left p-3 font-medium">Unit</th>
+                      <th className="text-right p-3 font-medium">Unit Cost</th>
+                      <th className="text-right p-3 font-medium">Extended</th>
                       <th className="text-right p-3 font-medium">Actions</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {sortedTakeoffs.length > 0 ? sortedTakeoffs.map(item => {
+                    {filteredTakeoffs.length > 0 ? filteredTakeoffs.map(item => {
                       const cat = takeoffCategories.find(c => c.id === item.categoryId);
-                      // A row is "incomplete" when its unit cost is missing or
-                      // not a positive number — highlight in soft amber so
-                      // estimators can spot lines that still need pricing.
-                      const ucNum = parseFloat(item.unitCost ?? "");
-                      const missingUnitCost = !isFinite(ucNum) || ucNum <= 0;
                       return (
-                        <tr
-                          key={item.id}
-                          className={`border-t ${missingUnitCost ? "bg-amber-50/70 hover:bg-amber-100/70 dark:bg-amber-950/30 dark:hover:bg-amber-950/50" : ""}`}
-                          data-testid={`row-takeoff-${item.id}`}
-                          data-incomplete={missingUnitCost ? "true" : "false"}
-                          title={missingUnitCost ? "Missing unit cost — line item is incomplete" : undefined}
-                        >
-                          <td className="p-3">
-                            <span
-                              className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium ${categoryBadgeClass(cat?.name)}`}
-                              data-testid={`badge-category-${item.id}`}
-                            >
-                              {cat?.name || "Unknown"}
-                            </span>
-                          </td>
+                        <tr key={item.id} className="border-t">
+                          <td className="p-3 font-medium">{cat?.name || "Unknown"}</td>
                           <td className="p-3">
                             <Badge variant="outline">{cat?.trade || "Unknown"}</Badge>
                           </td>
-                          <td className="p-3 max-w-xs">
-                            <div className="truncate" title={item.room || "—"} data-testid={`text-takeoff-name-${item.id}`}>
-                              {item.room || <span className="text-muted-foreground">—</span>}
-                            </div>
-                          </td>
                           <td className="p-3 text-right">{parseFloat(item.quantity).toLocaleString()}</td>
                           <td className="p-3">{item.unit}</td>
-                          <td className="p-3 text-right">
-                            {item.unitCost && parseFloat(item.unitCost) > 0
-                              ? `$${parseFloat(item.unitCost).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-                              : "—"}
-                          </td>
+                          <td className="p-3 text-right">{item.unitCost ? `$${item.unitCost}` : "-"}</td>
                           <td className="p-3 text-right font-medium">
-                            {(() => {
-                              const ext = item.extendedCost != null && item.extendedCost !== ""
-                                ? parseFloat(item.extendedCost)
-                                : (parseFloat(item.quantity || "0") * parseFloat(item.unitCost || "0"));
-                              return ext > 0
-                                ? `$${ext.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-                                : "—";
-                            })()}
-                          </td>
-                          <td className="p-3 max-w-xs">
-                            <div className="truncate text-sm text-muted-foreground" title={item.notes || ""} data-testid={`text-takeoff-notes-${item.id}`}>
-                              {item.notes || <span className="text-muted-foreground/60">—</span>}
-                            </div>
+                            {item.extendedCost ? `$${parseFloat(item.extendedCost).toLocaleString()}` : "-"}
                           </td>
                           <td className="p-3 text-right">
-                            <div className="flex items-center justify-end gap-1">
-                              <Button size="sm" variant="ghost" onClick={() => { setEditingTakeoff(item); setIsEditTakeoffOpen(true); }} data-testid={`button-edit-takeoff-${item.id}`}>
-                                Edit
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                className="text-destructive hover:text-destructive"
-                                onClick={() => setDeletingTakeoff(item)}
-                                data-testid={`button-delete-takeoff-row-${item.id}`}
-                                aria-label="Delete takeoff item"
-                              >
-                                <Trash2 className="h-4 w-4" />
-                              </Button>
-                            </div>
+                            <Button size="sm" variant="ghost" onClick={() => { setEditingTakeoff(item); setIsEditTakeoffOpen(true); }} data-testid={`button-edit-takeoff-${item.id}`}>
+                              Edit
+                            </Button>
                           </td>
                         </tr>
                       );
                     }) : (
                       <tr className="border-t">
-                        <td colSpan={9} className="p-6 text-center text-muted-foreground">
+                        <td colSpan={7} className="p-6 text-center text-muted-foreground">
                           No takeoff items yet. Click "New Takeoff Item" to add quantities.
                         </td>
                       </tr>
                     )}
                   </tbody>
-                  {sortedTakeoffs.length > 0 && (
-                    <tfoot className="bg-muted/50 border-t font-medium">
-                      <tr className="sticky bottom-0">
-                        <td colSpan={6} className="p-3 text-sm" data-testid="text-takeoff-footer-count">
-                          {sortedTakeoffs.length} {sortedTakeoffs.length === 1 ? "item" : "items"}
-                          {takeoffFilter !== "all" && <span className="text-muted-foreground font-normal"> · filtered</span>}
-                        </td>
-                        <td className="p-3 text-right text-sm" data-testid="text-takeoff-footer-total">
-                          Total:&nbsp;
-                          {(() => {
-                            const total = sortedTakeoffs.reduce((sum, item) => {
-                              const ext = item.extendedCost != null && item.extendedCost !== ""
-                                ? parseFloat(item.extendedCost)
-                                : (parseFloat(item.quantity || "0") * parseFloat(item.unitCost || "0"));
-                              return sum + (isFinite(ext) ? ext : 0);
-                            }, 0);
-                            return `$${total.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-                          })()}
-                        </td>
-                        <td colSpan={2} className="p-3" />
-                      </tr>
-                    </tfoot>
-                  )}
                 </table>
               </div>
             </CardContent>
@@ -2046,11 +1299,13 @@ export default function DesignSystems() {
         <TabsContent value="systems" className="space-y-6">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <Button variant="outline" onClick={() => setIsAddSystemOpen(true)} data-testid="button-add-system">
-                <Plus className="h-4 w-4 mr-2" />
-                Add System
-              </Button>
               <Dialog open={isAddSystemOpen} onOpenChange={setIsAddSystemOpen}>
+                <DialogTrigger asChild>
+                  <Button variant="outline" data-testid="button-add-system">
+                    <Plus className="h-4 w-4 mr-2" />
+                    Add System
+                  </Button>
+                </DialogTrigger>
                 <DialogContent>
                   <DialogHeader>
                     <DialogTitle>Add Building System</DialogTitle>
@@ -2325,20 +1580,12 @@ export default function DesignSystems() {
                                 <tbody>
                                   {systemTakeoffs.map(item => {
                                     const cat = takeoffCategories.find(c => c.id === item.categoryId);
-                                    const qty = parseFloat(String(item.quantity ?? "0")) || 0;
-                                    const unitCost = parseFloat(String(item.unitCost ?? "0")) || 0;
-                                    const extendedNum = item.extendedCost != null && item.extendedCost !== ""
-                                      ? parseFloat(String(item.extendedCost))
-                                      : qty * unitCost;
-                                    const display = isFinite(extendedNum) && extendedNum > 0
-                                      ? `$${extendedNum.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-                                      : "—";
                                     return (
                                       <tr key={item.id} className="border-t">
                                         <td className="p-2">{cat?.name || "Unknown"}</td>
                                         <td className="p-2 text-right">{item.quantity}</td>
                                         <td className="p-2">{item.unit}</td>
-                                        <td className="p-2 text-right" data-testid={`text-material-cost-${item.id}`}>{display}</td>
+                                        <td className="p-2 text-right">{item.extendedCost ? `$${item.extendedCost}` : "-"}</td>
                                       </tr>
                                     );
                                   })}
@@ -2354,54 +1601,15 @@ export default function DesignSystems() {
                       )}
                     </TabsContent>
                     <TabsContent value="devices" className="p-4">
-                      {selectedSystem ? (() => {
-                        const sysRecord = buildingSystems.find(s => s.systemType === selectedSystem.id);
-                        const devices = sysRecord
-                          ? systemDevicesAll.filter(d => d.systemId === sysRecord.id)
-                          : [];
-                        return (
-                          <div className="space-y-3">
-                            <div className="flex items-center justify-between">
-                              <h4 className="font-medium">Devices for {selectedSystem.label}</h4>
-                              <Button variant="outline" size="sm" onClick={() => { generateDeliverableMutation.mutate("device_schedule"); }} disabled={generatingDeliverable === "device_schedule"} data-testid="button-generate-device-schedule">
-                                {generatingDeliverable === "device_schedule" ? "Generating..." : "Generate Device Schedule"}
-                              </Button>
-                            </div>
-                            {devices.length === 0 ? (
-                              <p className="text-muted-foreground text-sm" data-testid="text-no-devices">
-                                No devices yet. Click "Generate Device Schedule" to seed standard devices for {selectedSystem.label}.
-                              </p>
-                            ) : (
-                              <div className="border rounded-lg overflow-hidden">
-                                <table className="w-full text-sm">
-                                  <thead className="bg-muted/50">
-                                    <tr>
-                                      <th className="text-left p-2">Type</th>
-                                      <th className="text-left p-2">Manufacturer</th>
-                                      <th className="text-left p-2">Model</th>
-                                      <th className="text-left p-2">Location</th>
-                                      <th className="text-right p-2">Qty</th>
-                                      <th className="text-right p-2">Installed</th>
-                                    </tr>
-                                  </thead>
-                                  <tbody>
-                                    {devices.map(d => (
-                                      <tr key={d.id} className="border-t" data-testid={`row-device-${d.id}`}>
-                                        <td className="p-2 capitalize">{d.deviceType.replace(/_/g, " ")}</td>
-                                        <td className="p-2">{d.manufacturer || "—"}</td>
-                                        <td className="p-2">{d.model || "—"}</td>
-                                        <td className="p-2">{d.location || "—"}</td>
-                                        <td className="p-2 text-right">{d.quantity}</td>
-                                        <td className="p-2 text-right">{d.installedCount ?? 0}</td>
-                                      </tr>
-                                    ))}
-                                  </tbody>
-                                </table>
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })() : (
+                      {selectedSystem ? (
+                        <div className="space-y-3">
+                          <h4 className="font-medium">Devices for {selectedSystem.label}</h4>
+                          <p className="text-muted-foreground text-sm">Device inventory and installation tracking for {selectedSystem.label} system</p>
+                          <Button variant="outline" size="sm" onClick={() => { generateDeliverableMutation.mutate("device_schedule"); }} disabled={generatingDeliverable === "device_schedule"} data-testid="button-generate-device-schedule">
+                            {generatingDeliverable === "device_schedule" ? "Generating..." : "Generate Device Schedule"}
+                          </Button>
+                        </div>
+                      ) : (
                         <p className="text-muted-foreground">Select a system to view devices</p>
                       )}
                     </TabsContent>
@@ -2495,25 +1703,14 @@ export default function DesignSystems() {
               <h2 className="text-xl font-semibold">Generated Deliverables</h2>
               <p className="text-muted-foreground">Auto-generated documents from project data</p>
             </div>
-            <div className="flex items-center gap-2">
-              <Button
-                variant="secondary"
-                onClick={() => askHerbieAutoDocMutation.mutate()}
-                disabled={askHerbieAutoDocMutation.isPending}
-                data-testid="button-ask-herbie-autodoc"
-              >
-                <Bot className={`h-4 w-4 mr-2 ${askHerbieAutoDocMutation.isPending ? "animate-pulse" : ""}`} />
-                {askHerbieAutoDocMutation.isPending ? "Herbie working..." : "Ask Herbie"}
-              </Button>
-              <Button 
-                onClick={() => generateAllDeliverablesMutation.mutate()} 
-                disabled={generateAllDeliverablesMutation.isPending}
-                data-testid="button-generate-all"
-              >
-                <RefreshCw className={`h-4 w-4 mr-2 ${generateAllDeliverablesMutation.isPending ? "animate-spin" : ""}`} />
-                {generateAllDeliverablesMutation.isPending ? "Generating..." : "Regenerate All"}
-              </Button>
-            </div>
+            <Button 
+              onClick={() => generateAllDeliverablesMutation.mutate()} 
+              disabled={generateAllDeliverablesMutation.isPending}
+              data-testid="button-generate-all"
+            >
+              <RefreshCw className={`h-4 w-4 mr-2 ${generateAllDeliverablesMutation.isPending ? "animate-spin" : ""}`} />
+              {generateAllDeliverablesMutation.isPending ? "Generating..." : "Regenerate All"}
+            </Button>
           </div>
 
           <div className="grid grid-cols-3 gap-4">
@@ -2526,53 +1723,40 @@ export default function DesignSystems() {
               { type: "rack_elevation", title: "Rack Elevations", icon: Building2, description: "Data/AV rack layouts" },
               { type: "as_built", title: "As-Built Sets", icon: FileText, description: "Record drawings" },
               { type: "owner_handoff", title: "Owner Handoff", icon: FileText, description: "Closeout documentation" },
-              { type: "smart_building_config", title: "Smart Building Config", icon: Brain, description: "BACnet/controls exports" },
-            ].map(del => {
-              const herbieBusy = askHerbieDeliverableMutation.isPending && askHerbieDeliverableMutation.variables === del.type;
-              return (
-                <Card key={del.type} className="hover-elevate">
-                  <CardHeader className="pb-2">
-                    <div className="flex items-center gap-2">
-                      <del.icon className="h-5 w-5 text-muted-foreground" />
-                      <CardTitle className="text-base">{del.title}</CardTitle>
-                    </div>
-                  </CardHeader>
-                  <CardContent className="space-y-3">
-                    <p className="text-sm text-muted-foreground">{del.description}</p>
-                    <div className="flex items-center gap-2">
-                      <Button 
-                        size="sm" 
-                        variant="outline" 
-                        className="flex-1" 
-                        onClick={() => generateDeliverableMutation.mutate(del.type)}
-                        disabled={generatingDeliverable === del.type}
-                        data-testid={`button-generate-${del.type}`}
-                      >
-                        {generatingDeliverable === del.type ? "Generating..." : "Generate"}
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        title="Ask Herbie to generate + enrich"
-                        onClick={() => askHerbieDeliverableMutation.mutate(del.type)}
-                        disabled={herbieBusy}
-                        data-testid={`button-ask-herbie-${del.type}`}
-                      >
-                        <Wand2 className={`h-4 w-4 ${herbieBusy ? "animate-pulse text-primary" : ""}`} />
-                      </Button>
-                      <Button 
-                        size="sm" 
-                        variant="ghost" 
-                        onClick={() => downloadDeliverable(del.type)}
-                        data-testid={`button-download-${del.type}`}
-                      >
-                        <Download className="h-4 w-4" />
-                      </Button>
-                    </div>
-                  </CardContent>
-                </Card>
-              );
-            })}
+              { type: "smart_config", title: "Smart Building Config", icon: Brain, description: "BACnet/controls exports" },
+            ].map(del => (
+              <Card key={del.type} className="hover-elevate">
+                <CardHeader className="pb-2">
+                  <div className="flex items-center gap-2">
+                    <del.icon className="h-5 w-5 text-muted-foreground" />
+                    <CardTitle className="text-base">{del.title}</CardTitle>
+                  </div>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <p className="text-sm text-muted-foreground">{del.description}</p>
+                  <div className="flex items-center gap-2">
+                    <Button 
+                      size="sm" 
+                      variant="outline" 
+                      className="flex-1" 
+                      onClick={() => generateDeliverableMutation.mutate(del.type)}
+                      disabled={generatingDeliverable === del.type}
+                      data-testid={`button-generate-${del.type}`}
+                    >
+                      {generatingDeliverable === del.type ? "Generating..." : "Generate"}
+                    </Button>
+                    <Button 
+                      size="sm" 
+                      variant="ghost" 
+                      onClick={() => downloadDeliverable(del.type)}
+                      data-testid={`button-download-${del.type}`}
+                    >
+                      <Download className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
           </div>
         </TabsContent>
       </Tabs>

@@ -1,4 +1,3 @@
-// Build marker: deploy retrigger 2026-04-25 (post import.meta polyfill)
 import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
@@ -8,10 +7,11 @@ import { worker } from "./queue/worker";
 import { websocketService } from "./services/websocket.service";
 import { validateBidJacketTaxonomy } from "@shared/schema";
 import { sql } from "drizzle-orm";
+import { lienWaiverRouter } from "./lien-waiver-routes";
+import { takeoffItemsRouter } from "./takeoff-items-routes";
+import { deliverableGeneratorRouter } from "./deliverable-generator-routes";
+import { documentContentRouter } from "./document-content-routes";
 import { bidJacketAutoFillRouter } from "./bid-jacket-auto-fill-routes.v2";
-import { samDocImportRouter } from "./routes-sam-doc-import";
-import { subRecommendationRouter } from "./routes-sub-recommendations";
-
 validateBidJacketTaxonomy();
 
 const app = express();
@@ -72,11 +72,12 @@ app.use((req, res, next) => {
 
 (async () => {
   await registerRoutes(httpServer, app);
-
+    app.use("/api/lien-waivers", lienWaiverRouter);
+        app.use(takeoffItemsRouter);
+    app.use(deliverableGeneratorRouter);
+  app.use(documentContentRouter);
   // Phase 2 v2.1 — POST /api/bid-projects/:bidProjectId/auto-fill-jacket
   app.use(bidJacketAutoFillRouter);
-  app.use(samDocImportRouter);
-  app.use(subRecommendationRouter);
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
@@ -136,18 +137,12 @@ app.use((req, res, next) => {
     }
   });
 
+  const forceViteDev = process.env.FORCE_VITE_DEV === "true";
   const isProd = process.env.NODE_ENV === "production";
-  // FORCE_VITE_DEV is honored ONLY when NODE_ENV !== "production".
-  // Production must always serve the built bundle from dist/public —
-  // never the vite dev middleware. This guards against env leakage
-  // (e.g. .replit [userenv.shared]) accidentally re-enabling dev mode
-  // in the deployed app.
-  const forceViteDev =
-    !isProd && process.env.FORCE_VITE_DEV === "true";
 
   const isReplit = Boolean(process.env.REPL_ID);
 
-  if (isProd) {
+  if (isProd && !forceViteDev) {
     app.get("/__mode", (_req, res) => res.json({ mode: "static" }));
     serveStatic(app);
     log("STATIC mode: serving dist/public", "ui");
@@ -175,7 +170,7 @@ app.use((req, res, next) => {
     app.use("/{*path}", async (req, res, next) => {
       try {
         const clientTemplate = path.resolve(
-          import.meta.dirname,
+          process.cwd(),
           "..",
           "client",
           "index.html",
@@ -256,40 +251,14 @@ app.use((req, res, next) => {
         console.error("Failed to seed bid jacket data:", e);
       }
 
-      try {
-        const { db: backfillDb } = await import("./db");
-        const { sql: backfillSql } = await import("drizzle-orm");
-        const result: any = await backfillDb.execute(backfillSql`
-          UPDATE takeoff_quantities
-          SET unit_cost = CASE
-            WHEN unit = 'CY' THEN 180.00
-            WHEN unit = 'LF' THEN 8.00
-            WHEN unit = 'SF' THEN 2.50
-            WHEN unit = 'EA' THEN 45.00
-            ELSE 25.00
-          END
-          WHERE unit_cost IS NULL AND tenant_id = 'blackhawk-default'
-        `);
-        const rows = result?.rowCount ?? result?.rows?.length ?? 0;
-        if (rows > 0) {
-          log(`Backfilled unit_cost on ${rows} takeoff_quantities row(s)`, "takeoff-heal");
+              // Seed 50-state lien waiver templates (200 total: 50 states x 4 types)
+        try {
+          const { seedLienWaiverTemplates } = await import("./lien-waivers");
+          await seedLienWaiverTemplates("blackhawk-default");
+          log("Lien waiver templates seeded (200 templates across 50 states)", "lien-waivers");
+        } catch (e) {
+          console.error("Failed to seed lien waiver templates:", e);
         }
-
-        const extResult: any = await backfillDb.execute(backfillSql`
-          UPDATE takeoff_quantities
-          SET extended_cost = quantity * unit_cost
-          WHERE extended_cost IS NULL
-            AND quantity IS NOT NULL
-            AND unit_cost IS NOT NULL
-            AND tenant_id = 'blackhawk-default'
-        `);
-        const extRows = extResult?.rowCount ?? extResult?.rows?.length ?? 0;
-        if (extRows > 0) {
-          log(`Backfilled extended_cost on ${extRows} takeoff_quantities row(s)`, "takeoff-heal");
-        }
-      } catch (e) {
-        console.error("Failed to backfill takeoff costs:", e);
-      }
 
       // Start HERBIE autonomous processing engine
       log("Starting HERBIE autonomous processing engine...", "herbie");
@@ -301,61 +270,6 @@ app.use((req, res, next) => {
       // Start the scheduler (enqueues jobs on schedule)
       await scheduler.start();
       log("Scheduler started - HERBIE is now active", "herbie");
-
-      // Lien Waiver reminder monitor — fires due reminders every 60s.
-      // Kept lightweight (single setInterval) instead of adding a JobType
-      // to avoid mutating the queue enum & touching tenant loops.
-      try {
-        const { processDueReminders } = await import(
-          "./services/lien-waiver.service"
-        );
-        // In-flight guard prevents the next 60s setInterval tick from
-        // starting before the previous one has finished. Without this,
-        // a slow tick (e.g. DB backpressure) can stack overlapping
-        // executions and process the same reminder twice. Combined with
-        // the atomic `markReminderSent` claim in the service, this gives
-        // us belt-and-suspenders safety against duplicate firing.
-        let reminderTickInFlight = false;
-        const tickReminders = async () => {
-          if (reminderTickInFlight) return;
-          reminderTickInFlight = true;
-          try {
-            const result = await processDueReminders();
-            if (result.processed > 0 || result.skipped > 0) {
-              log(
-                `Lien waiver reminders: ${result.processed} sent, ${result.skipped} skipped`,
-                "lien-waiver",
-              );
-            }
-          } catch (e) {
-            console.error("[lien-waiver] reminder tick failed:", e);
-          } finally {
-            reminderTickInFlight = false;
-          }
-        };
-        setInterval(tickReminders, 60_000);
-        // First tick on a small delay so the rest of startup finishes.
-        setTimeout(tickReminders, 5_000);
-        log("Lien waiver reminder monitor started (60s interval)", "lien-waiver");
-
-        // Seed templates idempotently on boot so /sign/lien-waiver/:token
-        // can render the statutory body even on a fresh database.
-        const { seedLienWaiverTemplates } = await import(
-          "./services/lien-waiver-templates.seed"
-        );
-        seedLienWaiverTemplates()
-          .then((r) =>
-            log(
-              `Lien waiver templates seeded (inserted=${r.inserted}, skipped=${r.skipped}, total=${r.totalCombinations})`,
-              "lien-waiver",
-            ),
-          )
-          .catch((e) =>
-            console.error("[lien-waiver] template seed failed:", e),
-          );
-      } catch (e) {
-        console.error("[lien-waiver] failed to start reminder monitor:", e);
-      }
     },
   );
 })();

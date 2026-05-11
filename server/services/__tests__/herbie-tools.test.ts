@@ -91,20 +91,24 @@ function reset() {
 }
 
 describe("herbie-tools — specs", () => {
-  it("registers all 11 HERBIE.md tools", () => {
+  it("registers the full HERBIE.md tool surface (incl. jacket tools)", () => {
     const names = HERBIE_TOOL_SPECS.map((s) => s.name).sort();
     expect(names).toEqual(
       [
+        "build_bid_jacket",
         "create_rfi",
         "create_submittal",
         "draft_message",
+        "ensure_bid_jacket_canonical",
         "extract_fields",
+        "file_bid_jacket_artifacts",
         "flag_for_review",
         "get_project_status",
         "log_daily",
         "read_document",
         "record_decision",
         "record_fact",
+        "route_document_to_jacket",
         "search_project",
       ].sort(),
     );

@@ -1,609 +1,217 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState, useRef, useCallback } from "react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
-import { apiRequest, queryClient } from "@/lib/queryClient";
 import {
-  Mic, CloudSun, Users, ListChecks, AlertTriangle, ShieldAlert,
-  CheckCircle2, RefreshCcw, Clock, FolderOpen, Sparkles, Square,
+  Mic, Upload, Play, Square, CheckCircle2, AlertTriangle,
+  Clock, CloudSun, HardHat, Users, Wrench, Package,
+  FileText, ShieldAlert, RefreshCcw,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
-import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
-import {
-  Dialog, DialogContent, DialogDescription, DialogFooter,
-  DialogHeader, DialogTitle,
-} from "@/components/ui/dialog";
-import { useProjectContext } from "@/nav/project-context";
 
-interface DailyLogRow {
-  id: string;
-  logDate: string;
-  source: string;
-  status: string;
-  weatherJson?: { summary?: string; conditions?: string; description?: string; temperature?: string | number } | null;
-  workPerformedJson?: string[] | null;
-  laborJson?: Array<{ trade?: string; count?: number; hours?: number }> | null;
-  issuesJson?: string[] | null;
-  safetyNotesJson?: string[] | null;
+interface LaborEntry { trade?: string; count?: number; hours?: number; }
+interface MaterialEntry { item?: string; qty?: string; }
+interface DailyLogDraft {
+  weather?: string | null;
+  workPerformed?: string[];
+  labor?: LaborEntry[];
+  equipment?: string[];
+  materials?: MaterialEntry[];
+  issues?: string[];
+  safetyNotes?: string[];
+  visitors?: string[];
   notes?: string | null;
-  createdAt?: string;
+}
+interface VoiceLogResult {
+  dailyLogId: string;
+  transcript: string;
+  draft: DailyLogDraft;
+  stubbed: { transcribe: boolean; extract: boolean };
 }
 
-interface ManualLogFormState {
-  weather: string;
-  crew_count: string;
-  tasks_completed: string;
-  issues: string;
-  safety_notes: string;
-}
-
-const EMPTY_FORM: ManualLogFormState = {
-  weather: "",
-  crew_count: "",
-  tasks_completed: "",
-  issues: "",
-  safety_notes: "",
-};
-
-function fmtDate(d: string | Date) {
+function fmtDate(d: Date | string) {
   return new Date(d).toLocaleDateString("en-US", {
     weekday: "short", month: "short", day: "numeric",
   });
 }
 
-function relTime(d?: string) {
-  if (!d) return "";
-  const ms = Date.now() - new Date(d).getTime();
-  const min = Math.floor(ms / 60000);
-  if (min < 1) return "just now";
-  if (min < 60) return `${min}m ago`;
-  const h = Math.floor(min / 60);
-  if (h < 24) return `${h}h ago`;
-  const day = Math.floor(h / 24);
-  return `${day}d ago`;
-}
-
-function crewSum(labor?: DailyLogRow["laborJson"] | { crews?: number; totalHours?: number } | null): number {
-  if (!labor) return 0;
-  if (Array.isArray(labor)) return labor.reduce((s, l) => s + (Number(l?.count) || 0), 0);
-  if (typeof (labor as any).crews === "number") return (labor as any).crews;
-  return 0;
-}
-
-function weatherText(w?: DailyLogRow["weatherJson"]): string | null {
-  if (!w) return null;
-  const parts = [w.summary, w.conditions, w.description].filter(Boolean);
-  if (parts.length === 0 && w.temperature == null) return null;
-  const text = parts.join(" — ");
-  if (w.temperature != null) {
-    const t = String(w.temperature);
-    return text ? `${text} (${t})` : t;
-  }
-  return text || null;
+function RecordingPulse() {
+  return (
+    <span className="relative flex h-3 w-3">
+      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75" />
+      <span className="relative inline-flex rounded-full h-3 w-3 bg-red-500" />
+    </span>
+  );
 }
 
 export default function VoiceDailyLogPage() {
   const { toast } = useToast();
   const qc = useQueryClient();
-  const { selectedProjectId, selectedProjectName, selectProject } = useProjectContext();
-  const urlProjectId = useMemo(() => {
-    if (typeof window === "undefined") return null;
-    const sp = new URLSearchParams(window.location.search);
-    return sp.get("projectId");
-  }, []);
-  const projectId = urlProjectId ?? selectedProjectId;
+  const projectId = "demo-project";
+  const [recording, setRecording] = useState(false);
+  const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
+  const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<BlobPart[]>([]);
+  const [result, setResult] = useState<VoiceLogResult | null>(null);
 
-  const [voiceOpen, setVoiceOpen] = useState(false);
-  const [voiceRecording, setVoiceRecording] = useState(false);
-  const [voiceProcessing, setVoiceProcessing] = useState(false);
-  const [voiceError, setVoiceError] = useState<string | null>(null);
-  const [voiceTranscript, setVoiceTranscript] = useState<string | null>(null);
-  const recorderRef = useRef<MediaRecorder | null>(null);
-  const recorderChunksRef = useRef<BlobPart[]>([]);
-  const recorderStreamRef = useRef<MediaStream | null>(null);
-  const [form, setForm] = useState<ManualLogFormState>(EMPTY_FORM);
-
-  const logsQuery = useQuery<DailyLogRow[]>({
-    queryKey: ["/api/projects", projectId, "daily-logs"],
-    enabled: !!projectId,
-  });
-
-  const hasGoodName = selectedProjectName && selectedProjectName !== "Project" && selectedProjectId === projectId;
-  const needsProjectFetch = !!projectId && !hasGoodName;
-  const projectQuery = useQuery<{ id: string; name: string; projectNumber?: string }>({
-    queryKey: ["/api/projects", projectId],
-    enabled: needsProjectFetch,
-  });
-  useEffect(() => {
-    const fetched = projectQuery.data;
-    if (fetched && fetched.id === projectId && fetched.name && fetched.name !== selectedProjectName) {
-      selectProject(fetched.id, fetched.name);
-    }
-  }, [projectQuery.data, projectId, selectedProjectName, selectProject]);
-  const displayProjectName =
-    (selectedProjectId === projectId ? selectedProjectName : null) ??
-    projectQuery.data?.name ??
-    "Selected project";
-
-  const submitMutation = useMutation({
-    mutationFn: async (payload: ManualLogFormState) => {
-      const res = await apiRequest(
-        "POST",
-        `/api/projects/${projectId}/daily-logs`,
-        payload,
-      );
-      return res.json();
+  const uploadMutation = useMutation({
+    mutationFn: async (blob: Blob) => {
+      const form = new FormData();
+      form.append("audio", blob, "memo.webm");
+      form.append("logDate", new Date().toISOString().slice(0, 10));
+      const res = await fetch(`/api/projects/${projectId}/daily-logs/voice`, {
+        method: "POST", body: form,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err?.error ?? "Upload failed");
+      }
+      return res.json() as Promise<VoiceLogResult>;
     },
-    onSuccess: () => {
-      toast({ title: "Daily log saved", description: "Today's entry was recorded." });
-      setForm(EMPTY_FORM);
-      qc.invalidateQueries({ queryKey: ["/api/projects", projectId, "daily-logs"] });
+    onSuccess: (data) => {
+      setResult(data);
+      setAudioBlob(null);
+      setAudioUrl(null);
+      qc.invalidateQueries({ queryKey: ["daily-logs", projectId] });
+      toast({
+        title: data.stubbed.transcribe ? "Log saved (stub mode)" : "Voice log processed",
+        description: data.stubbed.transcribe
+          ? "No Whisper key configured."
+          : data.transcript.slice(0, 80),
+      });
     },
     onError: (e: Error) => {
-      toast({ title: "Save failed", description: e.message, variant: "destructive" });
+      toast({ title: "Upload failed", description: e.message, variant: "destructive" });
     },
   });
 
-  const onSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!projectId) return;
-    const hasContent =
-      form.weather.trim() ||
-      form.crew_count.trim() ||
-      form.tasks_completed.trim() ||
-      form.issues.trim() ||
-      form.safety_notes.trim();
-    if (!hasContent) {
-      toast({ title: "Add at least one field", variant: "destructive" });
-      return;
-    }
-    submitMutation.mutate(form);
-  };
-
-  const stopRecorderTracks = () => {
-    recorderStreamRef.current?.getTracks().forEach((t) => t.stop());
-    recorderStreamRef.current = null;
-    recorderRef.current = null;
-    recorderChunksRef.current = [];
-  };
-
-  const startVoiceRecording = async () => {
-    setVoiceError(null);
-    if (typeof window === "undefined" || !navigator.mediaDevices?.getUserMedia) {
-      setVoiceError("Microphone API not available in this browser.");
-      return;
-    }
+  const startRecording = useCallback(async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      recorderStreamRef.current = stream;
-      recorderChunksRef.current = [];
-      const recorder = new MediaRecorder(stream);
-      recorderRef.current = recorder;
-      recorder.ondataavailable = (e) => {
-        if (e.data && e.data.size > 0) recorderChunksRef.current.push(e.data);
+      const mr = new MediaRecorder(stream, { mimeType: "audio/webm" });
+      chunksRef.current = [];
+      mr.ondataavailable = (e) => chunksRef.current.push(e.data);
+      mr.onstop = () => {
+        const blob = new Blob(chunksRef.current, { type: "audio/webm" });
+        setAudioBlob(blob);
+        setAudioUrl(URL.createObjectURL(blob));
+        stream.getTracks().forEach((t) => t.stop());
       };
-      recorder.onstop = () => {
-        const blob = new Blob(recorderChunksRef.current, {
-          type: recorder.mimeType || "audio/webm",
-        });
-        stopRecorderTracks();
-        void uploadVoiceMemo(blob);
-      };
-      recorder.start();
-      setVoiceRecording(true);
-    } catch (err) {
-      setVoiceError(
-        err instanceof Error
-          ? err.message
-          : "Microphone permission denied or unavailable.",
-      );
-      stopRecorderTracks();
+      mr.start();
+      mediaRecorderRef.current = mr;
+      setRecording(true);
+    } catch {
+      toast({ title: "Microphone access denied", variant: "destructive" });
     }
+  }, [toast]);
+
+  const stopRecording = useCallback(() => {
+    mediaRecorderRef.current?.stop();
+    setRecording(false);
+  }, []);
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setAudioBlob(file);
+    setAudioUrl(URL.createObjectURL(file));
   };
-
-  const stopVoiceRecording = () => {
-    if (recorderRef.current && recorderRef.current.state !== "inactive") {
-      recorderRef.current.stop();
-    }
-    setVoiceRecording(false);
-  };
-
-  const uploadVoiceMemo = async (blob: Blob) => {
-    if (!projectId) return;
-    setVoiceProcessing(true);
-    try {
-      const fd = new FormData();
-      fd.append("audio", blob, "memo.webm");
-      fd.append("logDate", new Date().toISOString());
-      const res = await fetch(
-        `/api/projects/${projectId}/daily-logs/voice`,
-        { method: "POST", body: fd, credentials: "include" },
-      );
-      if (!res.ok) {
-        const txt = await res.text().catch(() => "");
-        throw new Error(txt || `Upload failed (${res.status})`);
-      }
-      const data = await res.json();
-      const structured = data?.structured ?? {};
-      setForm({
-        weather: typeof structured.weather === "string" ? structured.weather : "",
-        crew_count: Array.isArray(structured.labor)
-          ? String(
-              structured.labor.reduce(
-                (s: number, l: any) => s + (Number(l?.count) || 0),
-                0,
-              ) || "",
-            )
-          : "",
-        tasks_completed: Array.isArray(structured.workPerformed)
-          ? structured.workPerformed.join("\n")
-          : "",
-        issues: Array.isArray(structured.issues)
-          ? structured.issues.join("\n")
-          : "",
-        safety_notes: Array.isArray(structured.safetyNotes)
-          ? structured.safetyNotes.join("\n")
-          : "",
-      });
-      setVoiceTranscript(typeof data?.transcript === "string" ? data.transcript : null);
-      setVoiceOpen(false);
-      qc.invalidateQueries({ queryKey: ["/api/projects", projectId, "daily-logs"] });
-      toast({
-        title: data?.stubbed?.transcribe ? "Transcript drafted (stub mode)" : "Transcript loaded",
-        description: "Review the pre-filled form below, then save.",
-      });
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "Upload failed";
-      setVoiceError(msg);
-      toast({ title: "Voice upload failed", description: msg, variant: "destructive" });
-    } finally {
-      setVoiceProcessing(false);
-    }
-  };
-
-  // Cleanup: ensure no dangling mic stream if component unmounts mid-record.
-  useEffect(() => () => stopRecorderTracks(), []);
-
-  if (!projectId) {
-    return (
-      <div className="p-6 max-w-3xl mx-auto" data-testid="page-voice-daily-log">
-        <div className="space-y-2 mb-6">
-          <h1 className="text-2xl font-semibold tracking-tight">Voice Daily Log</h1>
-          <p className="text-sm text-muted-foreground">
-            Capture today's field activity by voice or manual entry.
-          </p>
-        </div>
-        <Card data-testid="empty-no-project">
-          <CardContent className="p-10 text-center space-y-3">
-            <FolderOpen className="h-10 w-10 mx-auto text-muted-foreground/50" />
-            <p className="text-sm font-medium">No project selected</p>
-            <p className="text-xs text-muted-foreground">
-              Pick a project from the sidebar's <span className="font-semibold">Project Context</span> selector to log field activity.
-            </p>
-          </CardContent>
-        </Card>
-      </div>
-    );
-  }
-
-  const logs = logsQuery.data ?? [];
 
   return (
-    <div className="p-6 space-y-6 max-w-4xl mx-auto" data-testid="page-voice-daily-log">
-      <div className="flex items-start justify-between gap-3 flex-wrap">
+    <div className="p-6 space-y-6 max-w-3xl mx-auto">
+      <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Voice Daily Log</h1>
-          <p className="text-sm text-muted-foreground mt-1" data-testid="text-project-name">
-            {displayProjectName} — capture today's field activity.
+          <p className="text-sm text-muted-foreground mt-1">
+            Record a voice memo — Herbie transcribes and structures it automatically.
           </p>
         </div>
-        <Badge variant="outline" className="text-xs gap-1" data-testid="badge-today">
+        <Badge variant="outline" className="text-xs gap-1">
           <Clock className="h-3 w-3" />{fmtDate(new Date())}
         </Badge>
       </div>
 
-      <Card className="border-primary/30 bg-primary/5">
-        <CardContent className="p-6 flex items-center justify-between gap-4">
-          <div className="space-y-1">
-            <p className="text-sm font-semibold flex items-center gap-2">
-              <Sparkles className="h-4 w-4 text-primary" />
-              Hands-free capture
-            </p>
-            <p className="text-xs text-muted-foreground max-w-md">
-              Tap to record a voice memo from the field — Herbie transcribes and pre-fills the form below.
-            </p>
-          </div>
-          <Button
-            size="lg"
-            className="gap-2 h-14 px-6 text-base"
-            onClick={() => setVoiceOpen(true)}
-            data-testid="button-record-voice-memo"
-          >
-            <Mic className="h-5 w-5" />
-            Record Voice Memo
-          </Button>
-        </CardContent>
-      </Card>
-
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Manual Entry</CardTitle>
+          <CardTitle className="text-base">Record or Upload Memo</CardTitle>
         </CardHeader>
-        <CardContent>
-          <form onSubmit={onSubmit} className="space-y-4" data-testid="form-manual-entry">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="space-y-1.5">
-                <Label htmlFor="weather" className="flex items-center gap-1.5 text-xs">
-                  <CloudSun className="h-3.5 w-3.5 text-sky-500" /> Weather
-                </Label>
-                <Input
-                  id="weather"
-                  placeholder="e.g., Clear, 68°F"
-                  value={form.weather}
-                  onChange={(e) => setForm({ ...form, weather: e.target.value })}
-                  data-testid="input-weather"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="crew_count" className="flex items-center gap-1.5 text-xs">
-                  <Users className="h-3.5 w-3.5 text-blue-500" /> Crew Count
-                </Label>
-                <Input
-                  id="crew_count"
-                  type="number"
-                  min={0}
-                  placeholder="e.g., 8"
-                  value={form.crew_count}
-                  onChange={(e) => setForm({ ...form, crew_count: e.target.value })}
-                  data-testid="input-crew-count"
-                />
-              </div>
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="tasks_completed" className="flex items-center gap-1.5 text-xs">
-                <ListChecks className="h-3.5 w-3.5 text-emerald-500" /> Tasks Completed
-                <span className="text-muted-foreground">(one per line)</span>
-              </Label>
-              <Textarea
-                id="tasks_completed"
-                rows={3}
-                placeholder={"Framed 2nd floor partitions\nDelivered drywall to 3rd floor"}
-                value={form.tasks_completed}
-                onChange={(e) => setForm({ ...form, tasks_completed: e.target.value })}
-                data-testid="input-tasks-completed"
-              />
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="space-y-1.5">
-                <Label htmlFor="issues" className="flex items-center gap-1.5 text-xs">
-                  <AlertTriangle className="h-3.5 w-3.5 text-red-500" /> Issues
-                </Label>
-                <Textarea
-                  id="issues"
-                  rows={3}
-                  placeholder="Anything blocking the schedule?"
-                  value={form.issues}
-                  onChange={(e) => setForm({ ...form, issues: e.target.value })}
-                  data-testid="input-issues"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="safety_notes" className="flex items-center gap-1.5 text-xs">
-                  <ShieldAlert className="h-3.5 w-3.5 text-yellow-500" /> Safety Notes
-                </Label>
-                <Textarea
-                  id="safety_notes"
-                  rows={3}
-                  placeholder="Toolbox talks, near-misses, PPE checks..."
-                  value={form.safety_notes}
-                  onChange={(e) => setForm({ ...form, safety_notes: e.target.value })}
-                  data-testid="input-safety-notes"
-                />
-              </div>
-            </div>
-            <div className="flex items-center justify-end gap-2 pt-2">
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={() => setForm(EMPTY_FORM)}
-                disabled={submitMutation.isPending}
-                data-testid="button-clear-form"
-              >
-                Clear
+        <CardContent className="space-y-4">
+          <div className="flex items-center gap-3">
+            {recording ? (
+              <Button variant="destructive" size="sm" onClick={stopRecording} className="gap-2">
+                <RecordingPulse />
+                <Square className="h-4 w-4" />
+                Stop Recording
               </Button>
+            ) : (
               <Button
-                type="submit"
-                size="sm"
-                className="gap-2"
-                disabled={submitMutation.isPending}
-                data-testid="button-submit-log"
+                variant="outline" size="sm" onClick={startRecording}
+                disabled={uploadMutation.isPending} className="gap-2"
               >
-                {submitMutation.isPending
+                <Mic className="h-4 w-4 text-red-500" />
+                Start Recording
+              </Button>
+            )}
+            <label className="cursor-pointer">
+              <input
+                type="file" accept="audio/*" className="hidden"
+                onChange={handleFileUpload}
+                disabled={recording || uploadMutation.isPending}
+              />
+              <Button variant="ghost" size="sm" asChild className="gap-2 pointer-events-none">
+                <span><Upload className="h-4 w-4" />Upload Audio</span>
+              </Button>
+            </label>
+          </div>
+
+          {audioUrl && (
+            <div className="flex items-center gap-3 p-3 rounded-md bg-muted/50">
+              <Play className="h-4 w-4 text-primary shrink-0" />
+              <audio controls src={audioUrl} className="flex-1 h-8" />
+              <Button
+                size="sm"
+                onClick={() => audioBlob && uploadMutation.mutate(audioBlob)}
+                disabled={uploadMutation.isPending}
+                className="gap-2"
+              >
+                {uploadMutation.isPending
                   ? <RefreshCcw className="h-4 w-4 animate-spin" />
                   : <CheckCircle2 className="h-4 w-4" />}
-                {submitMutation.isPending ? "Saving..." : "Save Daily Log"}
+                {uploadMutation.isPending ? "Processing..." : "Submit to Herbie"}
               </Button>
             </div>
-          </form>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
-          <CardTitle className="text-base">Recent Logs</CardTitle>
-          <Badge variant="outline" className="text-xs" data-testid="badge-log-count">
-            {logs.length} {logs.length === 1 ? "entry" : "entries"}
-          </Badge>
-        </CardHeader>
-        <CardContent>
-          {logsQuery.isLoading ? (
-            <div className="flex items-center gap-2 text-sm text-muted-foreground p-4">
-              <RefreshCcw className="h-4 w-4 animate-spin" /> Loading logs...
-            </div>
-          ) : logs.length === 0 ? (
-            <p className="text-sm text-muted-foreground p-4 text-center" data-testid="empty-no-logs">
-              No daily logs recorded yet for this project.
-            </p>
-          ) : (
-            <ul className="divide-y" data-testid="list-recent-logs">
-              {logs.map((log) => (
-                <li
-                  key={log.id}
-                  className="py-3 first:pt-0 last:pb-0 space-y-1.5"
-                  data-testid={`row-log-${log.id}`}
-                >
-                  <div className="flex items-center justify-between gap-3 flex-wrap">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-semibold" data-testid={`text-log-date-${log.id}`}>
-                        {fmtDate(log.logDate)}
-                      </span>
-                      <Badge
-                        variant={log.source === "voice" ? "default" : "secondary"}
-                        className="text-xs gap-1"
-                      >
-                        {log.source === "voice" && <Mic className="h-3 w-3" />}
-                        {log.source}
-                      </Badge>
-                      <Badge variant="outline" className="text-xs">{log.status}</Badge>
-                    </div>
-                    <span className="text-xs text-muted-foreground">{relTime(log.createdAt)}</span>
-                  </div>
-                  <div className="flex items-center gap-3 text-xs text-muted-foreground flex-wrap">
-                    {weatherText(log.weatherJson) && (
-                      <span className="flex items-center gap-1">
-                        <CloudSun className="h-3 w-3 text-sky-500" /> {weatherText(log.weatherJson)}
-                      </span>
-                    )}
-                    {crewSum(log.laborJson) > 0 && (
-                      <span className="flex items-center gap-1">
-                        <Users className="h-3 w-3 text-blue-500" /> {crewSum(log.laborJson)} crew
-                      </span>
-                    )}
-                    {log.workPerformedJson && log.workPerformedJson.length > 0 && (
-                      <span className="flex items-center gap-1">
-                        <ListChecks className="h-3 w-3 text-emerald-500" /> {log.workPerformedJson.length} tasks
-                      </span>
-                    )}
-                    {log.issuesJson && log.issuesJson.length > 0 && (
-                      <span className="flex items-center gap-1 text-red-600">
-                        <AlertTriangle className="h-3 w-3" /> {log.issuesJson.length} issue{log.issuesJson.length === 1 ? "" : "s"}
-                      </span>
-                    )}
-                    {log.safetyNotesJson && log.safetyNotesJson.length > 0 && (
-                      <span className="flex items-center gap-1 text-yellow-700">
-                        <ShieldAlert className="h-3 w-3" /> {log.safetyNotesJson.length} safety note{log.safetyNotesJson.length === 1 ? "" : "s"}
-                      </span>
-                    )}
-                  </div>
-                  {log.workPerformedJson && log.workPerformedJson.length > 0 && (
-                    <p className="text-xs text-foreground/80 line-clamp-2 pl-0.5">
-                      {log.workPerformedJson.slice(0, 2).join(" • ")}
-                      {log.workPerformedJson.length > 2 ? " ..." : ""}
-                    </p>
-                  )}
-                </li>
-              ))}
-            </ul>
           )}
         </CardContent>
       </Card>
 
-      <Dialog
-        open={voiceOpen}
-        onOpenChange={(o) => {
-          setVoiceOpen(o);
-          if (!o && voiceRecording) stopVoiceRecording();
-        }}
-      >
-        <DialogContent data-testid="dialog-voice-recorder">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Mic className="h-5 w-5 text-primary" />
-              Record Voice Memo
-            </DialogTitle>
-            <DialogDescription>
-              Tap the mic to start. Tap Stop when finished — Herbie will
-              transcribe and pre-fill the form below.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="py-6 flex flex-col items-center gap-4">
-            <button
-              type="button"
-              onClick={voiceRecording ? stopVoiceRecording : startVoiceRecording}
-              disabled={voiceProcessing}
-              className={`relative h-28 w-28 rounded-full flex items-center justify-center transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
-                voiceRecording
-                  ? "bg-red-500 text-white"
-                  : "bg-primary text-primary-foreground hover-elevate active-elevate-2"
-              }`}
-              data-testid="button-mic-toggle"
-            >
-              {voiceProcessing ? (
-                <RefreshCcw className="h-10 w-10 animate-spin" />
-              ) : voiceRecording ? (
-                <>
-                  <span className="absolute inset-0 rounded-full bg-red-500/50 animate-ping" />
-                  <Square className="h-10 w-10 relative" />
-                </>
-              ) : (
-                <Mic className="h-10 w-10" />
-              )}
-            </button>
-            <p className="text-xs text-muted-foreground" data-testid="text-mic-status">
-              {voiceProcessing
-                ? "Transcribing..."
-                : voiceRecording
-                  ? "Recording — tap to stop"
-                  : "Tap to start"}
-            </p>
-            {voiceError && (
-              <p
-                className="text-xs text-red-600 text-center max-w-sm"
-                data-testid="text-voice-error"
-              >
-                {voiceError}
-              </p>
-            )}
-            <Separator />
-            <p className="text-xs text-muted-foreground text-center max-w-sm">
-              Audio is streamed to Herbie's transcription pipeline. If no LLM
-              key is configured, a stub transcript is returned so the flow still
-              works end-to-end.
-            </p>
-          </div>
-          <DialogFooter className="gap-2 sm:gap-2">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => {
-                if (voiceRecording) stopVoiceRecording();
-                setVoiceOpen(false);
-              }}
-              data-testid="button-cancel-voice"
-            >
-              Close
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {voiceTranscript && (
-        <Card className="border-emerald-200 bg-emerald-50 dark:bg-emerald-950/20">
+      {result && (
+        <Card className="border-green-200 bg-green-50/30">
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm flex items-center gap-2">
-              <Sparkles className="h-4 w-4 text-emerald-600" />
-              Last Transcript
-            </CardTitle>
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-base flex items-center gap-2">
+                <CheckCircle2 className="h-4 w-4 text-green-600" />
+                Log Processed
+              </CardTitle>
+              {result.stubbed.transcribe && (
+                <Badge variant="outline" className="text-xs text-amber-600 border-amber-300">
+                  <AlertTriangle className="h-3 w-3 mr-1" />
+                  Stub mode
+                </Badge>
+              )}
+            </div>
           </CardHeader>
-          <CardContent>
-            <p className="text-xs whitespace-pre-wrap text-emerald-900 dark:text-emerald-100" data-testid="text-last-transcript">
-              {voiceTranscript}
-            </p>
+          <CardContent className="space-y-3">
+            <div>
+              <p className="text-xs font-medium text-muted-foreground mb-1">Transcript</p>
+              <p className="text-sm italic text-foreground/80 leading-relaxed">
+                "{result.transcript}"
+              </p>
+            </div>
+            <Separator />
+            <DraftDisplay draft={result.draft} />
           </CardContent>
         </Card>
       )}
@@ -611,4 +219,91 @@ export default function VoiceDailyLogPage() {
   );
 }
 
-void queryClient;
+function DraftDisplay({ draft }: { draft: DailyLogDraft }) {
+  const sections = [
+    {
+      icon: <CloudSun className="h-4 w-4 text-sky-500" />, label: "Weather",
+      content: draft.weather ? <p className="text-sm">{draft.weather}</p> : null,
+    },
+    {
+      icon: <HardHat className="h-4 w-4 text-amber-500" />, label: "Work Performed",
+      content: draft.workPerformed?.length ? (
+        <ul className="list-disc list-inside text-sm space-y-0.5">
+          {draft.workPerformed.map((w, i) => <li key={i}>{w}</li>)}
+        </ul>
+      ) : null,
+    },
+    {
+      icon: <Users className="h-4 w-4 text-blue-500" />, label: "Labor",
+      content: draft.labor?.length ? (
+        <div className="flex flex-wrap gap-2">
+          {draft.labor.map((l, i) => (
+            <Badge key={i} variant="secondary" className="text-xs">
+              {l.trade} - {l.count} workers @ {l.hours}h
+            </Badge>
+          ))}
+        </div>
+      ) : null,
+    },
+    {
+      icon: <Wrench className="h-4 w-4 text-purple-500" />, label: "Equipment",
+      content: draft.equipment?.length ? (
+        <div className="flex flex-wrap gap-2">
+          {draft.equipment.map((eq, i) => (
+            <Badge key={i} variant="outline" className="text-xs">{eq}</Badge>
+          ))}
+        </div>
+      ) : null,
+    },
+    {
+      icon: <Package className="h-4 w-4 text-orange-500" />, label: "Materials",
+      content: draft.materials?.length ? (
+        <ul className="list-disc list-inside text-sm space-y-0.5">
+          {draft.materials.map((m, i) => <li key={i}>{m.item} - {m.qty}</li>)}
+        </ul>
+      ) : null,
+    },
+    {
+      icon: <AlertTriangle className="h-4 w-4 text-red-500" />, label: "Issues",
+      content: draft.issues?.length ? (
+        <ul className="list-disc list-inside text-sm space-y-0.5 text-red-700">
+          {draft.issues.map((is, i) => <li key={i}>{is}</li>)}
+        </ul>
+      ) : null,
+    },
+    {
+      icon: <ShieldAlert className="h-4 w-4 text-yellow-500" />, label: "Safety Notes",
+      content: draft.safetyNotes?.length ? (
+        <ul className="list-disc list-inside text-sm space-y-0.5">
+          {draft.safetyNotes.map((s, i) => <li key={i}>{s}</li>)}
+        </ul>
+      ) : null,
+    },
+    {
+      icon: <FileText className="h-4 w-4 text-gray-500" />, label: "Notes",
+      content: draft.notes ? <p className="text-sm">{draft.notes}</p> : null,
+    },
+  ].filter((s) => s.content !== null);
+
+  if (!sections.length) {
+    return (
+      <p className="text-sm text-muted-foreground">No structured fields extracted.</p>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      {sections.map((s) => (
+        <div key={s.label}>
+          <div className="flex items-center gap-1.5 mb-1">
+            {s.icon}
+            <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+              {s.label}
+            </span>
+          </div>
+          {s.content}
+        </div>
+      ))}
+    </div>
+  );
+}

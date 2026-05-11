@@ -1,4 +1,4 @@
-modules = ["nodejs-20", "web", "python-3.11", "postgresql-16"]
+modules = ["nodejs-20", "web", "postgresql-16"]
 run = "npm run dev"
 hidden = [".config", ".git", "generated-icon.png", "node_modules", "dist"]
 
@@ -15,10 +15,6 @@ localPort = 5050
 externalPort = 3001
 
 [[ports]]
-localPort = 5099
-externalPort = 4200
-
-[[ports]]
 localPort = 5100
 externalPort = 3002
 
@@ -31,7 +27,7 @@ PORT = "5000"
 
 [deployment]
 deploymentTarget = "autoscale"
-run = ["node", "./dist/index.cjs"]
+run = ["npm", "start"]
 build = ["npm", "run", "build"]
 
 [workflows]
@@ -73,7 +69,3 @@ VITE_HMR_OVERLAY = "false"
 
 [objectStorage]
 defaultBucketID = "replit-objstore-c6fe9ea2-c700-4765-b89e-6724876a539d"
-
-[postMerge]
-path = "scripts/post-merge.sh"
-timeoutMs = 20000

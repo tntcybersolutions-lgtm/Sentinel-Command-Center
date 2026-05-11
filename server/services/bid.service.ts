@@ -257,7 +257,7 @@ export class BidService {
       .from(bidProjects)
       .where(and(
         eq(bidProjects.tenantId, tenantId),
-        eq(bidProjects.status, "in_progress")
+        sql`COALESCE(LOWER(${bidProjects.status}), '') NOT IN ('submitted', 'won', 'lost', 'declined', 'cancelled', 'archived')`
       ));
   }
 

@@ -15,7 +15,6 @@ export const DEFAULT_PROJECT_FOLDERS: SeedFolder[] = [
   { name: "08_Addenda", sortOrder: 80 },
   { name: "09_Photos", sortOrder: 90 },
   { name: "10_Closeout", sortOrder: 100 },
-  { name: "11_Lien_Waivers", sortOrder: 110 },
 
   { name: "01_Admin", sortOrder: 1000 },
   { name: "03_Drawings_Specs", sortOrder: 1010 },

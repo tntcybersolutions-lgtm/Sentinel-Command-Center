@@ -12,7 +12,7 @@ import {
   type InsertCoiCertificate,
   type CoiCertificate,
 } from "@shared/schema";
-import { and, asc, eq, gte, isNull, lte, ne } from "drizzle-orm";
+import { and, asc, eq, gte, isNull, lte } from "drizzle-orm";
 
 export type CoiExpiryTier =
   | "expired"
@@ -215,74 +215,5 @@ export function partitionByTier(
   return buckets;
 }
 
-/**
- * Spec'd alias (Roadmap Feature 3): rows expiring within `daysAhead`,
- * filtered to status='active'. Differs from `coisExpiringWithin` by
- * dropping already-`expired`/`cancelled`/`pending_renewal` rows so the
- * proactive monitor only nudges on policies still in force.
- */
-export async function getExpiringCOIs(
-  tenantId: string,
-  daysAhead: number,
-  now: Date = new Date(),
-): Promise<CoiCertificate[]> {
-  const upperBound = new Date(now.getTime() + daysAhead * MS_PER_DAY);
-  return db
-    .select()
-    .from(coiCertificates)
-    .where(
-      and(
-        eq(coiCertificates.tenantId, tenantId),
-        eq(coiCertificates.status, "active"),
-        lte(coiCertificates.expiryDate, upperBound),
-      ),
-    )
-    .orderBy(asc(coiCertificates.expiryDate));
-}
-
-/**
- * Mark a COI as expired. Returns the updated row, or undefined if no
- * row matched. Accepts either a bare `coiId` (legacy callers) or
- * `(tenantId, coiId)` for explicit tenant scoping. New callers MUST
- * pass tenantId — the bare-id form is preserved for backward compat
- * but logs a warning so we can flush remaining call-sites.
- */
-export async function markExpired(
-  tenantIdOrCoiId: string,
-  maybeCoiId?: string,
-): Promise<CoiCertificate | undefined> {
-  const tenantScoped = typeof maybeCoiId === "string";
-  const coiId = tenantScoped ? maybeCoiId! : tenantIdOrCoiId;
-  const tenantId = tenantScoped ? tenantIdOrCoiId : undefined;
-  if (!tenantScoped) {
-    console.warn(
-      `[coi.markExpired] called without tenantId for coi=${coiId} — please update caller`,
-    );
-  }
-  const whereClause = tenantId
-    ? and(eq(coiCertificates.tenantId, tenantId), eq(coiCertificates.id, coiId))
-    : eq(coiCertificates.id, coiId);
-  const [updated] = await db
-    .update(coiCertificates)
-    .set({ status: "expired", updatedAt: new Date() })
-    .where(whereClause)
-    .returning();
-  return updated;
-}
-
-/**
- * Spec'd alias (Roadmap Feature 3): `upsertCOI` returning a thin
- * `{ coiId }` envelope. Delegates to `upsertCoi` so behavior
- * (composite-key idempotent upsert) stays in one place.
- */
-export async function upsertCOI(
-  tenantId: string,
-  data: Omit<InsertCoiCertificate, "tenantId">,
-): Promise<{ coiId: string }> {
-  const row = await upsertCoi({ tenantId, ...data } as InsertCoiCertificate);
-  return { coiId: row.id };
-}
-
-// Silence unused-import linter: `gte` and `ne` are exported for future callers.
+// Silence unused-import linter: `gte` is exported for future callers.
 void gte;
-void ne;

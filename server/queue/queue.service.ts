@@ -25,12 +25,7 @@ export type JobType =
   | "storage_orphan_sweep"
   | "document_ingestion"
   | "document_ingestion_retry"
-  | "document_ingestion_cycle"
-  | "coi_expiry_monitor"
-  | "submittal_overdue_monitor"
-  | "daily_log_missing_monitor"
-  | "change_order_stale_monitor"
-  | "invoice_overdue_monitor";
+  | "document_ingestion_cycle";
 
 export interface JobPayload {
   [key: string]: unknown;

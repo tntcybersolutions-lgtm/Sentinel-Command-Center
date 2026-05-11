@@ -1,7 +1,6 @@
 import React from "react";
-import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
-import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -15,8 +14,7 @@ import {
   AlertCircle,
   TrendingUp,
   Loader2,
-  Folder,
-  Clock,
+  ExternalLink,
 } from "lucide-react";
 import { useLocation } from "wouter";
 
@@ -27,10 +25,6 @@ interface DigestItem {
   detail?: string;
   entity?: { type: string; id: string };
   suggestedAction?: string;
-  projectId?: string;
-  projectName?: string;
-  actionType: string;
-  createdAt: string;
 }
 
 interface HerbieDigest {
@@ -76,109 +70,25 @@ function SeverityBar({ totals }: { totals: HerbieDigest["totals"] }) {
   );
 }
 
-function humanizeActionType(actionType: string): string {
-  return actionType
-    .replace(/_/g, " ")
-    .replace(/\b\w/g, (c) => c.toUpperCase());
-}
-
-function fmtRelative(iso: string): string {
-  try {
-    const created = new Date(iso).getTime();
-    const now = Date.now();
-    const diffMs = now - created;
-    const mins = Math.round(diffMs / 60000);
-    if (mins < 1) return "just now";
-    if (mins < 60) return `${mins}m ago`;
-    const hrs = Math.round(mins / 60);
-    if (hrs < 24) return `${hrs}h ago`;
-    const days = Math.round(hrs / 24);
-    if (days < 30) return `${days}d ago`;
-    return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
-  } catch {
-    return iso;
-  }
-}
-
-function DigestItemCard({
-  item,
-  onResolve,
-  resolving,
-}: {
-  item: DigestItem;
-  onResolve: (item: DigestItem) => void;
-  resolving: boolean;
-}) {
-  const description = item.detail ?? item.suggestedAction;
-  const canResolve = !!item.entity;
+function DigestItemCard({ item }: { item: DigestItem }) {
   return (
-    <div
-      className={`rounded-lg border p-3 ${SEVERITY_COLORS[item.severity] ?? ""}`}
-      data-testid={`digest-item-${item.entity?.id ?? item.headline}`}
-    >
+    <div className={`rounded-lg border p-3 ${SEVERITY_COLORS[item.severity] ?? ""}`}>
       <div className="flex items-start gap-2">
-        <div className="mt-0.5 shrink-0">
-          {CATEGORY_ICONS[item.category] ?? <AlertCircle className="h-3.5 w-3.5" />}
-        </div>
+        <div className="mt-0.5 shrink-0">{CATEGORY_ICONS[item.category] ?? <AlertCircle className="h-3.5 w-3.5" />}</div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="font-medium text-sm">{item.headline}</span>
             <Badge variant="outline" className="text-xs capitalize border-current">
               {item.category}
             </Badge>
-            <Badge
-              variant="outline"
-              className="text-xs border-current opacity-90"
-              data-testid={`badge-action-${item.entity?.id ?? item.headline}`}
-            >
-              {humanizeActionType(item.actionType)}
-            </Badge>
           </div>
-
-          {(item.projectName || item.createdAt) && (
-            <div className="flex items-center gap-3 text-xs mt-1 opacity-80">
-              {item.projectName && (
-                <span
-                  className="inline-flex items-center gap-1"
-                  data-testid={`text-project-${item.entity?.id ?? item.headline}`}
-                >
-                  <Folder className="h-3 w-3" />
-                  {item.projectName}
-                </span>
-              )}
-              {item.createdAt && (
-                <span className="inline-flex items-center gap-1" title={item.createdAt}>
-                  <Clock className="h-3 w-3" />
-                  {fmtRelative(item.createdAt)}
-                </span>
-              )}
-            </div>
+          {item.detail && (
+            <p className="text-xs mt-0.5 opacity-80 line-clamp-2">{item.detail}</p>
           )}
-
-          {description && (
-            <p className="text-xs mt-1 opacity-80 line-clamp-2">{description}</p>
-          )}
-          {item.suggestedAction && item.detail && (
+          {item.suggestedAction && (
             <p className="text-xs mt-1 font-medium opacity-90">→ {item.suggestedAction}</p>
           )}
         </div>
-        {canResolve && (
-          <Button
-            size="sm"
-            variant="outline"
-            className="shrink-0 h-7 px-2 text-xs gap-1 border-current"
-            onClick={() => onResolve(item)}
-            disabled={resolving}
-            data-testid={`button-resolve-${item.entity!.id}`}
-          >
-            {resolving ? (
-              <Loader2 className="h-3 w-3 animate-spin" />
-            ) : (
-              <CheckSquare className="h-3 w-3" />
-            )}
-            Mark Resolved
-          </Button>
-        )}
       </div>
     </div>
   );
@@ -197,34 +107,6 @@ export default function HerbieDigestPage() {
   });
 
   const refresh = () => qc.invalidateQueries({ queryKey: ["/api/herbie/digest"] });
-
-  const { toast } = useToast();
-  const dismissMutation = useMutation({
-    mutationFn: async (item: DigestItem) => {
-      if (!item.entity) throw new Error("Item has no entity to dismiss");
-      const res = await apiRequest(
-        "DELETE",
-        `/api/herbie/digest/dismiss/${item.entity.type}/${item.entity.id}`,
-      );
-      return { item, payload: await res.json() };
-    },
-    onSuccess: ({ item }) => {
-      toast({
-        title: "Marked resolved",
-        description: `${item.headline.slice(0, 80)}${item.headline.length > 80 ? "…" : ""}`,
-      });
-      qc.invalidateQueries({ queryKey: ["/api/herbie/digest"] });
-    },
-    onError: (err: any) => {
-      toast({
-        title: "Could not mark resolved",
-        description: err?.message ?? "Unknown error",
-        variant: "destructive",
-      });
-    },
-  });
-  const resolvingId =
-    dismissMutation.isPending ? dismissMutation.variables?.entity?.id : null;
 
   if (isLoading) {
     return (
@@ -351,12 +233,7 @@ export default function HerbieDigestPage() {
               </CardHeader>
               <CardContent className="space-y-2">
                 {criticalItems.map((item, i) => (
-                  <DigestItemCard
-                    key={item.entity?.id ?? `${item.category}-${i}`}
-                    item={item}
-                    onResolve={(it) => dismissMutation.mutate(it)}
-                    resolving={resolvingId === item.entity?.id}
-                  />
+                  <DigestItemCard key={i} item={item} />
                 ))}
               </CardContent>
             </Card>
@@ -371,12 +248,7 @@ export default function HerbieDigestPage() {
               </CardHeader>
               <CardContent className="space-y-2">
                 {highItems.map((item, i) => (
-                  <DigestItemCard
-                    key={item.entity?.id ?? `${item.category}-${i}`}
-                    item={item}
-                    onResolve={(it) => dismissMutation.mutate(it)}
-                    resolving={resolvingId === item.entity?.id}
-                  />
+                  <DigestItemCard key={i} item={item} />
                 ))}
               </CardContent>
             </Card>
@@ -391,12 +263,7 @@ export default function HerbieDigestPage() {
               </CardHeader>
               <CardContent className="space-y-2">
                 {mediumItems.map((item, i) => (
-                  <DigestItemCard
-                    key={item.entity?.id ?? `${item.category}-${i}`}
-                    item={item}
-                    onResolve={(it) => dismissMutation.mutate(it)}
-                    resolving={resolvingId === item.entity?.id}
-                  />
+                  <DigestItemCard key={i} item={item} />
                 ))}
               </CardContent>
             </Card>
@@ -411,12 +278,7 @@ export default function HerbieDigestPage() {
               </CardHeader>
               <CardContent className="space-y-2">
                 {lowItems.map((item, i) => (
-                  <DigestItemCard
-                    key={item.entity?.id ?? `${item.category}-${i}`}
-                    item={item}
-                    onResolve={(it) => dismissMutation.mutate(it)}
-                    resolving={resolvingId === item.entity?.id}
-                  />
+                  <DigestItemCard key={i} item={item} />
                 ))}
               </CardContent>
             </Card>

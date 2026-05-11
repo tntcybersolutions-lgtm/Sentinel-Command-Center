@@ -1,360 +1,66 @@
-import { useMemo } from "react";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { useToast } from "@/hooks/use-toast";
-import { apiRequest, queryClient } from "@/lib/queryClient";
-import {
-  Brain,
-  Zap,
-  AlertTriangle,
-  CheckCircle2,
-  Clock,
-  RefreshCw,
-  ArrowRight,
-  Loader2,
-  Link2,
-} from "lucide-react";
+import { Brain, Zap, AlertTriangle, CheckCircle2, Clock, RefreshCw, ArrowRight } from "lucide-react";
 
-type Priority = "critical" | "high" | "medium" | "low";
-type ActionType =
-  | "run_ingestion"
-  | "retry_artifact"
-  | "seed_checklist"
-  | "create_bid_project"
-  | "compliance_review"
-  | "follow_up";
+type Priority = "critical"|"high"|"medium"|"low";
+type ActionType = "run_ingestion"|"retry_artifact"|"seed_checklist"|"create_bid_project"|"compliance_review"|"follow_up";
 
-interface ProactiveTask {
-  id: string;
-  tenantId: string;
-  title: string;
-  description: string | null;
-  priority: Priority;
-  status: string;
-  source: "ai" | "system";
-  sourceEntityType: string | null;
-  sourceEntityId: string | null;
-  actionType: ActionType | null;
-  actionPayload: Record<string, unknown> | null;
-  dueAt: string | null;
-  createdAt: string;
-}
+interface ProactiveTask { id: string; title: string; description: string; priority: Priority; source: "ai"|"system"; actionType: ActionType; dueAt?: string; sourceEntityType?: string; createdAt: string; completedAt?: string; }
 
-const PRIORITY_ORDER: Priority[] = ["critical", "high", "medium", "low"];
+const PRIORITY_COLOR: Record<Priority,string> = { critical:"bg-red-100 text-red-800 border-red-200", high:"bg-orange-100 text-orange-800 border-orange-200", medium:"bg-yellow-100 text-yellow-800 border-yellow-200", low:"bg-blue-100 text-blue-800 border-blue-200" };
+const ACTION_LABEL: Record<ActionType,string> = { run_ingestion:"Run Ingestion", retry_artifact:"Retry Artifact", seed_checklist:"Seed Checklist", create_bid_project:"Create Bid Project", compliance_review:"Compliance Review", follow_up:"Follow Up" };
 
-const PRIORITY_META: Record<
-  Priority,
-  { label: string; chip: string; section: string; icon: typeof AlertTriangle; iconColor: string }
-> = {
-  critical: {
-    label: "CRITICAL",
-    chip: "bg-red-100 text-red-800 border-red-200",
-    section: "border-red-200",
-    icon: AlertTriangle,
-    iconColor: "text-red-500",
-  },
-  high: {
-    label: "HIGH",
-    chip: "bg-orange-100 text-orange-800 border-orange-200",
-    section: "border-orange-200",
-    icon: Zap,
-    iconColor: "text-orange-500",
-  },
-  medium: {
-    label: "MEDIUM",
-    chip: "bg-yellow-100 text-yellow-800 border-yellow-200",
-    section: "border-yellow-200",
-    icon: Clock,
-    iconColor: "text-yellow-500",
-  },
-  low: {
-    label: "LOW",
-    chip: "bg-blue-100 text-blue-800 border-blue-200",
-    section: "border-blue-200",
-    icon: CheckCircle2,
-    iconColor: "text-blue-500",
-  },
-};
-
-const ACTION_LABEL: Record<ActionType, string> = {
-  run_ingestion: "Run Ingestion",
-  retry_artifact: "Retry Artifact",
-  seed_checklist: "Seed Checklist",
-  create_bid_project: "Create Bid Project",
-  compliance_review: "Compliance Review",
-  follow_up: "Follow Up",
-};
-
-function formatDueAt(due: string | null): string | null {
-  if (!due) return null;
-  const d = new Date(due);
-  const now = new Date();
-  const days = Math.ceil((d.getTime() - now.getTime()) / 86400000);
-  const dateStr = d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
-  if (days < 0) return `Overdue ${Math.abs(days)}d · ${dateStr}`;
-  if (days === 0) return `Due today · ${dateStr}`;
-  if (days === 1) return `Due tomorrow · ${dateStr}`;
-  return `Due in ${days}d · ${dateStr}`;
-}
-
-function SourceBadge({ task }: { task: ProactiveTask }) {
-  if (!task.sourceEntityType) return null;
-  const label = task.sourceEntityType.replace(/_/g, " ");
-  const tail = task.sourceEntityId ? ` · ${task.sourceEntityId.slice(0, 8)}` : "";
-  return (
-    <Badge variant="outline" className="text-xs text-gray-600 gap-1" data-testid={`badge-source-${task.id}`}>
-      <Link2 className="h-3 w-3" />
-      <span className="capitalize">{label}</span>
-      {tail && <span className="font-mono text-[10px] text-gray-400">{tail}</span>}
-    </Badge>
-  );
-}
+const MOCK_TASKS: ProactiveTask[] = [
+  { id:"1", title:"Ingest 3 pending RFI documents", description:"3 RFI documents are awaiting ingestion for the Riverside Medical project.", priority:"critical", source:"ai", actionType:"run_ingestion", dueAt:"2026-04-24T09:00:00Z", sourceEntityType:"bid_project", createdAt:"2026-04-23T08:00:00Z" },
+  { id:"2", title:"Retry failed BidJacket artifact extraction", description:"Artifact extraction failed for BidJacket #BJ-2024-089. Retry recommended.", priority:"high", source:"system", actionType:"retry_artifact", sourceEntityType:"bid_jacket", createdAt:"2026-04-23T07:30:00Z" },
+  { id:"3", title:"Seed compliance checklist for Harbor Bridge project", description:"New bid project detected without compliance checklist. Auto-seeding recommended.", priority:"high", source:"ai", actionType:"seed_checklist", dueAt:"2026-04-25T12:00:00Z", createdAt:"2026-04-23T06:00:00Z" },
+  { id:"4", title:"Schedule follow-up with Pinnacle Development", description:"Opportunity has been idle for 14 days. Schedule follow-up to maintain engagement.", priority:"medium", source:"ai", actionType:"follow_up", sourceEntityType:"opportunity", createdAt:"2026-04-22T15:00:00Z" },
+  { id:"5", title:"Review compliance for Downtown Office Tower", description:"Compliance review due in 3 days for Downtown Office Tower bid.", priority:"medium", source:"system", actionType:"compliance_review", dueAt:"2026-04-26T17:00:00Z", createdAt:"2026-04-23T05:00:00Z" },
+  { id:"6", title:"Create bid project for Federal Transit Authority RFP", description:"New opportunity detected matching active bid criteria.", priority:"low", source:"ai", actionType:"create_bid_project", createdAt:"2026-04-23T04:00:00Z" },
+];
 
 export default function ProactiveIntelligenceCenter() {
-  const { toast } = useToast();
-  const { data: tasks = [], isLoading, isError } = useQuery<ProactiveTask[]>({
-    queryKey: ["/api/proactive-intelligence/tasks"],
-  });
-
-  const runAnalysis = useMutation({
-    mutationFn: async () => {
-      const res = await apiRequest("POST", "/api/proactive-intelligence/run", {});
-      return res.json();
-    },
-    onSuccess: (data: any) => {
-      toast({
-        title: "Analysis complete",
-        description: `${data?.created ?? 0} new task(s), ${data?.updated ?? 0} updated.`,
-      });
-      queryClient.invalidateQueries({ queryKey: ["/api/proactive-intelligence/tasks"] });
-    },
-    onError: (err: any) => {
-      toast({
-        title: "Analysis failed",
-        description: err?.message ?? "Could not run analysis.",
-        variant: "destructive",
-      });
-    },
-  });
-
-  const executeTask = useMutation({
-    mutationFn: async (taskId: string) => {
-      const res = await apiRequest(
-        "POST",
-        `/api/proactive-intelligence/tasks/${taskId}/execute`,
-        {},
-      );
-      return { taskId, payload: await res.json() };
-    },
-    onSuccess: ({ payload }) => {
-      toast({
-        title: "Action executed",
-        description: payload?.note ?? (payload?.executed ? "Task completed." : "Action attempted."),
-      });
-      queryClient.invalidateQueries({ queryKey: ["/api/proactive-intelligence/tasks"] });
-    },
-    onError: (err: any) => {
-      toast({
-        title: "Action failed",
-        description: err?.message ?? "Could not execute task.",
-        variant: "destructive",
-      });
-    },
-  });
-
-  const grouped = useMemo(() => {
-    const buckets: Record<Priority, ProactiveTask[]> = { critical: [], high: [], medium: [], low: [] };
-    for (const t of tasks) {
-      const p = (PRIORITY_ORDER.includes(t.priority) ? t.priority : "low") as Priority;
-      buckets[p].push(t);
-    }
-    return buckets;
-  }, [tasks]);
-
-  const counts = {
-    critical: grouped.critical.length,
-    high: grouped.high.length,
-    medium: grouped.medium.length,
-    low: grouped.low.length,
-  };
-  const totalShown = counts.critical + counts.high + counts.medium + counts.low;
-
+  const [filter, setFilter] = useState<"all"|Priority>("all");
+  const tasks = MOCK_TASKS;
+  const filtered = filter === "all" ? tasks : tasks.filter(t => t.priority === filter);
+  const counts = { critical: tasks.filter(t=>t.priority==="critical").length, high: tasks.filter(t=>t.priority==="high").length, medium: tasks.filter(t=>t.priority==="medium").length, low: tasks.filter(t=>t.priority==="low").length };
   return (
-    <div className="p-6 space-y-6" data-testid="page-proactive-intelligence">
+    <div className="p-6 space-y-6">
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <Brain className="h-7 w-7 text-purple-600" />
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900" data-testid="text-page-title">
-              Proactive Intelligence Center
-            </h1>
-            <p className="text-sm text-gray-500">AI-generated action items and system recommendations</p>
-          </div>
-        </div>
-        <Button
-          data-testid="button-refresh"
-          variant="outline"
-          size="sm"
-          className="gap-2"
-          onClick={() => runAnalysis.mutate()}
-          disabled={runAnalysis.isPending}
-        >
-          {runAnalysis.isPending ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
-          ) : (
-            <RefreshCw className="h-4 w-4" />
-          )}
-          {runAnalysis.isPending ? "Analyzing…" : "Run Analysis"}
-        </Button>
+        <div className="flex items-center gap-3"><Brain className="h-7 w-7 text-purple-600" /><div><h1 className="text-2xl font-bold text-gray-900">Proactive Intelligence Center</h1><p className="text-sm text-gray-500">AI-generated action items and system recommendations</p></div></div>
+        <Button variant="outline" size="sm" className="gap-2"><RefreshCw className="h-4 w-4" />Refresh</Button>
       </div>
-
       <div className="grid grid-cols-4 gap-4">
-        {PRIORITY_ORDER.map((p) => {
-          const meta = PRIORITY_META[p];
-          const Icon = meta.icon;
-          return (
-            <Card key={p} className={meta.section} data-testid={`stat-${p}`}>
-              <CardContent className="pt-4">
-                <div className="flex items-center gap-2">
-                  <Icon className={`h-5 w-5 ${meta.iconColor}`} />
-                  <div>
-                    <div className={`text-2xl font-bold ${meta.iconColor.replace("500", "600")}`}>
-                      {counts[p]}
-                    </div>
-                    <div className="text-xs text-gray-500">{meta.label}</div>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          );
-        })}
+        <Card className="border-red-200"><CardContent className="pt-4"><div className="flex items-center gap-2"><AlertTriangle className="h-5 w-5 text-red-500" /><div><div className="text-2xl font-bold text-red-600">{counts.critical}</div><div className="text-xs text-gray-500">Critical</div></div></div></CardContent></Card>
+        <Card className="border-orange-200"><CardContent className="pt-4"><div className="flex items-center gap-2"><Zap className="h-5 w-5 text-orange-500" /><div><div className="text-2xl font-bold text-orange-600">{counts.high}</div><div className="text-xs text-gray-500">High</div></div></div></CardContent></Card>
+        <Card className="border-yellow-200"><CardContent className="pt-4"><div className="flex items-center gap-2"><Clock className="h-5 w-5 text-yellow-500" /><div><div className="text-2xl font-bold text-yellow-600">{counts.medium}</div><div className="text-xs text-gray-500">Medium</div></div></div></CardContent></Card>
+        <Card className="border-blue-200"><CardContent className="pt-4"><div className="flex items-center gap-2"><CheckCircle2 className="h-5 w-5 text-blue-500" /><div><div className="text-2xl font-bold text-blue-600">{counts.low}</div><div className="text-xs text-gray-500">Low</div></div></div></CardContent></Card>
       </div>
-
-      {isLoading && (
-        <div className="text-center py-12 text-gray-400" data-testid="state-loading">
-          <Loader2 className="h-8 w-8 mx-auto mb-3 animate-spin opacity-50" />
-          <p>Loading tasks…</p>
-        </div>
-      )}
-
-      {isError && !isLoading && (
-        <div
-          className="text-center py-12 text-red-500 border border-red-200 rounded"
-          data-testid="state-error"
-        >
-          <AlertTriangle className="h-8 w-8 mx-auto mb-3" />
-          <p>Failed to load proactive intelligence tasks.</p>
-        </div>
-      )}
-
-      {!isLoading && !isError && totalShown === 0 && (
-        <div
-          className="text-center py-16 text-gray-500 border border-gray-200 rounded bg-gray-50"
-          data-testid="state-empty"
-        >
-          <Brain className="h-12 w-12 mx-auto mb-3 text-purple-400" />
-          <p className="font-medium text-gray-700">
-            Herbie is monitoring your projects. No urgent items right now.
-          </p>
-          <p className="text-xs text-gray-400 mt-1">
-            Click "Run Analysis" to scan for new action items.
-          </p>
-        </div>
-      )}
-
-      {!isLoading && !isError && totalShown > 0 && (
-        <div className="space-y-8" data-testid="task-groups">
-          {PRIORITY_ORDER.map((p) => {
-            const items = grouped[p];
-            if (items.length === 0) return null;
-            const meta = PRIORITY_META[p];
-            const Icon = meta.icon;
-            return (
-              <section key={p} data-testid={`group-${p}`}>
-                <div className="flex items-center gap-2 mb-3">
-                  <Icon className={`h-4 w-4 ${meta.iconColor}`} />
-                  <h2 className="text-sm font-semibold tracking-wider text-gray-700">
-                    {meta.label}
-                  </h2>
-                  <span className="text-xs text-gray-400">({items.length})</span>
+      <div className="flex gap-2">{(["all","critical","high","medium","low"] as const).map(f => (<Button key={f} variant={filter===f?"default":"outline"} size="sm" onClick={()=>setFilter(f)} className="capitalize">{f==="all"?"All Tasks":f}</Button>))}</div>
+      <div className="space-y-3">
+        {filtered.map(task => (
+          <Card key={task.id} className="hover:shadow-md transition-shadow">
+            <CardContent className="pt-4">
+              <div className="flex items-start justify-between gap-4">
+                <div className="flex-1 space-y-1">
+                  <div className="flex items-center gap-2">
+                    <Badge className={`text-xs font-semibold border ${PRIORITY_COLOR[task.priority]}`}>{task.priority}</Badge>
+                    <Badge variant="outline" className="text-xs">{ACTION_LABEL[task.actionType]}</Badge>
+                    <Badge variant="outline" className="text-xs text-gray-500">{task.source === "ai" ? "🤖 AI" : "⚙️ System"}</Badge>
+                  </div>
+                  <h3 className="font-semibold text-gray-900">{task.title}</h3>
+                  <p className="text-sm text-gray-500">{task.description}</p>
+                  {task.dueAt && (<div className="flex items-center gap-1 text-xs text-gray-400"><Clock className="h-3 w-3" /><span>Due: {new Date(task.dueAt).toLocaleDateString()}</span></div>)}
                 </div>
-                <div className="space-y-3">
-                  {items.map((task) => (
-                    <Card
-                      key={task.id}
-                      className="hover:shadow-md transition-shadow"
-                      data-testid={`card-task-${task.id}`}
-                    >
-                      <CardContent className="pt-4">
-                        <div className="flex items-start justify-between gap-4">
-                          <div className="flex-1 space-y-2">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <Badge className={`text-xs font-semibold border ${meta.chip}`}>
-                                {meta.label}
-                              </Badge>
-                              {task.actionType && (
-                                <Badge variant="outline" className="text-xs">
-                                  {ACTION_LABEL[task.actionType] ?? task.actionType}
-                                </Badge>
-                              )}
-                              <Badge variant="outline" className="text-xs text-gray-500">
-                                {task.source === "ai" ? "🤖 AI" : "⚙️ System"}
-                              </Badge>
-                              <SourceBadge task={task} />
-                            </div>
-                            <h3
-                              className="font-semibold text-gray-900"
-                              data-testid={`text-title-${task.id}`}
-                            >
-                              {task.title}
-                            </h3>
-                            {task.description && (
-                              <p
-                                className="text-sm text-gray-500"
-                                data-testid={`text-description-${task.id}`}
-                              >
-                                {task.description}
-                              </p>
-                            )}
-                            {task.dueAt && (
-                              <div
-                                className="flex items-center gap-1 text-xs text-gray-400"
-                                data-testid={`text-due-${task.id}`}
-                              >
-                                <Clock className="h-3 w-3" />
-                                <span>{formatDueAt(task.dueAt)}</span>
-                              </div>
-                            )}
-                          </div>
-                          <Button
-                            data-testid={`button-action-${task.id}`}
-                            size="sm"
-                            variant="outline"
-                            className="gap-1 flex-shrink-0"
-                            onClick={() => executeTask.mutate(task.id)}
-                            disabled={executeTask.isPending && executeTask.variables === task.id}
-                          >
-                            {executeTask.isPending && executeTask.variables === task.id ? (
-                              <Loader2 className="h-4 w-4 animate-spin" />
-                            ) : (
-                              <ArrowRight className="h-4 w-4" />
-                            )}
-                            {task.actionType
-                              ? ACTION_LABEL[task.actionType] ?? "Take Action"
-                              : "Take Action"}
-                          </Button>
-                        </div>
-                      </CardContent>
-                    </Card>
-                  ))}
-                </div>
-              </section>
-            );
-          })}
-        </div>
-      )}
+                <Button size="sm" variant="outline" className="gap-1 flex-shrink-0"><ArrowRight className="h-4 w-4" />Take Action</Button>
+              </div>
+            </CardContent>
+          </Card>
+        ))}
+        {filtered.length === 0 && (<div className="text-center py-12 text-gray-400"><Brain className="h-10 w-10 mx-auto mb-3 opacity-30" /><p>No tasks for this priority.</p></div>)}
+      </div>
     </div>
   );
 }

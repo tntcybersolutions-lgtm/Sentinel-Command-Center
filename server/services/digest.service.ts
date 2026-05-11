@@ -71,7 +71,7 @@ export class DigestService {
       .from(opportunities)
       .where(and(
         eq(opportunities.tenantId, tenantId),
-        eq(opportunities.status, "open")
+        sql`COALESCE(LOWER(${opportunities.status}), '') NOT IN ('dismissed', 'lost', 'declined', 'awarded')`
       ));
 
     const pipelineValue = activeOpps.reduce((sum, opp) => sum + Number(opp.contractValue || 0), 0);
@@ -80,7 +80,7 @@ export class DigestService {
       .from(opportunities)
       .where(and(
         eq(opportunities.tenantId, tenantId),
-        eq(opportunities.status, "open"),
+        sql`COALESCE(LOWER(${opportunities.status}), '') NOT IN ('dismissed', 'lost', 'declined', 'awarded')`,
         gte(opportunities.dueAt, now),
         lte(opportunities.dueAt, sevenDaysFromNow)
       ))
@@ -263,7 +263,7 @@ export class DigestService {
       .from(opportunities)
       .where(and(
         eq(opportunities.tenantId, tenantId),
-        eq(opportunities.status, "open"),
+        sql`COALESCE(LOWER(${opportunities.status}), '') NOT IN ('dismissed', 'lost', 'declined', 'awarded')`,
         gte(opportunities.dueAt, now),
         lte(opportunities.dueAt, thresholdDate)
       ))

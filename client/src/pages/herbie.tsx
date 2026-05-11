@@ -55,13 +55,6 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { ToastAction } from "@/components/ui/toast";
 import { apiRequest } from "@/lib/queryClient";
@@ -263,44 +256,6 @@ const slashCommands = [
   { command: "/help", description: "Show available commands", icon: FileQuestion },
 ];
 
-function HerbieProjectChip({
-  value,
-  onChange,
-}: {
-  value: string | null;
-  onChange: (id: string | null) => void;
-}) {
-  const { data: projects } = useQuery<Array<{ id: string; name: string }>>({
-    queryKey: ["/api/projects"],
-    staleTime: 60_000,
-  });
-  const list = Array.isArray(projects) ? projects : [];
-  const current = value ? list.find((p) => p.id === value) : null;
-  return (
-    <div className="flex-shrink-0 hidden md:flex items-center gap-2 ml-2">
-      <Badge variant="outline" className="font-normal" data-testid="badge-herbie-viewing">
-        Viewing: {current?.name || "All projects"}
-      </Badge>
-      <Select
-        value={value || "__all__"}
-        onValueChange={(v) => onChange(v === "__all__" ? null : v)}
-      >
-        <SelectTrigger className="h-8 w-[180px]" data-testid="select-herbie-project">
-          <SelectValue placeholder="All projects" />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value="__all__">All projects</SelectItem>
-          {list.map((p) => (
-            <SelectItem key={p.id} value={p.id} data-testid={`select-herbie-project-${p.id}`}>
-              {p.name}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-    </div>
-  );
-}
-
 export default function Herbie() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
@@ -308,7 +263,6 @@ export default function Herbie() {
   const [showSlashCommands, setShowSlashCommands] = useState(false);
   const [filteredCommands, setFilteredCommands] = useState(slashCommands);
   const [selectedCommandIndex, setSelectedCommandIndex] = useState(0);
-  const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [, navigate] = useLocation();
@@ -391,20 +345,17 @@ export default function Herbie() {
       const response = await apiRequest("POST", "/api/herbie/chat", { message, history });
       return response.json();
     },
-    onSuccess: (data: { message?: string; toolCalls?: Array<{ tool?: string; name?: string; result?: any }> }) => {
+    onSuccess: (data: { message?: string; toolCalls?: Array<{ name: string }> }) => {
       const assistantMessage: Message = {
         id: Date.now().toString(),
         role: "assistant",
         content: data.message || "I processed your request.",
         timestamp: new Date(),
-        actions: data.toolCalls
-          ?.map((tc) => tc?.tool ?? tc?.name)
-          .filter((name): name is string => Boolean(name))
-          .map((name) => ({
-            type: name,
-            label: formatToolName(name),
-            status: "completed" as const,
-          })),
+        actions: data.toolCalls?.filter((tool) => tool?.name).map((tool) => ({
+          type: tool.name,
+          label: formatToolName(tool.name),
+          status: "completed" as const,
+        })),
       };
       setMessages(prev => [...prev, assistantMessage]);
     },
@@ -809,10 +760,6 @@ How can I help you today?`,
             <span className="h-2 w-2 rounded-full bg-green-500" />
             {herbieStatus?.status === "active" ? "Online" : "Connecting..."}
           </Badge>
-          <HerbieProjectChip
-            value={activeProjectId}
-            onChange={setActiveProjectId}
-          />
           <div className="ml-auto flex items-center gap-2 flex-shrink-0">
             <Button
               variant="outline"

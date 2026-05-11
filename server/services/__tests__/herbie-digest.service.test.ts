@@ -66,7 +66,6 @@ describe("herbie-digest — buildHerbieDigest", () => {
         policyNumber: "POL-1",
         expiryDate: new Date("2026-04-29T12:00:00Z"),
         projectId: null,
-        createdAt: new Date("2026-04-01T00:00:00Z"),
       },
     ]);
     const d = await buildHerbieDigest({ tenantId: "t1", now });
@@ -87,7 +86,6 @@ describe("herbie-digest — buildHerbieDigest", () => {
         policyNumber: null,
         expiryDate: new Date("2026-05-20T00:00:00Z"), // 19 days out
         projectId: null,
-        createdAt: new Date("2026-04-01T00:00:00Z"),
       },
     ]);
     const d = await buildHerbieDigest({ tenantId: "t1", now });
@@ -155,38 +153,17 @@ describe("herbie-digest — buildHerbieDigest", () => {
     expect(overdue?.severity).toBe("high");
   });
 
-  it("tolerates a COI row missing createdAt and still emits a valid timestamp", async () => {
-    coisExpiringWithinMock.mockResolvedValue([
-      {
-        id: "c-no-createdat",
-        policyType: "gl",
-        carrier: null,
-        policyNumber: null,
-        expiryDate: new Date("2026-04-29T12:00:00Z"),
-        projectId: null,
-        // createdAt deliberately omitted to lock in the null-safe fallback.
-      },
-    ]);
-    const d = await buildHerbieDigest({ tenantId: "t1", now });
-    expect(d.items).toHaveLength(1);
-    const item = d.items[0];
-    expect(item.createdAt).toBe(now.toISOString());
-    expect(() => new Date(item.createdAt!)).not.toThrow();
-  });
-
   it("sorts items critical → high → medium → low", async () => {
     coisExpiringWithinMock.mockResolvedValue([
       {
         id: "c1",
         policyType: "gl",
         expiryDate: new Date("2026-04-29T12:00:00Z"), // expired → critical
-        createdAt: new Date("2026-04-01T00:00:00Z"),
       },
       {
         id: "c2",
         policyType: "wc",
         expiryDate: new Date("2026-05-20T12:00:00Z"), // warning_30d → low
-        createdAt: new Date("2026-04-01T00:00:00Z"),
       },
     ]);
     const d = await buildHerbieDigest({ tenantId: "t1", now });
