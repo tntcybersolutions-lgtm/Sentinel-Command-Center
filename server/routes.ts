@@ -112,7 +112,7 @@ import {
   blueprints,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, and, desc, asc, ilike, sql, count, isNotNull, gte, lte, lt, or, inArray } from "drizzle-orm";
+import { eq, and, desc, asc, ilike, sql, count, isNotNull, gte, lte, lt, or, inArray, notLike } from "drizzle-orm";
 import { eventStreamService } from "./services/event-stream.service";
 import crypto from "crypto";
 import { fromError } from "zod-validation-error";
@@ -8063,7 +8063,7 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
     try {
       const { auditEvents } = await import("@shared/schema");
       const limit = parseInt(req.query.limit as string) || 100;
-      const events = await db.select().from(auditEvents).orderBy(desc(auditEvents.createdAt)).limit(limit);
+      const events = await db.select().from(auditEvents).where(notLike(auditEvents.action, 'herbie_autonomous_%')).orderBy(desc(auditEvents.createdAt)).limit(limit);
       // Transform to match frontend interface
       const transformedEvents = events.map(e => ({
         id: e.id,
