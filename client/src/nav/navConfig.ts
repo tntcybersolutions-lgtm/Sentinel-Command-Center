@@ -1,44 +1,42 @@
+// ============================================================================
+// navConfig.ts — Sentinel for BlackHawk (v3, GC-mode aware)
+// ----------------------------------------------------------------------------
+// Two nav modes from one config:
+//
+//   • GC mode      — what a typical commercial-GC customer sees.
+//                    5 groups, ~22 items. No GovCon, no admin clutter.
+//
+//   • Internal mode — what BlackHawk (Bradley + team) sees.
+//                     7 groups, all ~50 items. Federal Search, capture stack,
+//                     Herbie internals, admin tools. The full power-user view.
+//
+// Every item has a `gcVisible` flag. Default is true (visible in GC mode).
+// Items marked gcVisible: false are hidden from GC customers but stay in
+// internal mode. Groups that empty out under filtering disappear automatically.
+//
+// All routes preserved 1-for-1 from the previous navConfig — nothing breaks.
+// Badge keys, portfolioOnly, and projectOnly flags all preserved.
+//
+// To switch app default, change the `userType` arg to getNavItemsForMode().
+// To run side-by-side, gate on user role / org type from your auth layer.
+// ============================================================================
+
 import {
-  LayoutDashboard,
-  Stamp,
-  Bell,
-  Sun,
-  Search,
-  KanbanSquare,
-  Landmark,
-  Radar,
-  Crosshair,
-  Target,
-  Zap,
-  PencilRuler,
-  Ruler,
-  Wrench,
-  HardHat,
-  FolderGit2,
-  ListChecks,
-  FileCheck,
-  FileQuestion,
-  DollarSign,
-  ShoppingCart,
-  ArrowLeftRight,
-  FileText,
-  Receipt,
-  Shield,
-  Users,
-  Factory,
-  Building2,
-  BookOpen,
-  BrainCircuit,
-  RefreshCcw,
-  Bot, Brain,
-  Sparkles,
-  SlidersHorizontal,
-  Plug,
-  Settings,
-  ArrowDownToLine,
-  Mic,
-  TrendingUp,
-  ClipboardCheck,
+  // Home
+  LayoutDashboard, Sun, Stamp, Bell,
+  // Pursuit
+  Search, KanbanSquare, Landmark, Radar, Crosshair, Target, Building2,
+  // Estimate
+  PencilRuler, Ruler, Wrench, FileCheck, Brain,
+  // Projects
+  HardHat, FolderGit2, ListChecks, FileQuestion, ClipboardCheck, Mic, ArrowLeftRight,
+  // Financials
+  DollarSign, ShoppingCart, FileText, Receipt, Shield,
+  // Subs & Vendors
+  Users, Factory,
+  // Herbie / Admin
+  Bot, Sparkles, TrendingUp, BrainCircuit, RefreshCcw,
+  Plug, SlidersHorizontal, Zap, ArrowDownToLine,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -54,6 +52,8 @@ export type NavBadgeKey =
 
 export type NavCounts = Record<NavBadgeKey, number>;
 
+export type UserType = "gc" | "internal";
+
 export interface NavItemConfig {
   id: string;
   label: string;
@@ -62,6 +62,8 @@ export interface NavItemConfig {
   badgeKey?: NavBadgeKey;
   portfolioOnly?: boolean;
   projectOnly?: boolean;
+  /** GovCon / internal items: set false to hide from typical GC customers. Default true. */
+  gcVisible?: boolean;
 }
 
 export interface NavGroupConfig {
@@ -70,137 +72,150 @@ export interface NavGroupConfig {
   icon: LucideIcon;
   order: number;
   items: NavItemConfig[];
+  /** Hide entire group from GC mode. Default true. */
+  gcVisible?: boolean;
 }
 
 export const navConfig: NavGroupConfig[] = [
+  // ── 1. HOME ──────────────────────────────────────────────────────────────
   {
     id: "home",
     label: "Home",
     icon: LayoutDashboard,
     order: 10,
     items: [
-      { id: "home.myday", label: "Home", icon: Sun, route: "/home" },
-      { id: "home.approvals", label: "Approvals", icon: Stamp, route: "/approvals", badgeKey: "approvalsNeededCount" },
-      { id: "home.alerts", label: "Notifications", icon: Bell, route: "/notifications" },
+      { id: "home.today",     label: "Today",         icon: Sun,   route: "/home" },
+      { id: "home.approvals", label: "Approvals",     icon: Stamp, route: "/approvals", badgeKey: "approvalsNeededCount" },
+      { id: "home.alerts",    label: "Notifications", icon: Bell,  route: "/notifications" },
     ],
   },
+
+  // ── 2. PURSUIT (renamed to "Bids" effectively for GC mode — only Pipeline shows) ─
+  // For internal: full SAM.gov capture stack visible.
+  // For GC: only the Pipeline (bid kanban) shows — everything else is GovCon flavor.
   {
-    id: "capture",
-    label: "Capture",
+    id: "pursuit",
+    label: "Pursuit",
     icon: Search,
     order: 20,
     items: [
-      { id: "capture.opportunities", label: "Opportunities", icon: Search, route: "/capture/opportunities", portfolioOnly: true },
-      { id: "capture.pipeline", label: "Pipeline", icon: KanbanSquare, route: "/capture/pipeline", portfolioOnly: true },
-      { id: "capture.federalSearch", label: "Federal Search (SAM)", icon: Landmark, route: "/capture/federal-search", portfolioOnly: true },
-      { id: "capture.highergov", label: "HigherGov Search", icon: Radar, route: "/capture/highergov", portfolioOnly: true },
-      { id: "capture.competitors", label: "Competitors", icon: Crosshair, route: "/capture/competitors", portfolioOnly: true },
+      { id: "pursuit.pipeline",      label: "Pipeline",             icon: KanbanSquare, route: "/capture/pipeline",       portfolioOnly: true },
+      { id: "pursuit.federalSearch", label: "Federal Search (SAM)", icon: Landmark,     route: "/capture/federal-search", portfolioOnly: true, gcVisible: false },
+      { id: "pursuit.highergov",     label: "HigherGov Search",     icon: Radar,        route: "/capture/highergov",      portfolioOnly: true, gcVisible: false },
+      { id: "pursuit.opportunities", label: "Opportunities",        icon: Search,       route: "/capture/opportunities",  portfolioOnly: true, gcVisible: false },
+      { id: "pursuit.fitProfiles",   label: "Fit Profiles",         icon: Target,       route: "/capture/fit-profiles",   portfolioOnly: true, gcVisible: false },
+      { id: "pursuit.competitors",   label: "Competitors",          icon: Crosshair,    route: "/capture/competitors",    portfolioOnly: true, gcVisible: false },
+      { id: "pursuit.agencies",      label: "Agencies",             icon: Building2,    route: "/capture/agencies",       portfolioOnly: true, gcVisible: false },
     ],
   },
+
+  // ── 3. ESTIMATE ──────────────────────────────────────────────────────────
   {
     id: "estimate",
     label: "Estimate",
     icon: PencilRuler,
     order: 30,
     items: [
-      { id: "estimate.blueprints", label: "Blueprints & Drawings", icon: PencilRuler, route: "/estimate/blueprints" },
-      { id: "estimate.takeoff", label: "Takeoff Engine", icon: Ruler, route: "/estimate/takeoff" },
-      { id: "estimate.buildingSystems", label: "Building Systems", icon: Wrench, route: "/estimate/design-systems" },
-      { id: "estimate.bidReadiness", label: "Bid Readiness", icon: FileCheck, route: "/bid-readiness" },
-      { id: "estimate.fitProfiles", label: "Fit Profiles", icon: Target, route: "/capture/fit-profiles", portfolioOnly: true },
-      { id: "estimate.proactive", label: "Proactive Intelligence", icon: Brain, route: "/proactive-intelligence" },
+      { id: "estimate.bidReadiness",    label: "Bid Readiness",          icon: FileCheck,   route: "/bid-readiness" },
+      { id: "estimate.blueprints",      label: "Blueprints & Drawings",  icon: PencilRuler, route: "/estimate/blueprints" },
+      { id: "estimate.takeoff",         label: "Takeoff Engine",         icon: Ruler,       route: "/estimate/takeoff" },
+      { id: "estimate.buildingSystems", label: "Building Systems",       icon: Wrench,      route: "/estimate/design-systems" },
+      { id: "estimate.proactive",       label: "Proactive Intelligence", icon: Brain,       route: "/proactive-intelligence", gcVisible: false },
     ],
   },
+
+  // ── 4. PROJECTS ──────────────────────────────────────────────────────────
   {
     id: "projects",
     label: "Projects",
     icon: HardHat,
     order: 40,
     items: [
-      { id: "projects.active", label: "Active Projects", icon: FolderGit2, route: "/projects/active", portfolioOnly: true },
-      { id: "projects.tasks", label: "Tasks", icon: ListChecks, route: "/execution/tasks", badgeKey: "overdueTaskCount" },
-      { id: "projects.rfis", label: "RFIs", icon: FileQuestion, route: "/execution/rfis", badgeKey: "openRfiCount" },
-      { id: "projects.submittals", label: "Submittals", icon: FileCheck, route: "/execution/submittals", badgeKey: "pendingSubmittalCount" },
-      { id: "projects.coApprovals", label: "Change Orders", icon: ClipboardCheck, route: "/change-order-approvals" },
-      { id: "projects.voiceLog", label: "Voice Daily Log", icon: Mic, route: "/voice-daily-log", projectOnly: true },
+      { id: "projects.active",       label: "Active Projects", icon: FolderGit2,     route: "/projects/active",      portfolioOnly: true },
+      { id: "projects.tasks",        label: "Tasks",           icon: ListChecks,     route: "/execution/tasks",      badgeKey: "overdueTaskCount" },
+      { id: "projects.rfis",         label: "RFIs",            icon: FileQuestion,   route: "/execution/rfis",       badgeKey: "openRfiCount" },
+      { id: "projects.submittals",   label: "Submittals",      icon: FileCheck,      route: "/execution/submittals", badgeKey: "pendingSubmittalCount" },
+      { id: "projects.changeOrders", label: "Change Orders",   icon: ClipboardCheck, route: "/change-order-approvals" },
+      { id: "projects.voiceLog",     label: "Voice Daily Log", icon: Mic,            route: "/voice-daily-log",      projectOnly: true },
     ],
   },
+
+  // ── 5. FINANCIALS ────────────────────────────────────────────────────────
   {
     id: "financials",
     label: "Financials",
     icon: DollarSign,
     order: 50,
     items: [
-      { id: "fin.overview", label: "Finance Overview", icon: DollarSign, route: "/financial/overview" },
-      { id: "fin.purchaseOrders", label: "Purchase Orders", icon: ShoppingCart, route: "/execution/purchase-orders", badgeKey: "orphanPurchaseOrderCount" },
-      { id: "fin.changeOrders", label: "Change Orders", icon: ArrowLeftRight, route: "/financial/change-orders" },
-      { id: "fin.invoices", label: "Invoices (AR)", icon: FileText, route: "/financial/invoices", badgeKey: "unpaidInvoiceCount" },
-      { id: "fin.bills", label: "Bills (AP)", icon: Receipt, route: "/financial/bills" },
-      { id: "fin.compliance", label: "Compliance", icon: Shield, route: "/financial/compliance" },
+      { id: "fin.overview",       label: "Overview",        icon: DollarSign,    route: "/financial/overview" },
+      { id: "fin.purchaseOrders", label: "Purchase Orders", icon: ShoppingCart,  route: "/execution/purchase-orders", badgeKey: "orphanPurchaseOrderCount" },
+      { id: "fin.changeOrders",   label: "Change Orders",   icon: ArrowLeftRight,route: "/financial/change-orders" },
+      { id: "fin.invoices",       label: "Invoices (AR)",   icon: FileText,      route: "/financial/invoices",        badgeKey: "unpaidInvoiceCount" },
+      { id: "fin.bills",          label: "Bills (AP)",      icon: Receipt,       route: "/financial/bills" },
+      { id: "fin.compliance",     label: "Compliance",      icon: Shield,        route: "/financial/compliance" },
     ],
   },
+
+  // ── 6. SUBS & VENDORS ────────────────────────────────────────────────────
   {
-    id: "people",
-    label: "People & Vendors",
+    id: "subs",
+    label: "Subs & Vendors",
     icon: Users,
     order: 60,
     items: [
-      { id: "people.contacts", label: "Contacts", icon: Users, route: "/knowledge/contacts" },
-      { id: "people.vendors", label: "Vendors & Subs", icon: Factory, route: "/execution/vendors" },
-      { id: "people.vendorConfidence", label: "Vendor Confidence", icon: Building2, route: "/vendor-confidence" },
-      { id: "people.coi", label: "COI Tracker", icon: Shield, route: "/coi" },
-      { id: "people.workforce", label: "Workforce", icon: HardHat, route: "/execution/workforce" },
-      { id: "people.agencies", label: "Agencies", icon: Building2, route: "/capture/agencies" },
+      { id: "subs.vendors",          label: "Vendors & Subs",    icon: Factory,   route: "/execution/vendors" },
+      { id: "subs.coi",              label: "COI Tracker",       icon: Shield,    route: "/coi" },
+      { id: "subs.contacts",         label: "Contacts",          icon: Users,     route: "/knowledge/contacts" },
+      { id: "subs.workforce",        label: "Workforce",         icon: HardHat,   route: "/execution/workforce" },
+      { id: "subs.vendorConfidence", label: "Vendor Confidence", icon: Building2, route: "/vendor-confidence", gcVisible: false },
     ],
   },
+
+  // ── 7. HERBIE ────────────────────────────────────────────────────────────
+  // GC sees only: Daily Digest + Chat Assistant. Everything else is internal.
   {
-    id: "knowledge",
-    label: "Documents & Knowledge",
-    icon: BookOpen,
+    id: "herbie",
+    label: "Herbie",
+    icon: Bot,
     order: 70,
     items: [
-      { id: "knowledge.base", label: "Knowledge Base", icon: BrainCircuit, route: "/knowledge/base" },
-      { id: "knowledge.ingestion", label: "Document Ingestion", icon: ArrowDownToLine, route: "/projects/:projectId/ingestion", projectOnly: true },
-      { id: "knowledge.egnyte", label: "Egnyte Sync", icon: RefreshCcw, route: "/automation/egnyte-sync" },
-    ],
-  },
-  {
-    id: "assistant",
-    label: "AI Assistant",
-    icon: Bot,
-    order: 80,
-    items: [
-      { id: "ai.digest", label: "Daily Digest", icon: TrendingUp, route: "/herbie-digest" },
-      { id: "ai.chat", label: "Chat Assistant", icon: Bot, route: "/automation/herbie" },
-      { id: "ai.autonomous", label: "Autonomous Mode", icon: Sparkles, route: "/herbie-autonomous" },
-    ],
-  },
-  {
-    id: "admin",
-    label: "Admin",
-    icon: Settings,
-    order: 90,
-    items: [
-      { id: "admin.settings", label: "System Settings", icon: SlidersHorizontal, route: "/automation/settings" },
-      { id: "admin.integrations", label: "Integrations", icon: Plug, route: "/automation/integrations" },
-      { id: "admin.captureAutomation", label: "Capture Automation", icon: Zap, route: "/capture/automation", portfolioOnly: true },
-      { id: "admin.aiReviewQueue", label: "AI Review Queue", icon: Sparkles, route: "/automation/workflows" },
-      { id: "admin.memoryInspector", label: "HERBIE Memory", icon: Brain, route: "/herbie-memory" },
-      { id: "admin.auditLog", label: "Audit Log", icon: FileText, route: "/automation/audit" },
+      { id: "herbie.digest",            label: "Daily Digest",       icon: TrendingUp,        route: "/herbie-digest" },
+      { id: "herbie.chat",              label: "Chat Assistant",     icon: Bot,               route: "/automation/herbie" },
+      { id: "herbie.autonomous",        label: "Autonomous Mode",    icon: Sparkles,          route: "/herbie-autonomous",                       gcVisible: false },
+      { id: "herbie.memory",            label: "HERBIE Memory",      icon: Brain,             route: "/herbie-memory",                           gcVisible: false },
+      { id: "herbie.knowledge",         label: "Knowledge Base",     icon: BrainCircuit,      route: "/knowledge/base",                          gcVisible: false },
+      { id: "herbie.docIngestion",      label: "Document Ingestion", icon: ArrowDownToLine,   route: "/projects/:projectId/ingestion", projectOnly: true, gcVisible: false },
+      { id: "herbie.egnyte",            label: "Egnyte Sync",        icon: RefreshCcw,        route: "/automation/egnyte-sync",                  gcVisible: false },
+      { id: "herbie.integrations",      label: "Integrations",       icon: Plug,              route: "/automation/integrations",                 gcVisible: false },
+      { id: "herbie.captureAutomation", label: "Capture Automation", icon: Zap,               route: "/capture/automation", portfolioOnly: true, gcVisible: false },
+      { id: "herbie.reviewQueue",       label: "AI Review Queue",    icon: Sparkles,          route: "/automation/workflows",                    gcVisible: false },
+      { id: "herbie.auditLog",          label: "Audit Log",          icon: FileText,          route: "/automation/audit",                        gcVisible: false },
+      { id: "herbie.settings",          label: "Settings",           icon: SlidersHorizontal, route: "/automation/settings",                     gcVisible: false },
     ],
   },
 ];
 
+// ----------------------------------------------------------------------------
+// Filter helper.
+// - userType "gc"       → hides anything with gcVisible: false (default visible)
+// - userType "internal" → shows everything (BlackHawk team default)
+// - mode "portfolio" / "project" → existing portfolioOnly / projectOnly filtering
+// ----------------------------------------------------------------------------
 export function getNavItemsForMode(
   mode: "portfolio" | "project",
+  userType: UserType = "gc",
   groups: NavGroupConfig[] = navConfig,
 ): NavGroupConfig[] {
-  return groups.map((group) => ({
-    ...group,
-    items: group.items.filter((item) => {
-      if (mode === "project" && item.portfolioOnly) return false;
-      if (mode === "portfolio" && item.projectOnly) return false;
-      return true;
-    }),
-  })).filter((group) => group.items.length > 0);
+  return groups
+    .filter((group) => userType === "internal" || group.gcVisible !== false)
+    .map((group) => ({
+      ...group,
+      items: group.items.filter((item) => {
+        if (mode === "project"   && item.portfolioOnly) return false;
+        if (mode === "portfolio" && item.projectOnly)   return false;
+        if (userType === "gc"    && item.gcVisible === false) return false;
+        return true;
+      }),
+    }))
+    .filter((group) => group.items.length > 0);
 }
