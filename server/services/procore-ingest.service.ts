@@ -18,7 +18,9 @@ import { eq, and, sql } from "drizzle-orm";
 import { emitEvent } from "./event-bus.service";
 import { entityLinkService } from "./entity-link.service";
 import crypto from "crypto";
-const AdmZip = require("adm-zip");
+import { createRequire } from "module";
+const require2 = createRequire(import.meta.url);
+const AdmZip = require2("adm-zip");
 
 const DEFAULT_TENANT_ID = "blackhawk-default";
 

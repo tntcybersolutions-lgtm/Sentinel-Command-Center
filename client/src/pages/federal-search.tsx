@@ -499,6 +499,16 @@ function OpportunityRow({ opp, onStartBid, isPending }: { opp: any; onStartBid: 
             </div>
 
             <div className="flex items-center gap-2 flex-wrap">
+              {typeof opp.fitScore === "number" && (
+                <Badge
+                  variant={opp.fitScore >= 80 ? "default" : opp.fitScore >= 50 ? "secondary" : "outline"}
+                  className="text-xs"
+                  title={(opp.fitReasons || []).join(" • ") || "Based on your win history"}
+                  data-testid={`badge-fit-score-${opp.id}`}
+                >
+                  Fit {opp.fitScore}/100
+                </Badge>
+              )}
               {opp.setAside && (
                 <Badge
                   variant={isSDVOSB(opp.setAside) ? "default" : "outline"}

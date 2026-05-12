@@ -1,3 +1,4 @@
+// Build marker: 2026-05-12T00:56:18Z (added to force fresh esbuild output)
 import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
@@ -12,6 +13,7 @@ import { takeoffItemsRouter } from "./takeoff-items-routes";
 import { deliverableGeneratorRouter } from "./deliverable-generator-routes";
 import { documentContentRouter } from "./document-content-routes";
 import { bidJacketAutoFillRouter } from "./bid-jacket-auto-fill-routes.v2";
+import { registerHomeRoutes } from "./home-routes";
 validateBidJacketTaxonomy();
 
 const app = express();
@@ -78,6 +80,7 @@ app.use((req, res, next) => {
   app.use(documentContentRouter);
   // Phase 2 v2.1 — POST /api/bid-projects/:bidProjectId/auto-fill-jacket
   app.use(bidJacketAutoFillRouter);
+  registerHomeRoutes(app);
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
@@ -142,17 +145,10 @@ app.use((req, res, next) => {
 
   const isReplit = Boolean(process.env.REPL_ID);
 
-  if (isProd) {
+  if (isProd && !forceViteDev) {
     app.get("/__mode", (_req, res) => res.json({ mode: "static" }));
     serveStatic(app);
-    if (forceViteDev) {
-      log(
-        "STATIC mode: ignoring FORCE_VITE_DEV in production build (vite.config not bundled for runtime use)",
-        "ui",
-      );
-    } else {
-      log("STATIC mode: serving dist/public", "ui");
-    }
+    log("STATIC mode: serving dist/public", "ui");
   } else if (isReplit) {
     app.get("/__mode", (_req, res) => res.json({ mode: "dev" }));
     const { createServer: createViteServer } = await import("vite");

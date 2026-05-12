@@ -4,7 +4,9 @@ import path from "path";
 export function serveStatic(app: Express) {
   // process.cwd() is the project root in both dev and production.
   // Avoids import.meta.url which is undefined when bundled to CJS.
-  const distPath = path.resolve(process.cwd(), "dist", "public");
+  const cwdPath = path.resolve(process.cwd(), "dist", "public");
+  const dirnamePath = path.resolve(__dirname, "public");
+  const distPath = fs.existsSync(cwdPath) ? cwdPath : dirnamePath;
   if (!fs.existsSync(distPath)) {
     throw new Error(
       `Could not find the build directory: ${distPath}, make sure to build the client first`,

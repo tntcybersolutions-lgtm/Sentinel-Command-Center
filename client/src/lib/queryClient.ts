@@ -1,4 +1,5 @@
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
+import { toast } from "@/hooks/use-toast";
 
 async function throwIfResNotOk(res: Response) {
   if (!res.ok) {
@@ -52,6 +53,18 @@ export const queryClient = new QueryClient({
     },
     mutations: {
       retry: false,
+      onError: (error: unknown) => {
+        // Default error toast for any mutation that does not override onError.
+        // Component-level onError handlers still run; this is a safety net so
+        // users always see *something* when a save/update/delete fails.
+        const message = error instanceof Error ? error.message : String(error);
+        const trimmed = message.length > 200 ? message.substring(0, 200) + "…" : message;
+        toast({
+          title: "Something went wrong",
+          description: trimmed,
+          variant: "destructive",
+        });
+      },
     },
   },
 });

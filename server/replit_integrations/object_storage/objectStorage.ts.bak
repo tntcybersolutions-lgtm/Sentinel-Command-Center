@@ -1,6 +1,4 @@
-let StorageCtor: any = null;
-try { StorageCtor = require("@google-cloud/storage").Storage; } catch (e) { console.warn("[object-storage] @google-cloud/storage missing - degraded"); }
-type File = any;
+import { Storage, File } from "@google-cloud/storage";
 import { Response } from "express";
 import { randomUUID } from "crypto";
 import {
@@ -14,7 +12,7 @@ import {
 const REPLIT_SIDECAR_ENDPOINT = "http://127.0.0.1:1106";
 
 // The object storage client is used to interact with the object storage service.
-export const objectStorageClient: any = StorageCtor ? new StorageCtor({
+export const objectStorageClient = new Storage({
   credentials: {
     audience: "replit",
     subject_token_type: "access_token",
@@ -30,7 +28,7 @@ export const objectStorageClient: any = StorageCtor ? new StorageCtor({
     universe_domain: "googleapis.com",
   },
   projectId: "",
-}) : null;
+});
 
 export class ObjectNotFoundError extends Error {
   constructor() {
