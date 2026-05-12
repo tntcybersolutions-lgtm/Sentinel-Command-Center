@@ -4,8 +4,7 @@ import { storage } from "./storage";
 import { registerChatRoutes } from "./replit_integrations/chat";
 import { registerObjectStorageRoutes } from "./replit_integrations/object_storage";
 import { herbieToolsRouter } from "./routes/herbie-tools.routes";
-let ReplitObjectStorage: any = null;
-try { ReplitObjectStorage = require("@replit/object-storage"); } catch (e) { console.warn("[routes] @replit/object-storage missing - degraded"); }
+import * as ReplitObjectStorage from "@replit/object-storage";
 import { Readable } from "node:stream";
 import OpenAI from "openai";
 import { z } from "zod";
