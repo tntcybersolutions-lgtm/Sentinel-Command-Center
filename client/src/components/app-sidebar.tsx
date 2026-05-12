@@ -350,7 +350,7 @@ export function AppSidebar() {
   }, [sidebarState, toggleSidebar]);
 
   const filteredGroups = useMemo(() => {
-    let groups = getNavItemsForMode(mode);
+    let groups = getNavItemsForMode(mode, "gc");
     if (searchQuery.trim()) {
       const q = searchQuery.trim().toLowerCase();
       groups = groups
