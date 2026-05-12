@@ -1,3 +1,4 @@
+// Build marker: 2026-05-12T00:56:18Z (added to force fresh esbuild output)
 import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
