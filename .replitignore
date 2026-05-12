@@ -1,0 +1,34 @@
+# Exclude from Replit deploy layer
+# (these patterns prevent the deploy upload from including huge or sensitive files)
+
+# Large user-uploaded asset bundles (root cause of deploy "closed pipe" errors)
+attached_assets/
+*.zip
+*.tar
+*.tar.gz
+*.7z
+*.rar
+
+# Build artifacts that get regenerated during deploy
+node_modules/
+.cache/
+.vite/
+dist/cache/
+
+# Local dev / scratch
+*.log
+*.tmp
+.tmp/
+tmp/
+.DS_Store
+
+# Git internals (never needed at runtime)
+.git/
+.github/
+
+# Confidential client data — must never leave Replit
+server/data/
+
+# Local env files (Replit Secrets supply env in production)
+.env
+.env.*
