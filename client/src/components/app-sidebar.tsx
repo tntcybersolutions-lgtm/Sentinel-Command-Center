@@ -37,7 +37,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import logoImg from "@assets/cropped-BlackHawk-Logo-white-1-300x147_1769481738513.webp";
+// Default brand mark — swap by dropping your .webp/.png at client/src/assets/blackhawk-logo.* and editing this import.
+import logoImg from "@/assets/blackhawk-logo.svg";
 import { navConfig, getNavItemsForMode } from "@/nav/navConfig";
 import type { NavGroupConfig, NavItemConfig, NavCounts } from "@/nav/navConfig";
 import { useProjectContext } from "@/nav/project-context";
