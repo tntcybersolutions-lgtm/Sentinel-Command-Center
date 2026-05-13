@@ -334,7 +334,7 @@ interface ProjectCardData {
 function ProjectHealthBoard() {
   const [, setLocation] = useLocation();
   const { data: projects, isLoading } = useQuery<ProjectCardData[]>({
-    queryKey: ["/api/projects"],
+    queryKey: ["/api/home/project-health"],
   });
   const items = (projects ?? []).slice(0, 9);
 
