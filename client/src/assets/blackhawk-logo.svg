@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 56" fill="none">
+  <!-- Shield outline -->
+  <path d="M20 8 L4 14 L4 30 C4 38 12 46 20 50 C28 46 36 38 36 30 L36 14 Z" stroke="currentColor" stroke-width="2" fill="none" opacity="0.9"/>
+  <!-- Hawk wing mark inside shield -->
+  <path d="M11 22 L20 18 L29 22 L20 32 Z" fill="currentColor" opacity="0.9"/>
+  <!-- Wordmark -->
+  <text x="48" y="26" font-family="Inter, system-ui, sans-serif" font-size="18" font-weight="800" fill="currentColor" letter-spacing="0.5">BlackHawk</text>
+  <text x="48" y="44" font-family="Inter, system-ui, sans-serif" font-size="10" font-weight="600" fill="currentColor" opacity="0.7" letter-spacing="1.5">CONSTRUCTION</text>
+</svg>
