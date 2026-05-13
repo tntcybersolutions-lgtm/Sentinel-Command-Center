@@ -1,29 +1,33 @@
 // ============================================================================
 // home-routes.ts — endpoints for the redesigned Home page
 // ----------------------------------------------------------------------------
-// Three new endpoints that power the redesigned home-assistant.tsx page:
+// Endpoints powering the redesigned home-assistant.tsx page:
 //
-//   GET /api/herbie/brief         → one-line summary banner
-//   GET /api/home/money-this-week → Pay Apps / Lien Waivers / Invoices / Bills
-//   GET /api/calendar/this-week   → 7-day calendar strip
+//   GET /api/herbie/brief          → one-line summary banner
+//   GET /api/home/money-this-week  → Pay Apps / Lien Waivers / Invoices / Bills
+//   GET /api/calendar/this-week    → 7-day calendar strip
+//   GET /api/home/project-health   → projects + computed risk score for the cards
 //
-// All three are intentionally SAFE: each returns a valid empty-but-correctly-
-// shaped response if data isn't available. The home page renders gracefully
-// with "--" placeholders in that case — nothing breaks.
-//
-// Wire in server/index.ts (or wherever you register routes):
-//
-//     import { registerHomeRoutes } from "./home-routes";
-//     registerHomeRoutes(app);
-//
-// Real DB queries are marked TODO. They're easy to add once you decide which
-// tables to source from (see comments). The shapes are stable — wiring
-// real data won't break the UI.
+// Each endpoint is failure-tolerant: it returns a benign empty/skeleton shape
+// if a query throws, so the UI never crashes.
 // ============================================================================
 
 import type { Express, Request, Response } from "express";
+import { db } from "./db";
+import {
+  payApplications,
+  invoices,
+  calendarEvents,
+  projects,
+} from "@shared/schema";
+import { and, eq, gte, lte, lt, ne, sql, inArray } from "drizzle-orm";
 
-// ── Types (mirror what the home page expects) ──────────────────────────────────
+const DEFAULT_TENANT_ID = "blackhawk-default";
+function getTenantId(req: Request): string {
+  return (req as any)?.user?.tenantId || DEFAULT_TENANT_ID;
+}
+
+// ── Types ─────────────────────────────────────────────────────────────────────
 
 interface HerbieBrief {
   summary: string;
@@ -51,16 +55,23 @@ interface DayEvent {
 }
 interface ThisWeekDay { date: string; weekday: string; day: number; events: DayEvent[]; }
 
-// ── /api/herbie/brief ─────────────────────────────────────────────────────────────────
-// One-line summary banner at the top of the home page.
-// Today: builds a brief from the existing /api/herbie/digest totals.
-// Later: replace with a real Herbie LLM call that summarizes urgents + money +
-// schedule risks into a single natural-language sentence.
+interface ProjectHealthCard {
+  id: string;
+  name?: string;
+  projectName?: string;
+  projectNumber?: string;
+  status?: string;
+  contractValue?: number;
+  completionPercentage?: number;
+  riskScore?: number;
+  topIssue?: string;
+  nextDeadlineLabel?: string;
+}
+
+// ── /api/herbie/brief ─────────────────────────────────────────────────────────
 
 async function getHerbieBrief(req: Request): Promise<HerbieBrief> {
   try {
-    // Re-use existing digest endpoint output. Adjust hostname if needed.
-    // In production this should be a direct DB query, not an internal fetch.
     const base = process.env.SELF_BASE_URL || `http://localhost:${process.env.PORT || 5000}`;
     const res = await fetch(`${base}/api/herbie/digest`);
     if (!res.ok) throw new Error("digest unavailable");
@@ -95,59 +106,110 @@ async function getHerbieBrief(req: Request): Promise<HerbieBrief> {
   }
 }
 
-// ── /api/home/money-this-week ─────────────────────────────────────────────────────────
-// Money-shaped scorecard. Pulls from financials tables. All four fields are
-// optional in the response shape — undefined renders as "--" in the UI.
-//
-// TODO: replace each block with the real Drizzle query against your schema.
-//       Tables to source from (best guesses from your schema.ts):
-//         - bidProjects        for pay-app pipeline (or a payApps table if you have one)
-//         - your invoices/AR table
-//         - your bills/AP table
-//         - your lienWaivers table (if you've added one — server/lien-waivers.ts hints yes)
-//
-// The fallback below returns an empty object so the UI shows "--" everywhere.
-// Replace per-section as you wire real queries in; each is independent.
+// ── /api/home/money-this-week ─────────────────────────────────────────────────
+// Real Drizzle queries against payApplications, invoices, and project_lien_waivers.
 
 async function getMoneyThisWeek(req: Request): Promise<MoneyThisWeek> {
+  const tenantId = getTenantId(req);
   const out: MoneyThisWeek = {};
 
-  // -- Pay Apps Due this week ---------------------------------------------
-  // TODO: query pay-app records where dueDate in [today, today+7d] and status != paid
-  // Example shape:
-  //   const rows = await db.select({...}).from(payApps).where(...);
-  //   out.payAppsDueCount = rows.length;
-  //   out.payAppsDueTotal = rows.reduce((s, r) => s + Number(r.amount ?? 0), 0);
+  const now = new Date();
+  const weekEnd = new Date(now);
+  weekEnd.setDate(now.getDate() + 7);
 
-  // -- Lien Waivers Outstanding -------------------------------------------
-  // TODO: query lien_waivers where status in ('sent','requested') and signedAt IS NULL
-  //   out.lienWaiversOutstandingCount = rows.length;
-  //   const oldest = rows.map(r => Date.now() - new Date(r.createdAt).getTime())
-  //                      .sort((a,b) => b - a)[0];
-  //   out.lienWaiversOutstandingOldestDays = Math.floor(oldest / 86_400_000);
+  // Pay Apps Due this week — submitted but not yet paid, with periodEnd in past or next 7d.
+  try {
+    const payApps = await db.select({ amount: payApplications.netPayable })
+      .from(payApplications)
+      .where(and(
+        eq(payApplications.tenantId, tenantId),
+        ne(payApplications.status, "paid"),
+        ne(payApplications.status, "draft"),
+        lte(payApplications.periodEnd, weekEnd),
+      ));
+    out.payAppsDueCount = payApps.length;
+    out.payAppsDueTotal = payApps.reduce((s, r) => s + Number(r.amount || 0), 0);
+  } catch (e) {
+    console.error("[money-this-week] payApps query failed:", (e as Error)?.message);
+  }
 
-  // -- Invoices Overdue ---------------------------------------------------
-  // TODO: query AR invoices where dueDate < now and status != paid
-  //   out.invoicesOverdueCount = rows.length;
-  //   out.invoicesOverdueTotal = rows.reduce((s, r) => s + Number(r.balance ?? 0), 0);
+  // Lien Waivers Outstanding — project_lien_waivers with status='missing'. Raw SQL since
+  // this table isn't declared in shared/schema.ts.
+  try {
+    const rows: any = await db.execute(sql`
+      SELECT id, created_at
+      FROM project_lien_waivers
+      WHERE tenant_id = ${tenantId}
+        AND status = 'missing'
+    `);
+    const arr: any[] = rows?.rows || [];
+    out.lienWaiversOutstandingCount = arr.length;
+    if (arr.length > 0) {
+      const ages = arr
+        .map((r: any) => (Date.now() - new Date(r.created_at).getTime()) / 86_400_000)
+        .filter((n: number) => Number.isFinite(n));
+      if (ages.length > 0) {
+        out.lienWaiversOutstandingOldestDays = Math.floor(Math.max(...ages));
+      }
+    }
+  } catch (e) {
+    console.error("[money-this-week] lien waivers query failed:", (e as Error)?.message);
+  }
 
-  // -- Bills Due This Week ------------------------------------------------
-  // TODO: query AP bills where dueDate in [today, today+7d] and status != paid
-  //   out.billsDueWeekCount = rows.length;
-  //   out.billsDueWeekTotal = rows.reduce((s, r) => s + Number(r.amount ?? 0), 0);
+  // Invoices Overdue (AR) — receivable, not paid, dueDate in the past.
+  try {
+    const ar = await db.select({
+      amount: invoices.totalAmount,
+      paid: invoices.paidAmount,
+    })
+      .from(invoices)
+      .where(and(
+        eq(invoices.tenantId, tenantId),
+        eq(invoices.invoiceType, "receivable"),
+        ne(invoices.status, "paid"),
+        lt(invoices.dueDate, now),
+      ));
+    out.invoicesOverdueCount = ar.length;
+    out.invoicesOverdueTotal = ar.reduce((s, r) => s + (Number(r.amount || 0) - Number(r.paid || 0)), 0);
+  } catch (e) {
+    console.error("[money-this-week] invoices query failed:", (e as Error)?.message);
+  }
+
+  // Bills Due This Week (AP) — payable invoices due in [now, now+7d], not paid.
+  try {
+    const bills = await db.select({
+      amount: invoices.totalAmount,
+      paid: invoices.paidAmount,
+    })
+      .from(invoices)
+      .where(and(
+        eq(invoices.tenantId, tenantId),
+        eq(invoices.invoiceType, "payable"),
+        ne(invoices.status, "paid"),
+        gte(invoices.dueDate, now),
+        lte(invoices.dueDate, weekEnd),
+      ));
+    out.billsDueWeekCount = bills.length;
+    out.billsDueWeekTotal = bills.reduce((s, r) => s + (Number(r.amount || 0) - Number(r.paid || 0)), 0);
+  } catch (e) {
+    console.error("[money-this-week] bills query failed:", (e as Error)?.message);
+  }
 
   return out;
 }
 
-// ── /api/calendar/this-week ─────────────────────────────────────────────────────────────
-// 7-day strip starting today. Pulls from calendarEvents table.
-// TODO: query calendarEvents where eventDate between today and today+7d, group by day.
-//       Map each event to { label, amount?, projectName?, type? }.
+// ── /api/calendar/this-week ──────────────────────────────────────────────────
+// Real Drizzle query against calendarEvents within today..today+7d.
 
 async function getThisWeek(req: Request): Promise<ThisWeekDay[]> {
-  // Build a 7-day skeleton starting today
-  const days: ThisWeekDay[] = [];
+  const tenantId = getTenantId(req);
+
   const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const weekEnd = new Date(today);
+  weekEnd.setDate(today.getDate() + 7);
+
+  const days: ThisWeekDay[] = [];
   for (let i = 0; i < 7; i++) {
     const d = new Date(today);
     d.setDate(today.getDate() + i);
@@ -159,30 +221,164 @@ async function getThisWeek(req: Request): Promise<ThisWeekDay[]> {
     });
   }
 
-  // TODO: query calendarEvents within the 7-day window and slot them into days.
-  //   const start = days[0].date;
-  //   const end = days[6].date;
-  //   const rows = await db.select(...).from(calendarEvents)
-  //     .where(and(gte(calendarEvents.eventDate, start), lte(calendarEvents.eventDate, end)));
-  //   for (const row of rows) {
-  //     const slot = days.find(d => d.date === row.eventDate.toISOString().slice(0,10));
-  //     if (slot) slot.events.push({
-  //       id: row.id, label: row.title, amount: row.amount, projectName: row.projectName, type: row.eventType,
-  //     });
-  //   }
+  try {
+    const events = await db.select({
+      id: calendarEvents.id,
+      title: calendarEvents.title,
+      eventType: calendarEvents.eventType,
+      startAt: calendarEvents.startAt,
+      projectId: calendarEvents.projectId,
+    })
+      .from(calendarEvents)
+      .where(and(
+        eq(calendarEvents.tenantId, tenantId),
+        gte(calendarEvents.startAt, today),
+        lt(calendarEvents.startAt, weekEnd),
+        ne(calendarEvents.status, "cancelled"),
+      ));
+
+    for (const ev of events) {
+      const dateKey = new Date(ev.startAt).toISOString().slice(0, 10);
+      const slot = days.find(d => d.date === dateKey);
+      if (slot) {
+        slot.events.push({
+          id: ev.id,
+          label: ev.title,
+          type: ev.eventType,
+        });
+      }
+    }
+  } catch (e) {
+    console.error("[this-week] calendar query failed:", (e as Error)?.message);
+  }
 
   return days;
 }
 
-// ── Registration ───────────────────────────────────────────────────────────────────────────────────────
+// ── /api/home/project-health ─────────────────────────────────────────────────
+// Returns active projects with a computed riskScore (0–100, higher = more risk)
+// and an optional one-line topIssue. Drives the Project Health card board.
+//
+// Risk-score model (additive, baseline 30):
+//   margin < 0           → +35
+//   margin < 5%          → +25
+//   margin < 10%         → +15
+//   margin < 15%         → +5
+//   margin >= 15%        → -5
+//   past expectedEndDate → +25
+//   actualCosts > 95% of contract → +20
+//   actualCosts > 80% of contract → +10
+//   < 30 days to deadline AND completion < 70% → +15
+// Clamped to [0,100].
+
+async function getProjectHealth(req: Request): Promise<ProjectHealthCard[]> {
+  const tenantId = getTenantId(req);
+  try {
+    const rows = await db.select({
+      id: projects.id,
+      name: projects.name,
+      projectNumber: projects.projectNumber,
+      status: projects.status,
+      contractValue: projects.contractValue,
+      actualCosts: projects.actualCosts,
+      completionPercentage: projects.completionPercentage,
+      grossProfit: projects.grossProfit,
+      expectedEndDate: projects.expectedEndDate,
+    })
+      .from(projects)
+      .where(and(
+        eq(projects.tenantId, tenantId),
+        inArray(projects.status, [
+          "planning",
+          "pre_construction",
+          "active",
+          "in_progress",
+          "construction",
+          "punch_list",
+        ]),
+      ));
+
+    const out: ProjectHealthCard[] = rows.map(r => {
+      const contractVal = Number(r.contractValue || 0);
+      const actualCosts = Number(r.actualCosts || 0);
+      const completionPct = Number(r.completionPercentage || 0);
+      const grossProfit = Number(r.grossProfit || 0);
+      const margin = contractVal > 0 ? grossProfit / contractVal : 0;
+
+      let risk = 30;
+      if (margin < 0) risk += 35;
+      else if (margin < 0.05) risk += 25;
+      else if (margin < 0.10) risk += 15;
+      else if (margin < 0.15) risk += 5;
+      else risk -= 5;
+
+      const dueSoon = r.expectedEndDate ? new Date(r.expectedEndDate) : null;
+      const nowMs = Date.now();
+      if (dueSoon && dueSoon.getTime() < nowMs) {
+        risk += 25;
+      }
+      if (contractVal > 0 && actualCosts > contractVal * 0.95) {
+        risk += 20;
+      } else if (contractVal > 0 && actualCosts > contractVal * 0.80) {
+        risk += 10;
+      }
+      if (dueSoon) {
+        const daysLeft = (dueSoon.getTime() - nowMs) / 86_400_000;
+        if (daysLeft > 0 && daysLeft < 30 && completionPct < 70) risk += 15;
+      }
+
+      const riskScore = Math.max(0, Math.min(100, Math.round(risk)));
+
+      let topIssue: string | undefined;
+      if (margin < 0) {
+        topIssue = `Negative margin (${(margin * 100).toFixed(1)}%)`;
+      } else if (dueSoon && dueSoon.getTime() < nowMs) {
+        topIssue = "Past expected end date";
+      } else if (contractVal > 0 && actualCosts > contractVal * 0.95) {
+        topIssue = "Cost overrun risk";
+      } else if (margin < 0.05 && contractVal > 0) {
+        topIssue = `Thin margin (${(margin * 100).toFixed(1)}%)`;
+      }
+
+      let nextDeadlineLabel: string | undefined;
+      if (dueSoon) {
+        const daysLeft = Math.round((dueSoon.getTime() - nowMs) / 86_400_000);
+        if (daysLeft > 0 && daysLeft < 60) {
+          nextDeadlineLabel = `Expected complete in ${daysLeft} day${daysLeft !== 1 ? "s" : ""}`;
+        } else if (daysLeft < 0) {
+          nextDeadlineLabel = `Past due by ${Math.abs(daysLeft)} day${Math.abs(daysLeft) !== 1 ? "s" : ""}`;
+        }
+      }
+
+      return {
+        id: r.id,
+        name: r.name,
+        projectName: r.name,
+        projectNumber: r.projectNumber,
+        status: r.status,
+        contractValue: contractVal,
+        completionPercentage: completionPct,
+        riskScore,
+        topIssue,
+        nextDeadlineLabel,
+      };
+    });
+
+    out.sort((a, b) => (b.riskScore ?? 0) - (a.riskScore ?? 0));
+    return out;
+  } catch (e) {
+    console.error("[project-health] query failed:", (e as Error)?.message);
+    return [];
+  }
+}
+
+// ── Registration ─────────────────────────────────────────────────────────────
 
 export function registerHomeRoutes(app: Express) {
   app.get("/api/herbie/brief", async (req: Request, res: Response) => {
     try {
-      const out = await getHerbieBrief(req);
-      res.json(out);
-    } catch (err) {
-      // Never break the home page over this — return a benign brief.
+      res.json(await getHerbieBrief(req));
+    } catch {
       res.json({
         summary: "Herbie's still warming up — check the full digest for details.",
         href: "/herbie-digest",
@@ -193,19 +389,25 @@ export function registerHomeRoutes(app: Express) {
 
   app.get("/api/home/money-this-week", async (req: Request, res: Response) => {
     try {
-      const out = await getMoneyThisWeek(req);
-      res.json(out);
-    } catch (err) {
-      res.json({}); // empty object → UI renders "--" placeholders
+      res.json(await getMoneyThisWeek(req));
+    } catch {
+      res.json({});
     }
   });
 
   app.get("/api/calendar/this-week", async (req: Request, res: Response) => {
     try {
-      const out = await getThisWeek(req);
-      res.json(out);
-    } catch (err) {
-      res.json([]); // empty array → UI renders the 7-day skeleton
+      res.json(await getThisWeek(req));
+    } catch {
+      res.json([]);
+    }
+  });
+
+  app.get("/api/home/project-health", async (req: Request, res: Response) => {
+    try {
+      res.json(await getProjectHealth(req));
+    } catch {
+      res.json([]);
     }
   });
 }
