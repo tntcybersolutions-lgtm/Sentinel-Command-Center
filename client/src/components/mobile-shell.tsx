@@ -14,7 +14,7 @@ interface NavItem {
 }
 
 const NAV: NavItem[] = [
-  { icon: Home, label: "Home", path: "/home" },
+  { icon: Home, label: "Home", path: "/m-home" },
   { icon: Camera, label: "Photos", path: "/projects/default/m-photos" },
   { icon: Mic, label: "Voice", path: "/voice-daily-log", primary: true },
   { icon: Map, label: "Drawings", path: "/projects/default/drawings" },
