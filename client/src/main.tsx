@@ -1,4 +1,5 @@
 import { createRoot } from "react-dom/client";
+import { registerPWA } from "./pwa-register";
 import App from "./App";
 import "./index.css";
 
@@ -57,3 +58,5 @@ try {
     bootStatus.style.color = '#ef4444';
   }
 }
+
+registerPWA();

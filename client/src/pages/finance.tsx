@@ -2,6 +2,7 @@ import { useState, useMemo } from "react";
 import { useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { RowActionMenu } from "@/features/row-actions/RowActionMenu";
+import { InvoicePayButton } from "@/components/invoice-pay-button";
 import {
   DollarSign,
   TrendingUp,
@@ -455,6 +456,7 @@ export default function Finance() {
                         <div className="flex items-center gap-3">
                           {getStatusBadge(invoice.status)}
                           <span className="font-medium text-sm">{formatCurrency(Number(invoice.totalAmount || 0))}</span>
+                          {(() => { const due = Number(invoice.totalAmount || 0) - Number((invoice as any).paidAmount || 0); return due > 0 && invoice.status !== "paid" ? (<InvoicePayButton invoiceId={invoice.id} amountDue={due} />) : null; })()}
                         </div>
                       </div>
                     ))}
