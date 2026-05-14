@@ -409,6 +409,7 @@ export function registerSprint4Routes(app: Express): void {
   });
 
   app.delete("/api/push/subscribe", async (req: Request, res: Response) => {
+    if (!requirePushAuthz(req, res)) return;
     try {
       const { endpoint } = (req.body ?? {}) as { endpoint?: string };
       if (!endpoint) return res.status(400).json({ error: "endpoint required" });
