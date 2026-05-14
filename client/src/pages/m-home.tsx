@@ -93,21 +93,39 @@ export default function MobileHomePage() {
 
   useEffect(() => subscribe(setQueued), []);
 
+  // Degraded fallbacks so the home screen never gets stuck in a skeleton when
+  // the backend errors — we surface a neutral "service unavailable" state
+  // instead, and the user can pull-to-refresh once the backend recovers.
+  const RISK_FALLBACK: RiskScore = {
+    amount: 0, spark: [0], delta7d: 0, score: 0,
+    suggestion: "Live data unavailable — pull down to retry.",
+  };
+  const TODAY_FALLBACK: TodayRow[] = [{
+    id: "offline",
+    severity: "neutral",
+    title: "Live data unavailable",
+    subtitle: "Pull down to retry once you're back online.",
+  }];
+
   const risk = useQuery<RiskScore>({
     queryKey: ["/api/home/risk-score"],
     queryFn: async () => {
-      const r = await apiFetch("/api/home/risk-score");
-      if (!r.ok) throw new Error(`risk-score ${r.status}`);
-      return (await r.json()) as RiskScore;
+      try {
+        const r = await apiFetch("/api/home/risk-score");
+        if (!r.ok) return RISK_FALLBACK;
+        return (await r.json()) as RiskScore;
+      } catch { return RISK_FALLBACK; }
     },
     staleTime: 60_000,
   });
   const today = useQuery<TodayRow[]>({
     queryKey: ["/api/home/today"],
     queryFn: async () => {
-      const r = await apiFetch("/api/home/today");
-      if (!r.ok) throw new Error(`today ${r.status}`);
-      return (await r.json()) as TodayRow[];
+      try {
+        const r = await apiFetch("/api/home/today");
+        if (!r.ok) return TODAY_FALLBACK;
+        return (await r.json()) as TodayRow[];
+      } catch { return TODAY_FALLBACK; }
     },
     staleTime: 60_000,
   });
