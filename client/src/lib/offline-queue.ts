@@ -8,6 +8,10 @@ export interface QueuedRequest {
   body?: string;
   createdAt: number;
   attempts: number;
+  kind?: string;
+  target?: string;
+  lastError?: string | null;
+  lastTriedAt?: number | null;
 }
 
 const DB_NAME = "sentinel-outbox";
@@ -95,12 +99,31 @@ async function tryRegisterSync(): Promise<void> {
   } catch { /* ignore — Background Sync unsupported on iOS Safari */ }
 }
 
+// Map a URL+method to a friendly kind/target so the SyncSheet can show
+// human-readable labels instead of raw paths.
+function describe(method: string, url: string): { kind: string; target: string } {
+  try {
+    const u = new URL(url, "http://x");
+    const path = u.pathname;
+    if (/\/projects\/[^/]+\/daily-log/.test(path)) return { kind: "Daily Log", target: path.split("/")[3] || "" };
+    if (/\/projects\/[^/]+\/drawings/.test(path)) return { kind: "Drawing", target: path.split("/")[3] || "" };
+    if (/\/drawings\/[^/]+\/pins/.test(path)) return { kind: "Drawing Pin", target: path.split("/")[3] || "" };
+    if (/\/projects\/[^/]+\/photos/.test(path)) return { kind: "Photo", target: path.split("/")[3] || "" };
+    if (/\/rfis/.test(path)) return { kind: "RFI", target: path };
+    if (/\/approvals/.test(path)) return { kind: "Approval", target: path };
+    return { kind: method, target: path };
+  } catch {
+    return { kind: method, target: url };
+  }
+}
+
 export async function enqueue(req: {
   method: string;
   url: string;
   headers?: Record<string, string>;
   body?: string;
 }): Promise<{ id: string }> {
+  const desc = describe(req.method, req.url);
   const entry: QueuedRequest = {
     id: newId(),
     method: req.method.toUpperCase(),
@@ -109,6 +132,10 @@ export async function enqueue(req: {
     body: req.body,
     createdAt: Date.now(),
     attempts: 0,
+    kind: desc.kind,
+    target: desc.target,
+    lastError: null,
+    lastTriedAt: null,
   };
   const db = await getDB();
   await db.put(STORE, entry);
@@ -118,6 +145,62 @@ export async function enqueue(req: {
 }
 
 let flushing = false;
+
+async function attemptOne(item: QueuedRequest): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const resp = await fetch(item.url, {
+      method: item.method,
+      headers: {
+        ...(item.headers ?? {}),
+        "Idempotency-Key": item.id,
+        "Content-Type": "application/json",
+      },
+      body: item.body,
+    });
+    if (resp.ok) return { ok: true };
+    let detail = "";
+    try { detail = (await resp.clone().text()).slice(0, 200); } catch { /* ignore */ }
+    return { ok: false, error: `HTTP ${resp.status}${detail ? `: ${detail}` : ""}` };
+  } catch (err) {
+    return { ok: false, error: (err as Error)?.message || "network error" };
+  }
+}
+
+async function recordFailure(item: QueuedRequest, error: string): Promise<void> {
+  const next: QueuedRequest = {
+    ...item,
+    attempts: item.attempts + 1,
+    lastError: error,
+    lastTriedAt: Date.now(),
+  };
+  try {
+    const db = await getDB();
+    if (next.attempts >= MAX_ATTEMPTS) {
+      await db.delete(STORE, item.id);
+    } else {
+      await db.put(STORE, next);
+    }
+    void notify();
+  } catch { /* ignore */ }
+}
+
+export async function retry(id: string): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const db = await getDB();
+    const item = (await db.get(STORE, id)) as QueuedRequest | undefined;
+    if (!item) return { ok: false, error: "not found" };
+    const result = await attemptOne(item);
+    if (result.ok) {
+      await remove(id);
+      return { ok: true };
+    }
+    await recordFailure(item, result.error || "unknown");
+    return { ok: false, error: result.error };
+  } catch (err) {
+    return { ok: false, error: (err as Error)?.message || "retry failed" };
+  }
+}
+
 export async function flush(): Promise<{ flushed: number; failed: number }> {
   if (flushing) return { flushed: 0, failed: 0 };
   flushing = true;
@@ -126,39 +209,13 @@ export async function flush(): Promise<{ flushed: number; failed: number }> {
   try {
     const items = await list();
     for (const item of items) {
-      try {
-        const resp = await fetch(item.url, {
-          method: item.method,
-          headers: {
-            ...(item.headers ?? {}),
-            "Idempotency-Key": item.id,
-            "Content-Type": "application/json",
-          },
-          body: item.body,
-        });
-        if (resp.ok) {
-          await remove(item.id);
-          flushed += 1;
-        } else {
-          // Both 4xx and 5xx are retried up to MAX_ATTEMPTS so a single bad
-          // response (e.g. transient validation race) cannot silently drop
-          // a queued submission. Permanently bad payloads still get dropped
-          // after MAX_ATTEMPTS.
-          throw new Error(`status ${resp.status}`);
-        }
-      } catch {
+      const result = await attemptOne(item);
+      if (result.ok) {
+        await remove(item.id);
+        flushed += 1;
+      } else {
         failed += 1;
-        const next: QueuedRequest = { ...item, attempts: item.attempts + 1 };
-        try {
-          const db = await getDB();
-          if (next.attempts >= MAX_ATTEMPTS) {
-            await db.delete(STORE, item.id);
-          } else {
-            await db.put(STORE, next);
-          }
-          void notify();
-        } catch { /* ignore */ }
-        // If still offline, stop trying further items
+        await recordFailure(item, result.error || "unknown");
         if (typeof navigator !== "undefined" && navigator.onLine === false) break;
       }
     }
