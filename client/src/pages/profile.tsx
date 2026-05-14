@@ -97,11 +97,17 @@ export default function ProfilePage() {
   };
 
   const onChangeProject = (id: string) => {
-    if (!id) { clearProject(); return; }
-    const p = (projectsQ.data || []).find((x) => x.id === id);
-    const name = p?.name || p?.projectName || p?.number || p?.projectNumber || "Project";
-    selectProject(id, name);
-    setMsg(`Active project set to ${name}.`);
+    if (!id) {
+      clearProject();
+      try { localStorage.removeItem("sentinel.selectedProject"); } catch { /* ignore */ }
+    } else {
+      const p = (projectsQ.data || []).find((x) => x.id === id);
+      const name = p?.name || p?.projectName || p?.number || p?.projectNumber || "Project";
+      selectProject(id, name);
+    }
+    // Hard reload so every query/page fully re-scopes to the new project.
+    setMsg("Switching project…");
+    setTimeout(() => { window.location.reload(); }, 150);
   };
 
   const me = meQ.data;

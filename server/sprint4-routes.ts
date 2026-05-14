@@ -83,9 +83,10 @@ async function getWebPush(): Promise<WebPushModule | null> {
   if (webPushReady) return webPushClient;
   webPushReady = true;
   try {
-    const pub = process.env.VAPID_PUBLIC_KEY;
-    const priv = process.env.VAPID_PRIVATE_KEY;
-    const subj = process.env.VAPID_SUBJECT || "mailto:ops@blackhawkconstruction.com";
+    // Support task-spec names (PUSH_VAPID_*) plus legacy aliases (VAPID_*).
+    const pub = process.env.PUSH_VAPID_PUBLIC || process.env.VAPID_PUBLIC_KEY;
+    const priv = process.env.PUSH_VAPID_PRIVATE || process.env.VAPID_PRIVATE_KEY;
+    const subj = process.env.PUSH_VAPID_SUBJECT || process.env.VAPID_SUBJECT || "mailto:ops@blackhawkconstruction.com";
     if (!pub || !priv) {
       console.warn("[sprint4] VAPID keys missing — push disabled");
       return null;
@@ -351,10 +352,27 @@ export function registerSprint4Routes(app: Express): void {
 
   // ── Push ───────────────────────────────────────────────────────────────────
   app.get("/api/push/vapid-public-key", (_req, res) => {
-    res.json({ publicKey: process.env.VAPID_PUBLIC_KEY || null });
+    res.json({
+      publicKey: process.env.PUSH_VAPID_PUBLIC || process.env.VAPID_PUBLIC_KEY || null,
+    });
   });
 
+  // Explicit authz gate for push routes: in production we require an
+  // authenticated user so anonymous callers cannot subscribe arbitrary
+  // endpoints to the default tenant. Dev/test still allows the default
+  // tenant fallback for smoke testing without auth middleware mounted.
+  function requirePushAuthz(req: Request, res: Response): boolean {
+    const userId = getUserId(req);
+    const isProd = process.env.NODE_ENV === "production";
+    if (isProd && !userId) {
+      res.status(401).json({ error: "authentication required for push" });
+      return false;
+    }
+    return true;
+  }
+
   app.post("/api/push/subscribe", async (req: Request, res: Response) => {
+    if (!requirePushAuthz(req, res)) return;
     const key = idemKey(req);
     const cached = idemGet(key);
     if (cached) return res.status(cached.status).json(cached.body);
@@ -403,6 +421,7 @@ export function registerSprint4Routes(app: Express): void {
   });
 
   app.post("/api/push/test", async (req: Request, res: Response) => {
+    if (!requirePushAuthz(req, res)) return;
     const key = idemKey(req);
     const cached = idemGet(key);
     if (cached) return res.status(cached.status).json(cached.body);
