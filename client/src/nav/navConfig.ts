@@ -29,7 +29,7 @@ import {
   // Estimate
   PencilRuler, Ruler, Wrench, FileCheck, Brain,
   // Projects
-  HardHat, FolderGit2, ListChecks, FileQuestion, ClipboardCheck, Mic, ArrowLeftRight,
+  HardHat, FolderGit2, ListChecks, FileQuestion, ClipboardCheck, Mic, ArrowLeftRight, Camera, GanttChartSquare, Share2,
   // Financials
   DollarSign, ShoppingCart, FileText, Receipt, Shield,
   // Subs & Vendors
@@ -137,6 +137,9 @@ export const navConfig: NavGroupConfig[] = [
       { id: "projects.submittals",   label: "Submittals",      icon: FileCheck,      route: "/execution/submittals", badgeKey: "pendingSubmittalCount" },
       { id: "projects.changeOrders", label: "Change Orders",   icon: ClipboardCheck, route: "/change-order-approvals" },
       { id: "projects.voiceLog",     label: "Voice Daily Log", icon: Mic,            route: "/voice-daily-log",      projectOnly: true },
+      { id: "projects.photos",       label: "Photos",          icon: Camera,            route: "/projects/:projectId/photos",   projectOnly: true },
+      { id: "projects.schedule",     label: "Schedule",        icon: GanttChartSquare,  route: "/projects/:projectId/schedule", projectOnly: true },
+      { id: "projects.ownerPortal",  label: "Owner Portal",    icon: Share2,            route: "/projects/:projectId/cockpit",  projectOnly: true },
     ],
   },
 

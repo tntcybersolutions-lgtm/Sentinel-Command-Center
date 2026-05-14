@@ -6701,5 +6701,74 @@ export type HerbieAgentResult = {
   done: boolean;
   changeSetId?: string;
 };
+
+
+// ============================================================================
+// SPRINT 3 — TIER-1 GAP CLOSURE (PWA + Photos + Portal + Payments + Gantt)
+// ============================================================================
+export const projectPhotos = pgTable("project_photos", {
+  id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id", { length: 36 }).notNull(),
+  projectId: varchar("project_id", { length: 36 }).notNull(),
+  uploadedByUserId: varchar("uploaded_by_user_id", { length: 36 }),
+  fileName: text("file_name").notNull(),
+  contentType: text("content_type"),
+  storageUrl: text("storage_url").notNull(),
+  thumbnailUrl: text("thumbnail_url"),
+  width: integer("width"),
+  height: integer("height"),
+  bytes: integer("bytes"),
+  capturedAt: timestamp("captured_at"),
+  gpsLat: decimal("gps_lat", { precision: 10, scale: 7 }),
+  gpsLng: decimal("gps_lng", { precision: 10, scale: 7 }),
+  caption: text("caption"),
+  tagsJson: jsonb("tags_json"),
+  isHero: boolean("is_hero").notNull().default(false),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+export const projectShareLinks = pgTable("project_share_links", {
+  id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id", { length: 36 }).notNull(),
+  projectId: varchar("project_id", { length: 36 }).notNull(),
+  token: text("token").notNull(),
+  label: text("label"),
+  scopeJson: jsonb("scope_json"),
+  createdByUserId: varchar("created_by_user_id", { length: 36 }),
+  expiresAt: timestamp("expires_at"),
+  revokedAt: timestamp("revoked_at"),
+  lastViewedAt: timestamp("last_viewed_at"),
+  viewCount: integer("view_count").notNull().default(0),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({ shareTokenIdx: unique().on(table.token) }));
+export const milestoneDependencies = pgTable("milestone_dependencies", {
+  id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id", { length: 36 }).notNull(),
+  projectId: varchar("project_id", { length: 36 }).notNull(),
+  predecessorMilestoneId: varchar("predecessor_milestone_id", { length: 36 }).notNull(),
+  successorMilestoneId: varchar("successor_milestone_id", { length: 36 }).notNull(),
+  type: text("type").notNull().default("FS"),
+  lagDays: integer("lag_days").notNull().default(0),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({ depUniq: unique().on(table.predecessorMilestoneId, table.successorMilestoneId) }));
+export const invoicePayments = pgTable("invoice_payments", {
+  id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id", { length: 36 }).notNull(),
+  invoiceId: varchar("invoice_id", { length: 36 }).notNull(),
+  stripePaymentIntentId: text("stripe_payment_intent_id"),
+  amount: decimal("amount", { precision: 12, scale: 2 }).notNull(),
+  currency: text("currency").notNull().default("usd"),
+  method: text("method").notNull().default("ach"),
+  status: text("status").notNull().default("pending"),
+  initiatedByUserId: varchar("initiated_by_user_id", { length: 36 }),
+  customerEmail: text("customer_email"),
+  paidAt: timestamp("paid_at"),
+  failureReason: text("failure_reason"),
+  metadataJson: jsonb("metadata_json"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
 // === Federal pursuit + compliance schema (v2.1) ===
 export * from "./schema-federal";

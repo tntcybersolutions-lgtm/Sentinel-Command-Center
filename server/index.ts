@@ -14,6 +14,7 @@ import { deliverableGeneratorRouter } from "./deliverable-generator-routes";
 import { documentContentRouter } from "./document-content-routes";
 import { bidJacketAutoFillRouter } from "./bid-jacket-auto-fill-routes.v2";
 import { registerHomeRoutes } from "./home-routes";
+import { registerSprint3Routes } from "./sprint3-routes";
 validateBidJacketTaxonomy();
 
 const app = express();
@@ -81,6 +82,7 @@ app.use((req, res, next) => {
   // Phase 2 v2.1 — POST /api/bid-projects/:bidProjectId/auto-fill-jacket
   app.use(bidJacketAutoFillRouter);
   registerHomeRoutes(app);
+  registerSprint3Routes(app);
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
