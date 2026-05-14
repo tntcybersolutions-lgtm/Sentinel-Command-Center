@@ -1,6 +1,10 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useLocation } from "wouter";
-import { Home, Camera, Mic, FileBox, User } from "lucide-react";
+import { Home, Camera, Mic, Map, User } from "lucide-react";
+import { subscribe } from "@/lib/offline-queue";
+import { OfflineBanner } from "@/components/offline-banner";
+import { InstallHint } from "@/components/install-hint";
+import { SyncSheet } from "@/components/sync-sheet";
 
 interface NavItem {
   icon: typeof Home;
@@ -13,13 +17,15 @@ const NAV: NavItem[] = [
   { icon: Home, label: "Home", path: "/home" },
   { icon: Camera, label: "Photos", path: "/projects/default/m-photos" },
   { icon: Mic, label: "Voice", path: "/voice-daily-log", primary: true },
-  { icon: FileBox, label: "Schedule", path: "/projects/default/schedule" },
+  { icon: Map, label: "Drawings", path: "/projects/default/drawings" },
   { icon: User, label: "Profile", path: "/profile" },
 ];
 
 export function MobileShell({ children }: { children: ReactNode }) {
   const [isMobile, setIsMobile] = useState(false);
   const [location, setLocation] = useLocation();
+  const [queued, setQueued] = useState(0);
+  const [sheetOpen, setSheetOpen] = useState(false);
 
   useEffect(() => {
     if (typeof window === "undefined" || !window.matchMedia) return;
@@ -30,11 +36,37 @@ export function MobileShell({ children }: { children: ReactNode }) {
     return () => mq.removeEventListener?.("change", update);
   }, []);
 
+  useEffect(() => subscribe(setQueued), []);
+
   if (!isMobile) return <>{children}</>;
 
   return (
     <>
+      <OfflineBanner />
       <div style={{ paddingBottom: 96 }}>{children}</div>
+      <InstallHint />
+      {queued > 0 && (
+        <button
+          data-testid="nav-mobile-queued"
+          onClick={() => setSheetOpen(true)}
+          style={{
+            position: "fixed",
+            right: 16,
+            bottom: 78,
+            zIndex: 51,
+            background: "#F0997B",
+            color: "#1A0E08",
+            border: "none",
+            borderRadius: 999,
+            padding: "6px 12px",
+            fontSize: 12,
+            fontWeight: 700,
+            boxShadow: "0 4px 14px rgba(0,0,0,0.4)",
+            cursor: "pointer",
+          }}
+        >{queued} queued</button>
+      )}
+      <SyncSheet open={sheetOpen} onClose={() => setSheetOpen(false)} />
       <nav
         data-testid="nav-mobile-shell"
         style={{

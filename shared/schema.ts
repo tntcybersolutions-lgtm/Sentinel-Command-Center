@@ -6770,5 +6770,54 @@ export const invoicePayments = pgTable("invoice_payments", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
+// === Sprint 4.5 / 5: Push subscriptions + Drawings ===
+export const pushSubscriptions = pgTable("push_subscriptions", {
+  id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id", { length: 64 }).notNull(),
+  userId: varchar("user_id", { length: 64 }),
+  endpoint: text("endpoint").notNull().unique(),
+  p256dh: text("p256dh").notNull(),
+  auth: text("auth").notNull(),
+  userAgent: text("user_agent"),
+  lastSeenAt: timestamp("last_seen_at").defaultNow().notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+export const insertPushSubscriptionSchema = createInsertSchema(pushSubscriptions).omit({ id: true, createdAt: true, lastSeenAt: true });
+export type PushSubscription = typeof pushSubscriptions.$inferSelect;
+export type InsertPushSubscription = z.infer<typeof insertPushSubscriptionSchema>;
+
+export const drawings = pgTable("drawings", {
+  id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id", { length: 64 }).notNull(),
+  projectId: varchar("project_id", { length: 36 }).notNull(),
+  title: text("title").notNull(),
+  sheet: text("sheet"),
+  discipline: text("discipline"),
+  fileUrl: text("file_url").notNull(),
+  pageCount: integer("page_count"),
+  uploadedByUserId: varchar("uploaded_by_user_id", { length: 64 }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+export const insertDrawingSchema = createInsertSchema(drawings).omit({ id: true, createdAt: true });
+export type Drawing = typeof drawings.$inferSelect;
+export type InsertDrawing = z.infer<typeof insertDrawingSchema>;
+
+export const drawingPins = pgTable("drawing_pins", {
+  id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id", { length: 64 }).notNull(),
+  drawingId: varchar("drawing_id", { length: 36 }).notNull(),
+  page: integer("page").notNull().default(1),
+  x: decimal("x", { precision: 6, scale: 5 }).notNull(),
+  y: decimal("y", { precision: 6, scale: 5 }).notNull(),
+  label: text("label"),
+  linkType: text("link_type"),
+  linkId: varchar("link_id", { length: 36 }),
+  createdByUserId: varchar("created_by_user_id", { length: 64 }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+export const insertDrawingPinSchema = createInsertSchema(drawingPins).omit({ id: true, createdAt: true });
+export type DrawingPin = typeof drawingPins.$inferSelect;
+export type InsertDrawingPin = z.infer<typeof insertDrawingPinSchema>;
+
 // === Federal pursuit + compliance schema (v2.1) ===
 export * from "./schema-federal";
