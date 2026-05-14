@@ -5,8 +5,12 @@ import { Document, Page, pdfjs } from "react-pdf";
 import { apiFetch } from "@/lib/offline-queue";
 import "react-pdf/dist/Page/AnnotationLayer.css";
 import "react-pdf/dist/Page/TextLayer.css";
+// Bundle the pdf.js worker as a same-origin asset so the service worker can
+// cache it for offline drawing viewing. The previous CDN URL (unpkg.com) is
+// cross-origin and explicitly skipped by sw.js, which would break offline.
+import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 
-pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
+pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
 interface Drawing {
   id: string;
