@@ -253,6 +253,9 @@ const HerbieDigest = lazy(() => import('@/pages/herbie-digest-page'));
 const HerbieAutonomous = lazy(() => import('@/pages/herbie-autonomous-dashboard'));
 const HerbieMemory = lazy(() => import('@/pages/herbie-memory-inspector'));
 const ChangeOrderApprovals = lazy(() => import('@/pages/approvals'));
+const MobileHomePage = lazy(() => import('./pages/m-home'));
+const MobilePhotosPage = lazy(() => import('./pages/m-photos'));
+import { MobileShell } from "@/components/mobile-shell";
 import NotFound from "@/pages/not-found";
 
 function LegacyRedirect({ to }: { to: string }) {
@@ -263,11 +266,14 @@ function LegacyRedirect({ to }: { to: string }) {
 
 function Router() {
   return (
+    <MobileShell>
     <Switch>
       {/* ── Home ── */}
       <Route path="/" component={() => <LegacyRedirect to="/home" />} />
       <Route path="/home" component={() => <SafeRoute component={HomeAssistant} name="Home" />} />
       <Route path="/projects/:id/photos" component={() => <SafeRoute component={ProjectPhotosPage} name="ProjectPhotos" />} />
+      <Route path="/m-home" component={() => <Suspense fallback={<div>Loading...</div>}><MobileHomePage /></Suspense>} />
+      <Route path="/projects/:id/m-photos" component={() => <Suspense fallback={<div>Loading...</div>}><MobilePhotosPage /></Suspense>} />
       <Route path="/projects/:id/schedule" component={() => <SafeRoute component={ProjectSchedulePage} name="ProjectSchedule" />} />
       <Route path="/portal/:token" component={() => <SafeRoute component={PortalPublicPage} name="PortalPublic" />} />
       <Route path="/dashboard" component={() => <LegacyRedirect to="/home" />} />
@@ -405,6 +411,7 @@ function Router() {
       <Route path="/debug/viewer-demo" component={() => <SafeRoute component={ViewerDemo} name="ViewerDemo" />} />
       <Route component={NotFound} />
     </Switch>
+    </MobileShell>
   );
 }
 

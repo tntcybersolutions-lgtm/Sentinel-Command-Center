@@ -1,58 +1,96 @@
-// Sentinel Command Center service worker
-// Cache-first shell for the offline-friendly mobile screens.
-// Bumped on each deploy via CACHE_VERSION. Stale caches are auto-purged on activate.
-const CACHE_VERSION = "sentinel-shell-v1";
-const SHELL_URLS = [
-  "/",
-  "/home",
-  "/my-day",
-  "/approvals",
-  "/voice-daily-log",
-  "/photos",
-  "/manifest.json",
-  "/favicon.png",
-];
+const SW_VERSION = 'sentinel-sw-v2';
+const PRECACHE = ['/', '/manifest.json', '/favicon.png'];
 
-self.addEventListener("install", (event) => {
-  event.waitUntil(
-    caches.open(CACHE_VERSION).then((cache) => cache.addAll(SHELL_URLS).catch(() => null))
-  );
-  self.skipWaiting();
-});
-
-self.addEventListener("activate", (event) => {
-  event.waitUntil(
-    (async () => {
-      const keys = await caches.keys();
-      await Promise.all(keys.filter((k) => k !== CACHE_VERSION).map((k) => caches.delete(k)));
-      await self.clients.claim();
-    })()
+self.addEventListener('install', (e) => {
+  e.waitUntil(
+    caches.open(SW_VERSION)
+      .then((c) => c.addAll(PRECACHE).catch(() => null))
+      .then(() => self.skipWaiting())
   );
 });
 
-self.addEventListener("fetch", (event) => {
-  const req = event.request;
-  // Only handle GETs on same-origin navigation/static; let API + cross-origin pass through.
-  if (req.method !== "GET") return;
+self.addEventListener('activate', (e) => {
+  e.waitUntil(
+    caches.keys()
+      .then((keys) => Promise.all(keys.filter((k) => k !== SW_VERSION).map((k) => caches.delete(k))))
+      .then(() => self.clients.claim())
+  );
+});
+
+self.addEventListener('fetch', (e) => {
+  const req = e.request;
+  if (req.method !== 'GET') return;
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return;
-  if (url.pathname.startsWith("/api/")) return;
-  if (url.pathname.startsWith("/__")) return;
 
-  event.respondWith(
-    (async () => {
-      const cached = await caches.match(req);
-      const fetchPromise = fetch(req)
-        .then((res) => {
-          if (res && res.status === 200 && res.type === "basic") {
-            const copy = res.clone();
-            caches.open(CACHE_VERSION).then((c) => c.put(req, copy)).catch(() => null);
+  // assets: cache-first
+  if (
+    /^\/assets\//.test(url.pathname) ||
+    /\.(png|ico|webmanifest|json)$/.test(url.pathname) ||
+    url.pathname === '/sw.js' ||
+    url.pathname === '/manifest.json'
+  ) {
+    e.respondWith(
+      caches.match(req).then((r) =>
+        r ||
+        fetch(req).then((resp) => {
+          if (resp && resp.status === 200) {
+            const copy = resp.clone();
+            caches.open(SW_VERSION).then((c) => c.put(req, copy)).catch(() => null);
           }
-          return res;
+          return resp;
         })
-        .catch(() => cached || Response.error());
-      return cached || fetchPromise;
-    })()
-  );
+      )
+    );
+    return;
+  }
+
+  // api GETs: stale-while-revalidate
+  if (url.pathname.startsWith('/api/')) {
+    e.respondWith(
+      caches.open(SW_VERSION).then((c) =>
+        c.match(req).then((cached) => {
+          const network = fetch(req)
+            .then((resp) => {
+              if (resp && resp.ok) c.put(req, resp.clone());
+              return resp;
+            })
+            .catch(() => cached);
+          return cached || network;
+        })
+      )
+    );
+    return;
+  }
+
+  // navigations: network first, fallback to '/'
+  if (req.mode === 'navigate') {
+    e.respondWith(fetch(req).catch(() => caches.match('/')));
+  }
 });
 
+self.addEventListener('sync', (e) => {
+  if (e.tag === 'sentinel-outbound') {
+    e.waitUntil(
+      self.clients.matchAll().then((cs) =>
+        cs.forEach((c) => c.postMessage({ type: 'flush-outbound' }))
+      )
+    );
+  }
+});
+
+self.addEventListener('message', (e) => {
+  if (e.data && e.data.type === 'request-flush') {
+    if ('sync' in self.registration) {
+      self.registration.sync.register('sentinel-outbound').catch(() => {
+        self.clients.matchAll().then((cs) =>
+          cs.forEach((c) => c.postMessage({ type: 'flush-outbound' }))
+        );
+      });
+    } else {
+      self.clients.matchAll().then((cs) =>
+        cs.forEach((c) => c.postMessage({ type: 'flush-outbound' }))
+      );
+    }
+  }
+});
