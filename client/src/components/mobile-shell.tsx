@@ -1,10 +1,11 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useLocation } from "wouter";
 import { Home, Camera, Mic, Map, User } from "lucide-react";
 import { subscribe } from "@/lib/offline-queue";
 import { OfflineBanner } from "@/components/offline-banner";
 import { InstallHint } from "@/components/install-hint";
 import { SyncSheet } from "@/components/sync-sheet";
+import { useProjectContext } from "@/nav/project-context";
 
 interface NavItem {
   icon: typeof Home;
@@ -13,19 +14,26 @@ interface NavItem {
   primary?: boolean;
 }
 
-const NAV: NavItem[] = [
-  { icon: Home, label: "Home", path: "/m-home" },
-  { icon: Camera, label: "Photos", path: "/projects/default/m-photos" },
-  { icon: Mic, label: "Voice", path: "/voice-daily-log", primary: true },
-  { icon: Map, label: "Drawings", path: "/projects/default/drawings" },
-  { icon: User, label: "Profile", path: "/profile" },
-];
-
 export function MobileShell({ children }: { children: ReactNode }) {
   const [isMobile, setIsMobile] = useState(false);
   const [location, setLocation] = useLocation();
   const [queued, setQueued] = useState(0);
   const [sheetOpen, setSheetOpen] = useState(false);
+  const { selectedProjectId } = useProjectContext();
+
+  // Project-aware nav: route Photos/Drawings to the active project from
+  // the project context (persisted in localStorage by the profile switcher).
+  // Falls back to "default" so the nav remains usable in portfolio mode.
+  const NAV: NavItem[] = useMemo(() => {
+    const pid = selectedProjectId || "default";
+    return [
+      { icon: Home, label: "Home", path: "/m-home" },
+      { icon: Camera, label: "Photos", path: `/projects/${pid}/m-photos` },
+      { icon: Mic, label: "Voice", path: "/voice-daily-log", primary: true },
+      { icon: Map, label: "Drawings", path: `/projects/${pid}/drawings` },
+      { icon: User, label: "Profile", path: "/profile" },
+    ];
+  }, [selectedProjectId]);
 
   useEffect(() => {
     if (typeof window === "undefined" || !window.matchMedia) return;
