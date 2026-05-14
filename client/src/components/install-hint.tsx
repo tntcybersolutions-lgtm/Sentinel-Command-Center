@@ -6,6 +6,7 @@ interface BeforeInstallPromptEvent extends Event {
 }
 
 const DISMISS_KEY = "sentinel-install-dismissed";
+const FIRST_VISIT_KEY = "sentinel-first-visit-seen";
 
 export function InstallHint() {
   const [evt, setEvt] = useState<BeforeInstallPromptEvent | null>(null);
@@ -16,10 +17,9 @@ export function InstallHint() {
     if (typeof window === "undefined") return;
     if (localStorage.getItem(DISMISS_KEY) === "1") { setHidden(true); return; }
 
-    // Already installed (display-mode standalone)
     const isStandalone =
       window.matchMedia?.("(display-mode: standalone)")?.matches ||
-      // @ts-ignore — iOS Safari
+      // @ts-ignore — iOS Safari property
       window.navigator.standalone === true;
     if (isStandalone) { setHidden(true); return; }
 
@@ -29,10 +29,23 @@ export function InstallHint() {
     };
     window.addEventListener("beforeinstallprompt", onBip);
 
-    // iOS Safari has no beforeinstallprompt — show manual hint
+    // iOS Safari has no beforeinstallprompt. Per spec, only show the manual
+    // "Add to Home Screen" hint when:
+    //   1. We're not running standalone (already checked above)
+    //   2. There is no controlling service worker yet (the very first visit
+    //      hasn't installed sentinel-sw.js yet)
+    //   3. The first-visit flag isn't set in localStorage (so we don't nag
+    //      returning users who chose not to install)
     const ua = navigator.userAgent || "";
     const isIos = /iPad|iPhone|iPod/.test(ua) && !/CriOS|FxiOS|EdgiOS/.test(ua);
-    if (isIos) setIosPrompt(true);
+    // @ts-ignore — iOS Safari property
+    const iosStandalone = window.navigator.standalone === true;
+    const hasSw = !!navigator.serviceWorker?.controller;
+    const firstVisitSeen = localStorage.getItem(FIRST_VISIT_KEY) === "1";
+    if (isIos && !iosStandalone && !hasSw && !firstVisitSeen) {
+      setIosPrompt(true);
+    }
+    try { localStorage.setItem(FIRST_VISIT_KEY, "1"); } catch { /* ignore */ }
 
     return () => window.removeEventListener("beforeinstallprompt", onBip);
   }, []);

@@ -1,6 +1,29 @@
 import { useEffect, useState } from "react";
+import { Link } from "wouter";
+import { useQuery } from "@tanstack/react-query";
 import { pushSupported, currentPermission, getExistingSubscription, subscribePush, unsubscribePush, sendTestPush } from "@/lib/push";
 import { pending, flush } from "@/lib/offline-queue";
+import { useProjectContext } from "@/nav/project-context";
+
+interface MeResponse {
+  id: string;
+  firstName?: string;
+  lastName?: string;
+  displayName?: string;
+  email?: string;
+  role?: string;
+  tenantId?: string;
+}
+interface ProjectRow {
+  id: string;
+  name?: string;
+  projectName?: string;
+  number?: string;
+  projectNumber?: string;
+}
+
+const BUILD_HASH = (import.meta.env.VITE_BUILD_HASH as string) || "dev";
+const APP_VERSION = (import.meta.env.VITE_APP_VERSION as string) || "1.0.0";
 
 export default function ProfilePage() {
   const [subscribed, setSubscribed] = useState(false);
@@ -9,7 +32,11 @@ export default function ProfilePage() {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [queued, setQueued] = useState(0);
-  const [appVersion] = useState<string>(import.meta.env.VITE_APP_VERSION || "dev");
+
+  const { selectedProjectId, selectProject, clearProject } = useProjectContext();
+
+  const meQ = useQuery<MeResponse>({ queryKey: ["/api/me"] });
+  const projectsQ = useQuery<ProjectRow[]>({ queryKey: ["/api/projects"] });
 
   useEffect(() => {
     setSupported(pushSupported());
@@ -56,6 +83,30 @@ export default function ProfilePage() {
     setMsg(`Flushed ${r.flushed} · ${r.failed} failed.`);
   };
 
+  const onSignOut = async () => {
+    if (!window.confirm("Sign out of Sentinel on this device?")) return;
+    setBusy(true);
+    try {
+      await fetch("/api/auth/logout", { method: "POST", credentials: "include" }).catch(() => null);
+    } finally {
+      try {
+        localStorage.removeItem("sentinel.selectedProject");
+      } catch { /* ignore */ }
+      window.location.href = "/";
+    }
+  };
+
+  const onChangeProject = (id: string) => {
+    if (!id) { clearProject(); return; }
+    const p = (projectsQ.data || []).find((x) => x.id === id);
+    const name = p?.name || p?.projectName || p?.number || p?.projectNumber || "Project";
+    selectProject(id, name);
+    setMsg(`Active project set to ${name}.`);
+  };
+
+  const me = meQ.data;
+  const projects = projectsQ.data || [];
+
   return (
     <div
       data-testid="profile-page"
@@ -63,8 +114,50 @@ export default function ProfilePage() {
     >
       <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 6 }}>Profile</h1>
       <div style={{ color: "#8B92A1", fontSize: 13, marginBottom: 20 }}>
-        Mobile preferences for this device.
+        Account, active project, and mobile preferences.
       </div>
+
+      <Section title="Account">
+        {meQ.isLoading ? (
+          <Row label="Loading" value="…" />
+        ) : me ? (
+          <>
+            <Row label="Name" value={me.displayName || `${me.firstName ?? ""} ${me.lastName ?? ""}`.trim() || "—"} testid="profile-name" />
+            <Row label="Email" value={me.email || "—"} testid="profile-email" />
+            <Row label="Role" value={me.role || "—"} testid="profile-role" />
+            <Row label="Tenant" value={me.tenantId || "—"} testid="profile-tenant" />
+            <button
+              data-testid="profile-sign-out"
+              onClick={onSignOut}
+              disabled={busy}
+              style={{ ...btn("transparent", "#E24B4A", "#2C2C2A"), marginTop: 12 }}
+            >Sign out</button>
+          </>
+        ) : (
+          <Row label="Account" value="Not signed in" />
+        )}
+      </Section>
+
+      <Section title="Active project">
+        <select
+          data-testid="profile-project-switcher"
+          value={selectedProjectId || ""}
+          onChange={(e) => onChangeProject(e.target.value)}
+          style={{
+            width: "100%", padding: "10px 12px", background: "#0B0D11",
+            color: "#E8EAEE", border: "1px solid #2C2C2A", borderRadius: 10, fontSize: 14,
+          }}
+        >
+          <option value="">Portfolio (no active project)</option>
+          {projects.map((p) => {
+            const name = p.name || p.projectName || p.number || p.projectNumber || p.id;
+            return <option key={p.id} value={p.id}>{name}</option>;
+          })}
+        </select>
+        <div style={{ fontSize: 12, color: "#8B92A1", marginTop: 8 }}>
+          Pick a project to scope mobile actions (daily logs, drawings, photos) to it.
+        </div>
+      </Section>
 
       <Section title="Notifications">
         {!supported && (
@@ -113,9 +206,16 @@ export default function ProfilePage() {
         >Sync now</button>
       </Section>
 
-      <Section title="About">
-        <Row label="App version" value={appVersion} />
-        <Row label="User-Agent" value={typeof navigator !== "undefined" ? navigator.userAgent.slice(0, 64) + "…" : "unknown"} />
+      <Section title="More">
+        <Link href="/settings">
+          <a
+            data-testid="profile-link-settings"
+            style={{
+              display: "block", padding: "10px 0", color: "#E8EAEE", fontSize: 14,
+              borderBottom: "0.5px solid #2C2C2A", textDecoration: "none",
+            }}
+          >Settings →</a>
+        </Link>
       </Section>
 
       {msg && (
@@ -127,6 +227,13 @@ export default function ProfilePage() {
           }}
         >{msg}</div>
       )}
+
+      <footer
+        data-testid="profile-build"
+        style={{ marginTop: 28, fontSize: 11, color: "#5C6370", textAlign: "center" }}
+      >
+        Sentinel v{APP_VERSION} · build {BUILD_HASH}
+      </footer>
     </div>
   );
 }
