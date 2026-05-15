@@ -60,3 +60,7 @@ VITE_HMR_OVERLAY = "false"
 
 [objectStorage]
 defaultBucketID = "replit-objstore-c6fe9ea2-c700-4765-b89e-6724876a539d"
+
+[postMerge]
+path = "scripts/post-merge.sh"
+timeoutMs = 20000
