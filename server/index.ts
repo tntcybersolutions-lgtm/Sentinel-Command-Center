@@ -17,6 +17,7 @@ import { registerHomeRoutes } from "./home-routes";
 import { registerSprint3Routes } from "./sprint3-routes";
 import { registerSprint4Routes } from "./sprint4-routes";
 import { registerSprint6Routes } from "./sprint6-routes";
+import { registerSprint7Routes } from "./sprint7-routes";
 validateBidJacketTaxonomy();
 
 const app = express();
@@ -86,7 +87,8 @@ app.use((req, res, next) => {
   registerHomeRoutes(app);
   registerSprint3Routes(app);
   registerSprint4Routes(app);
-registerSprint6Routes(app);
+  registerSprint6Routes(app);
+  registerSprint7Routes(app); // __sprint7_5_wired__
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
