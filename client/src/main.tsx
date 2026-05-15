@@ -2,6 +2,7 @@ import { createRoot } from "react-dom/client";
 import { registerPWA } from "./pwa-register";
 import App from "./App";
 import "./index.css";
+import { initTheme } from "./lib/theme";
 
 // Boot diagnostics
 declare global {
