@@ -6821,3 +6821,17 @@ export type InsertDrawingPin = z.infer<typeof insertDrawingPinSchema>;
 
 // === Federal pursuit + compliance schema (v2.1) ===
 export * from "./schema-federal";
+
+// Sprint 6: receipts table (OCR + manual review + budget posting)
+export const receipts = pgTable("receipts", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  projectId: uuid("project_id").notNull(),
+  vendor: text("vendor").notNull(),
+  total: doublePrecision("total").notNull(),
+  currency: text("currency").notNull().default("USD"),
+  purchaseDate: text("purchase_date"),
+  category: text("category").notNull().default("Other"),
+  lineItemsJson: text("line_items_json").notNull().default("[]"),
+  imageUrl: text("image_url"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
