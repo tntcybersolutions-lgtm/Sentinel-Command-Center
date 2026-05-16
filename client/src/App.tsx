@@ -196,6 +196,7 @@ import Bids from "@/pages/bids";
 import BidJacket from "@/pages/bid-jacket";
 import Herbie from "@/pages/herbie";
 import HomeAssistant from "@/pages/home-assistant";
+import PunchListPage from "@/pages/punch-list";
 import Integrations from "@/pages/integrations";
 import SettingsPage from "@/pages/settings";
 import Inventory from "@/pages/inventory";
@@ -280,6 +281,8 @@ function Router() {
       <Route path="/profile" component={() => <Suspense fallback={<div>Loading...</div>}><ProfilePage /></Suspense>} />
       <Route path="/projects/:id/schedule" component={() => <SafeRoute component={ProjectSchedulePage} name="ProjectSchedule" />} />
       <Route path="/portal/:token" component={() => <SafeRoute component={PortalPublicPage} name="PortalPublic" />} />
+      <Route path="/punch-list" component={() => <SafeRoute component={PunchListPage} name="PunchList" />} />
+      <Route path="/punch" component={() => <SafeRoute component={PunchListPage} name="PunchList" />} />
       <Route path="/dashboard" component={() => <LegacyRedirect to="/home" />} />
       <Route path="/home/my-day" component={() => <LegacyRedirect to="/home" />} />
       <Route path="/approvals" component={() => <SafeRoute component={Approvals} name="Approvals" />} />
