@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -22,6 +22,8 @@ import {
   Zap,
   TriangleAlert,
 } from "lucide-react";
+import { StatusPill, type StatusTone } from "@/components/ui/status-pill";
+import { usePullToRefresh } from "@/hooks/use-pull-to-refresh";
 
 interface MyDayData {
   greeting: string;
@@ -55,6 +57,24 @@ const EVENT_TYPE_COLORS: Record<string, string> = {
   reminder: "bg-muted-foreground",
 };
 
+const EVENT_TYPE_TONES: Record<string, StatusTone> = {
+  meeting: "info",
+  site_visit: "ok",
+  deadline: "critical",
+  work_package: "info",
+  personal: "warning",
+  submission: "warning",
+  reminder: "neutral",
+};
+
+function eventTypeLabel(t: string | null | undefined) {
+  if (!t) return "Event";
+  return t
+    .replace(/[_-]+/g, " ")
+    .trim()
+    .replace(/\w\S*/g, (w) => w[0].toUpperCase() + w.slice(1).toLowerCase());
+}
+
 function getGreetingIcon() {
   const hour = new Date().getHours();
   if (hour < 12) return <Sun className="h-6 w-6 text-amber-500" />;
@@ -82,10 +102,15 @@ function getTimeUntil(dateStr: string) {
 
 export default function MyDayPage() {
   const [, navigate] = useLocation();
+  const queryClient = useQueryClient();
 
   const { data, isLoading } = useQuery<MyDayData>({
     queryKey: ["/api/my-day"],
     refetchInterval: 60000,
+  });
+
+  const { pullY, state: ptrState, bind: ptrBind } = usePullToRefresh({
+    onRefresh: () => queryClient.invalidateQueries({ queryKey: ["/api/my-day"] }),
   });
 
   if (isLoading) {
@@ -125,7 +150,21 @@ export default function MyDayPage() {
   const totalActionItems = d.summary.totalOverdueTasks + d.summary.totalDueTodayTasks + d.summary.totalDueRfis + d.summary.totalDueSubmittals;
 
   return (
-    <div className="flex-1 p-6 space-y-6 overflow-auto" data-testid="myday-page">
+    <div
+      className="flex-1 p-6 space-y-6 overflow-auto"
+      data-testid="myday-page"
+      style={{ transform: pullY ? `translateY(${pullY}px)` : undefined, transition: ptrState === "refreshing" || ptrState === "idle" ? "transform 200ms ease-out" : "none" }}
+      {...ptrBind}
+    >
+      {(ptrState === "armed" || ptrState === "refreshing") && (
+        <div
+          className="absolute left-1/2 -translate-x-1/2 -mt-8 text-xs text-muted-foreground flex items-center gap-1.5"
+          data-testid="ptr-indicator"
+        >
+          <Timer className="h-3.5 w-3.5 animate-spin" />
+          {ptrState === "refreshing" ? "Refreshing..." : "Release to refresh"}
+        </div>
+      )}
       <div className="flex items-center justify-between flex-wrap gap-4">
         <div className="flex items-center gap-3">
           {getGreetingIcon()}
@@ -447,7 +486,12 @@ export default function MyDayPage() {
                   onClick={() => navigate("/calendar")}
                   data-testid={`week-event-${evt.id}`}
                 >
-                  <div className={`w-2 h-2 rounded-full shrink-0 ${EVENT_TYPE_COLORS[evt.event_type || evt.eventType] || "bg-muted-foreground"}`} />
+                  <StatusPill
+                    tone={EVENT_TYPE_TONES[evt.event_type || evt.eventType] || "neutral"}
+                    label={eventTypeLabel(evt.event_type || evt.eventType)}
+                    size="sm"
+                    hideIcon
+                  />
                   <span className="text-sm text-muted-foreground shrink-0 w-20">
                     {new Date(evt.start_at || evt.startAt).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })}
                   </span>

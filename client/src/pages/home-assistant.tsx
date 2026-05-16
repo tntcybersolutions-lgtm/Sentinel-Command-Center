@@ -48,6 +48,10 @@ import {
   AlertTriangle,
 } from "lucide-react";
 import type { NavCounts } from "@/nav/navConfig";
+import { StatusPill } from "@/components/ui/status-pill";
+import { CardTiered } from "@/components/ui/card-tiered";
+import { useCountUp } from "@/hooks/use-count-up";
+import { SafeArea } from "@/components/ui/safe-area";
 
 // ── Helpers (unchanged from v1) ──────────────────────────────────────────────
 
@@ -211,27 +215,46 @@ function MoneyThisWeek() {
 
   return (
     <div className="grid grid-cols-2 lg:grid-cols-4 gap-4" data-testid="money-this-week">
-      {cards.map((c) => {
-        const Icon = c.icon;
-        return (
-          <button
-            key={c.label}
-            onClick={() => setLocation(c.route)}
-            className={`text-left border border-white/10 bg-black/20 border-l-4 ${c.accent} p-4 hover:bg-white/5 transition-colors`}
-            data-testid={`money-card-${c.label.toLowerCase().replace(/\s+/g, "-")}`}
-          >
-            <div className="flex items-center gap-2 mb-2">
-              <Icon className="h-4 w-4 text-zinc-400" />
-              <span className="text-xs text-zinc-400 uppercase tracking-wider">{c.label}</span>
-            </div>
-            <div className="flex items-baseline gap-2">
-              <span className="text-3xl font-mono font-bold">{isLoading ? "--" : c.primary}</span>
-              <span className="text-xs text-zinc-500">{c.subtitle}</span>
-            </div>
-          </button>
-        );
-      })}
+      {cards.map((c) => (
+        <MoneyCard key={c.label} card={c} isLoading={isLoading} onClick={() => setLocation(c.route)} />
+      ))}
     </div>
+  );
+}
+
+// Per-card sub-component so useCountUp can run per primary number.
+function MoneyCard({
+  card,
+  isLoading,
+  onClick,
+}: {
+  card: { label: string; primary: string; subtitle: string; icon: typeof FileText; accent: string; route: string };
+  isLoading: boolean;
+  onClick: () => void;
+}) {
+  const Icon = card.icon;
+  const asNumber = /^-?\d+(\.\d+)?$/.test(card.primary) ? Number(card.primary) : null;
+  const animated = useCountUp(asNumber, { duration: 700 });
+  const displayPrimary = isLoading
+    ? "--"
+    : asNumber != null
+    ? Math.round(animated).toLocaleString()
+    : card.primary;
+  return (
+    <button
+      onClick={onClick}
+      className={`text-left border border-white/10 bg-black/20 border-l-4 ${card.accent} p-4 hover:bg-white/5 transition-colors`}
+      data-testid={`money-card-${card.label.toLowerCase().replace(/\s+/g, "-")}`}
+    >
+      <div className="flex items-center gap-2 mb-2">
+        <Icon className="h-4 w-4 text-zinc-400" />
+        <span className="text-xs text-zinc-400 uppercase tracking-wider">{card.label}</span>
+      </div>
+      <div className="flex items-baseline gap-2">
+        <span className="text-3xl font-mono font-bold">{displayPrimary}</span>
+        <span className="text-xs text-zinc-500">{card.subtitle}</span>
+      </div>
+    </button>
   );
 }
 
@@ -384,9 +407,7 @@ function ProjectHealthBoard() {
                   <div className="text-[11px] text-zinc-500 font-mono">{p.projectNumber}</div>
                 )}
               </div>
-              <span className={`text-[10px] uppercase tracking-wider font-bold ${band.color}`}>
-                {band.label}
-              </span>
+              <StatusPill.FromRiskScore score={p.riskScore} size="sm" />
             </div>
 
             <div className="mt-3 flex items-baseline gap-3">
@@ -404,7 +425,7 @@ function ProjectHealthBoard() {
             )}
 
             <div className="mt-3 flex items-center justify-between text-[11px] text-zinc-500">
-              <span className={statusColor(p.status)}>{p.status || "--"}</span>
+              <StatusPill status={p.status} size="sm" />
               <span className="font-mono">{formatCurrency(p.contractValue, true)}</span>
               <span className="font-mono">{p.completionPercentage != null ? `${p.completionPercentage}%` : "--%"}</span>
             </div>
@@ -565,7 +586,8 @@ export default function HomeAssistant() {
   const counts = countsQuery.data;
 
   return (
-    <div className="min-h-screen bg-black text-white p-6 space-y-8" data-testid="home-page">
+    <SafeArea sides={["top", "bottom"]} className="min-h-screen bg-black text-white" data-testid="home-page-safe">
+    <div className="p-6 space-y-8" data-testid="home-page">
       {/* Greeting */}
       <div className="flex items-baseline justify-between" data-testid="greeting-bar">
         <h1 className="text-2xl font-semibold tracking-tight" data-testid="text-greeting">
@@ -639,5 +661,6 @@ export default function HomeAssistant() {
       {/* Recent Activity — collapsed, default closed */}
       <RecentActivity />
     </div>
+    </SafeArea>
   );
 }

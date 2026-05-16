@@ -133,6 +133,7 @@ export const navConfig: NavGroupConfig[] = [
     items: [
       { id: "projects.active",       label: "Active Projects", icon: FolderGit2,     route: "/projects/active",      portfolioOnly: true },
       { id: "projects.tasks",        label: "Tasks",           icon: ListChecks,     route: "/execution/tasks",      badgeKey: "overdueTaskCount" },
+      { id: "projects.punch",        label: "Punch List",      icon: ClipboardCheck, route: "/punch-list" },
       { id: "projects.rfis",         label: "RFIs",            icon: FileQuestion,   route: "/execution/rfis",       badgeKey: "openRfiCount" },
       { id: "projects.submittals",   label: "Submittals",      icon: FileCheck,      route: "/execution/submittals", badgeKey: "pendingSubmittalCount" },
       { id: "projects.changeOrders", label: "Change Orders",   icon: ClipboardCheck, route: "/change-order-approvals" },
