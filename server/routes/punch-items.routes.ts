@@ -33,6 +33,10 @@ const CreateSchema = z.object({
   title: z.string().min(1).max(500),
   description: z.string().max(5000).optional(),
   severity: z.enum(SEVERITIES).default("medium"),
+  // FW4 fix: GPS coordinates accepted on create
+  latitude: z.number().optional().nullable(),
+  longitude: z.number().optional().nullable(),
+  geoAccuracy: z.number().optional().nullable(),
   status: z.enum(STATUSES).default("open"),
   assignee: z.string().max(120).optional(),
   dueDate: z.string().optional(),
@@ -215,11 +219,10 @@ router.post("/", async (req, res) => {
     return res.status(400).json({ error: "Validation failed", issues: parsed.error.issues });
   }
   const d = parsed.data;
-  const closedAt = d.status === "closed" ? new Date() : null;
   const { rows } = await pool.query<Row>(
     `INSERT INTO punch_items
-       (title, description, severity, status, assignee, due_date, location_label, photo_url, project_id, trade, created_by, closed_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+       (title, description, severity, status, assignee, due_date, location_label, photo_url, project_id, trade, created_by, latitude, longitude, geo_accuracy, closed_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
      RETURNING *`,
     [
       d.title,
@@ -233,7 +236,10 @@ router.post("/", async (req, res) => {
       d.projectId ?? null,
       d.trade ?? null,
       d.createdBy ?? null,
-      closedAt,
+      d.latitude ?? null,
+      d.longitude ?? null,
+      d.geoAccuracy ?? null,
+      d.status === "closed" ? new Date() : null,
     ],
   );
   res.status(201).json(rowToJson(rows[0]));
@@ -263,6 +269,10 @@ router.patch("/:id", async (req, res) => {
   if (d.photoUrl !== undefined) add("photo_url", d.photoUrl);
   if (d.projectId !== undefined) add("project_id", d.projectId);
   if (d.trade !== undefined) add("trade", d.trade);
+  // FW4 fix: GPS update support
+  if (d.latitude !== undefined) add("latitude", d.latitude);
+  if (d.longitude !== undefined) add("longitude", d.longitude);
+  if (d.geoAccuracy !== undefined) add("geo_accuracy", d.geoAccuracy);
   if (sets.length === 0) return res.status(400).json({ error: "Nothing to update" });
   sets.push(`updated_at = now()`);
   vals.push(req.params.id);
