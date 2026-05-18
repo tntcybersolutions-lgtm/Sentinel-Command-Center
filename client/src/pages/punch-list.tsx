@@ -546,7 +546,7 @@ export default function PunchListPage() {
                     <PunchItemCard
                       key={it.id}
                       item={it}
-                      onOpen={() => setDetailItem(it)}
+                      onOpen={() => { /* FW1: mobile-tap navigates */ if (typeof window !== 'undefined' && window.innerWidth < 768) { navigate('/m-punch/' + it.id); } else { setDetailItem(it); } }}
                       onAdvance={() => changeStatus(it.id, nextStatus(it.status))}
                       onRetreat={() => changeStatus(it.id, prevStatus(it.status))}
                     />
