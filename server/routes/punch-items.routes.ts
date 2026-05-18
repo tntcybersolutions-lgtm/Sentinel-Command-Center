@@ -68,6 +68,9 @@ function rowToJson(r: Row) {
     title: r.title,
     description: r.description || undefined,
     severity: r.severity,
+    latitude: r.latitude != null ? Number(r.latitude) : null,
+    longitude: r.longitude != null ? Number(r.longitude) : null,
+    geoAccuracy: r.geo_accuracy != null ? Number(r.geo_accuracy) : null,
     status: r.status,
     assignee: r.assignee || undefined,
     dueDate: r.due_date || undefined,
@@ -109,6 +112,10 @@ async function ensureTable(): Promise<void> {
   await db.execute(sql`CREATE INDEX IF NOT EXISTS punch_items_project_idx ON punch_items (project_id, status);`);
   await db.execute(sql`CREATE INDEX IF NOT EXISTS punch_items_status_idx ON punch_items (status, created_at DESC);`);
   await db.execute(sql`CREATE INDEX IF NOT EXISTS punch_items_assignee_idx ON punch_items (assignee, status);`);
+  // FW4: GPS columns (idempotent ALTER TABLE)
+  await db.execute(sql`ALTER TABLE punch_items ADD COLUMN IF NOT EXISTS latitude double precision`);
+  await db.execute(sql`ALTER TABLE punch_items ADD COLUMN IF NOT EXISTS longitude double precision`);
+  await db.execute(sql`ALTER TABLE punch_items ADD COLUMN IF NOT EXISTS geo_accuracy double precision`);
   bootstrapped = true;
 }
 

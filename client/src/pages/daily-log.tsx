@@ -45,6 +45,20 @@ import { SafeArea } from "@/components/ui/safe-area";
 import { useCountUp } from "@/hooks/use-count-up";
 import { usePullToRefresh } from "@/hooks/use-pull-to-refresh";
 
+
+// FW4: GPS capture helper — best-effort, never blocks save
+function captureGeoFw4(): Promise<{ latitude:number; longitude:number; accuracy:number } | null> {
+  return new Promise((resolve) => {
+    if (typeof navigator === 'undefined' || !('geolocation' in navigator)) return resolve(null);
+    const timer = setTimeout(() => resolve(null), 4000);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => { clearTimeout(timer); resolve({ latitude: pos.coords.latitude, longitude: pos.coords.longitude, accuracy: pos.coords.accuracy }); },
+      () => { clearTimeout(timer); resolve(null); },
+      { enableHighAccuracy: false, maximumAge: 60_000, timeout: 4000 }
+    );
+  });
+}
+
 // ---------- Types (mirror daily-logs.routes.ts) ----------
 
 type Trade =

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useRoute } from "wouter";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { usePullToRefresh } from "@/hooks/use-pull-to-refresh";
 import { Document, Page, pdfjs } from "react-pdf";
 import { apiFetch } from "@/lib/offline-queue";
 import { DrawingMarkupOverlay, DrawingMarkupToolbar, useMarkupStorage, type MarkupTool } from "@/components/drawing-markup-canvas";
@@ -52,6 +53,9 @@ function DrawingMarkupToolbarHost({
 }
 
 export default function MobileDrawingsPage() {
+  const ptrFw3 = usePullToRefresh({
+    onRefresh: () => { try { window.location.reload(); } catch {} },
+  });
   const [match, params] = useRoute("/projects/:id/drawings");
   const projectId = (match && params?.id) || "default";
   const qc = useQueryClient();
@@ -231,7 +235,7 @@ export default function MobileDrawingsPage() {
   };
 
   return (
-    <div
+    <div {...ptrFw3.bind}
       data-testid="m-drawings-page"
       style={{ background: "#0B0D11", minHeight: "100vh", color: "#E8EAEE", padding: "16px 16px 96px" }}
     >

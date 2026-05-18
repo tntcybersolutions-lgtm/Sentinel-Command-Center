@@ -260,6 +260,7 @@ const MobileLoginPage = lazy(() => import('./pages/m-login'));
 const MobileRfiPage = lazy(() => import('./pages/m-rfi'));
 const MobilePhotosPage = lazy(() => import('./pages/m-photos'));
 const MobileDrawingsPage = lazy(() => import('./pages/m-drawings'));
+const MobilePunchPage = lazy(() => import('./pages/m-punch'));
 const ProfilePage = lazy(() => import('./pages/profile'));
 import { MobileShell } from "@/components/mobile-shell";
 import NotFound from "@/pages/not-found";
@@ -288,6 +289,7 @@ function Router() {
       <Route path="/portal/:token" component={() => <SafeRoute component={PortalPublicPage} name="PortalPublic" />} />
       <Route path="/punch-list" component={() => <SafeRoute component={PunchListPage} name="PunchList" />} />
       <Route path="/punch" component={() => <SafeRoute component={PunchListPage} name="PunchList" />} />
+      <Route path="/m-punch/:id" component={() => <Suspense fallback={<div>Loading...</div>}><MobilePunchPage /></Suspense>} />
       <Route path="/dashboard" component={() => <LegacyRedirect to="/home" />} />
       <Route path="/home/my-day" component={() => <LegacyRedirect to="/home" />} />
       <Route path="/approvals" component={() => <SafeRoute component={Approvals} name="Approvals" />} />

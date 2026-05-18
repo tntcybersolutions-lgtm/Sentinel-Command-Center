@@ -162,6 +162,10 @@ async function ensureTable(): Promise<void> {
       updated_at  timestamptz NOT NULL DEFAULT now()
     );
   `);
+  // FW4: GPS columns
+  await db.execute(sql`ALTER TABLE field_daily_logs ADD COLUMN IF NOT EXISTS latitude double precision`);
+  await db.execute(sql`ALTER TABLE field_daily_logs ADD COLUMN IF NOT EXISTS longitude double precision`);
+  await db.execute(sql`ALTER TABLE field_daily_logs ADD COLUMN IF NOT EXISTS geo_accuracy double precision`);
   await db.execute(sql`CREATE INDEX IF NOT EXISTS daily_logs_project_date_idx ON field_daily_logs (project_id, date DESC);`);
   await db.execute(sql`CREATE INDEX IF NOT EXISTS daily_logs_status_idx ON field_daily_logs (status);`);
   // Ensure only one draft per project+date (the idempotent-upsert depends on this)
