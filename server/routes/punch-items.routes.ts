@@ -215,10 +215,11 @@ router.post("/", async (req, res) => {
     return res.status(400).json({ error: "Validation failed", issues: parsed.error.issues });
   }
   const d = parsed.data;
+  const closedAt = d.status === "closed" ? new Date() : null;
   const { rows } = await pool.query<Row>(
     `INSERT INTO punch_items
        (title, description, severity, status, assignee, due_date, location_label, photo_url, project_id, trade, created_by, closed_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, CASE WHEN $4 = 'closed' THEN now() ELSE NULL END)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
      RETURNING *`,
     [
       d.title,
@@ -232,6 +233,7 @@ router.post("/", async (req, res) => {
       d.projectId ?? null,
       d.trade ?? null,
       d.createdBy ?? null,
+      closedAt,
     ],
   );
   res.status(201).json(rowToJson(rows[0]));
