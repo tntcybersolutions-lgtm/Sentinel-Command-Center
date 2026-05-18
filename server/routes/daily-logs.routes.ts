@@ -2,7 +2,7 @@
  * Sprint F1 — Daily Log REST routes — POSTGRES PERSISTENCE
  *
  * Replaces the original in-memory store. Survives Replit Autoscale container
- * restarts. Auto-creates the daily_logs table on first request if missing
+ * restarts. Auto-creates the field_daily_logs table on first request if missing
  * (idempotent CREATE TABLE IF NOT EXISTS) so the server boots even before
  * `npm run db:push` has been run.
  *
@@ -140,7 +140,7 @@ let bootstrapped = false;
 async function ensureTable(): Promise<void> {
   if (bootstrapped) return;
   await db.execute(sql`
-    CREATE TABLE IF NOT EXISTS daily_logs (
+    CREATE TABLE IF NOT EXISTS field_daily_logs (
       id          varchar(36) PRIMARY KEY DEFAULT gen_random_uuid(),
       project_id  varchar(80) NOT NULL,
       date        date NOT NULL,
@@ -162,12 +162,12 @@ async function ensureTable(): Promise<void> {
       updated_at  timestamptz NOT NULL DEFAULT now()
     );
   `);
-  await db.execute(sql`CREATE INDEX IF NOT EXISTS daily_logs_project_date_idx ON daily_logs (project_id, date DESC);`);
-  await db.execute(sql`CREATE INDEX IF NOT EXISTS daily_logs_status_idx ON daily_logs (status);`);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS daily_logs_project_date_idx ON field_daily_logs (project_id, date DESC);`);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS daily_logs_status_idx ON field_daily_logs (status);`);
   // Ensure only one draft per project+date (the idempotent-upsert depends on this)
   await db.execute(sql`
     CREATE UNIQUE INDEX IF NOT EXISTS daily_logs_one_draft_per_day
-      ON daily_logs (project_id, date)
+      ON field_daily_logs (project_id, date)
       WHERE status = 'draft';
   `);
   bootstrapped = true;
@@ -175,12 +175,12 @@ async function ensureTable(): Promise<void> {
 
 // Seed two rows on first boot so the page isn't empty in fresh environments.
 async function maybeSeed(): Promise<void> {
-  const { rows } = await pool.query<{ count: string }>(`SELECT COUNT(*)::text AS count FROM daily_logs`);
+  const { rows } = await pool.query<{ count: string }>(`SELECT COUNT(*)::text AS count FROM field_daily_logs`);
   if (Number(rows[0]?.count || 0) > 0) return;
   const today = new Date().toISOString().slice(0, 10);
   const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
   await pool.query(
-    `INSERT INTO daily_logs (project_id, date, super_name, weather, crew, equipment, deliveries, visitors, narrative, photo_urls, status, signed_at)
+    `INSERT INTO field_daily_logs (project_id, date, super_name, weather, crew, equipment, deliveries, visitors, narrative, photo_urls, status, signed_at)
      VALUES
        ($1,$2,$3,$4::jsonb,$5::jsonb,$6::jsonb,$7::jsonb,$8::jsonb,$9,$10::jsonb,$11,$12),
        ($13,$14,$15,$16::jsonb,$17::jsonb,$18::jsonb,$19::jsonb,$20::jsonb,$21,$22::jsonb,$23,$24)
@@ -258,7 +258,7 @@ dailyLogsRouter.get("/", async (req, res) => {
   if (status) { params.push(status); filters.push(`status = $${params.length}`); }
   const where = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
   const { rows } = await pool.query<DailyLogRow>(
-    `SELECT * FROM daily_logs ${where} ORDER BY date DESC, created_at DESC`,
+    `SELECT * FROM field_daily_logs ${where} ORDER BY date DESC, created_at DESC`,
     params,
   );
   res.json(rows.map(rowToJson));
@@ -267,16 +267,16 @@ dailyLogsRouter.get("/", async (req, res) => {
 dailyLogsRouter.get("/_meta/stats", async (_req, res) => {
   const today = new Date().toISOString().slice(0, 10);
   const last7 = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
-  const totalRow = await pool.query<{ count: string }>(`SELECT COUNT(*)::text AS count FROM daily_logs`);
+  const totalRow = await pool.query<{ count: string }>(`SELECT COUNT(*)::text AS count FROM field_daily_logs`);
   const statusRows = await pool.query<{ status: string; count: string }>(
-    `SELECT status, COUNT(*)::text AS count FROM daily_logs GROUP BY status`,
+    `SELECT status, COUNT(*)::text AS count FROM field_daily_logs GROUP BY status`,
   );
   const last7Row = await pool.query<{ count: string }>(
-    `SELECT COUNT(*)::text AS count FROM daily_logs WHERE date >= $1`,
+    `SELECT COUNT(*)::text AS count FROM field_daily_logs WHERE date >= $1`,
     [last7],
   );
   const todayRow = await pool.query<{ count: string }>(
-    `SELECT COUNT(*)::text AS count FROM daily_logs WHERE date = $1`,
+    `SELECT COUNT(*)::text AS count FROM field_daily_logs WHERE date = $1`,
     [today],
   );
   const byStatus: Record<string, number> = {};
@@ -290,7 +290,7 @@ dailyLogsRouter.get("/_meta/stats", async (_req, res) => {
 });
 
 dailyLogsRouter.get("/:id", async (req, res) => {
-  const { rows } = await pool.query<DailyLogRow>(`SELECT * FROM daily_logs WHERE id = $1`, [req.params.id]);
+  const { rows } = await pool.query<DailyLogRow>(`SELECT * FROM field_daily_logs WHERE id = $1`, [req.params.id]);
   if (!rows[0]) return res.status(404).json({ error: "Daily log not found" });
   res.json(rowToJson(rows[0]));
 });
@@ -304,12 +304,12 @@ dailyLogsRouter.post("/", async (req, res) => {
 
   // Idempotent: if a draft exists for project+date, update it. Otherwise insert.
   const existing = await pool.query<DailyLogRow>(
-    `SELECT id FROM daily_logs WHERE project_id = $1 AND date = $2 AND status = 'draft' LIMIT 1`,
+    `SELECT id FROM field_daily_logs WHERE project_id = $1 AND date = $2 AND status = 'draft' LIMIT 1`,
     [d.projectId, d.date],
   );
   if (existing.rows[0] && d.status === "draft") {
     const { rows } = await pool.query<DailyLogRow>(
-      `UPDATE daily_logs SET
+      `UPDATE field_daily_logs SET
          super_id    = $2,
          super_name  = $3,
          weather     = $4::jsonb,
@@ -345,7 +345,7 @@ dailyLogsRouter.post("/", async (req, res) => {
   }
 
   const { rows } = await pool.query<DailyLogRow>(
-    `INSERT INTO daily_logs
+    `INSERT INTO field_daily_logs
        (project_id, date, super_id, super_name, weather, crew, equipment, deliveries, visitors,
         narrative, delay_hours, delay_reason, photo_urls, signature, signed_at, status)
      VALUES
@@ -406,7 +406,7 @@ dailyLogsRouter.patch("/:id", async (req, res) => {
   sets.push(`updated_at = now()`);
   vals.push(req.params.id);
   const { rows } = await pool.query<DailyLogRow>(
-    `UPDATE daily_logs SET ${sets.join(", ")} WHERE id = $${vals.length} RETURNING *`,
+    `UPDATE field_daily_logs SET ${sets.join(", ")} WHERE id = $${vals.length} RETURNING *`,
     vals,
   );
   if (!rows[0]) return res.status(404).json({ error: "Daily log not found" });
@@ -414,7 +414,7 @@ dailyLogsRouter.patch("/:id", async (req, res) => {
 });
 
 dailyLogsRouter.delete("/:id", async (req, res) => {
-  const { rowCount } = await pool.query(`DELETE FROM daily_logs WHERE id = $1`, [req.params.id]);
+  const { rowCount } = await pool.query(`DELETE FROM field_daily_logs WHERE id = $1`, [req.params.id]);
   if (!rowCount) return res.status(404).json({ error: "Daily log not found" });
   res.json({ ok: true });
 });
