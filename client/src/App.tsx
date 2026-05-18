@@ -257,6 +257,7 @@ const HerbieMemory = lazy(() => import('@/pages/herbie-memory-inspector'));
 const ChangeOrderApprovals = lazy(() => import('@/pages/approvals'));
 const MobileHomePage = lazy(() => import('./pages/m-home'));
 const MobileLoginPage = lazy(() => import('./pages/m-login'));
+const MobileRfiPage = lazy(() => import('./pages/m-rfi'));
 const MobilePhotosPage = lazy(() => import('./pages/m-photos'));
 const MobileDrawingsPage = lazy(() => import('./pages/m-drawings'));
 const ProfilePage = lazy(() => import('./pages/profile'));
@@ -278,6 +279,7 @@ function Router() {
       <Route path="/home" component={() => <SafeRoute component={HomeAssistant} name="Home" />} />
       <Route path="/projects/:id/photos" component={() => <SafeRoute component={ProjectPhotosPage} name="ProjectPhotos" />} />
       <Route path="/m-login" component={() => <Suspense fallback={<div>Loading...</div>}><MobileLoginPage /></Suspense>} />
+      <Route path="/m-rfi" component={() => <Suspense fallback={<div>Loading...</div>}><MobileRfiPage /></Suspense>} />
       <Route path="/m-home" component={() => <Suspense fallback={<div>Loading...</div>}><MobileHomePage /></Suspense>} />
       <Route path="/projects/:id/m-photos" component={() => <Suspense fallback={<div>Loading...</div>}><MobilePhotosPage /></Suspense>} />
       <Route path="/projects/:id/drawings" component={() => <Suspense fallback={<div>Loading...</div>}><MobileDrawingsPage /></Suspense>} />
