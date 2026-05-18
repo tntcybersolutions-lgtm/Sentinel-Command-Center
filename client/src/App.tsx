@@ -246,6 +246,7 @@ const ProactiveIntelligence = lazy(() => import("@/pages/proactive-intelligence"
 const CoiTracker = lazy(() => import("@/pages/coi-tracker"));
 const BidReadiness = lazy(() => import("@/pages/bid-readiness"));
 const VoiceDailyLog = lazy(() => import("./pages/voice-daily-log"));
+const DailyLogPage = lazy(() => import("./pages/daily-log"));
 const ProjectPhotosPage = lazy(() => import("./pages/projects/photos"));
 const ProjectSchedulePage = lazy(() => import("./pages/projects/schedule"));
 const PortalPublicPage = lazy(() => import("./pages/portal-public"));
@@ -255,6 +256,7 @@ const HerbieAutonomous = lazy(() => import('@/pages/herbie-autonomous-dashboard'
 const HerbieMemory = lazy(() => import('@/pages/herbie-memory-inspector'));
 const ChangeOrderApprovals = lazy(() => import('@/pages/approvals'));
 const MobileHomePage = lazy(() => import('./pages/m-home'));
+const MobileLoginPage = lazy(() => import('./pages/m-login'));
 const MobilePhotosPage = lazy(() => import('./pages/m-photos'));
 const MobileDrawingsPage = lazy(() => import('./pages/m-drawings'));
 const ProfilePage = lazy(() => import('./pages/profile'));
@@ -275,6 +277,7 @@ function Router() {
       <Route path="/" component={() => <LegacyRedirect to="/home" />} />
       <Route path="/home" component={() => <SafeRoute component={HomeAssistant} name="Home" />} />
       <Route path="/projects/:id/photos" component={() => <SafeRoute component={ProjectPhotosPage} name="ProjectPhotos" />} />
+      <Route path="/m-login" component={() => <Suspense fallback={<div>Loading...</div>}><MobileLoginPage /></Suspense>} />
       <Route path="/m-home" component={() => <Suspense fallback={<div>Loading...</div>}><MobileHomePage /></Suspense>} />
       <Route path="/projects/:id/m-photos" component={() => <Suspense fallback={<div>Loading...</div>}><MobilePhotosPage /></Suspense>} />
       <Route path="/projects/:id/drawings" component={() => <Suspense fallback={<div>Loading...</div>}><MobileDrawingsPage /></Suspense>} />
@@ -333,6 +336,8 @@ function Router() {
         <Route path="/coi" component={() => <Suspense fallback={<div>Loading...</div>}><CoiTracker /></Suspense>} />
               <Route path="/bid-readiness" component={() => <Suspense fallback={<div>Loading...</div>}><BidReadiness /></Suspense>} />
         <Route path="/voice-daily-log" component={() => <Suspense fallback={<div>Loading...</div>}><VoiceDailyLog /></Suspense>} />
+        <Route path="/daily-log" component={() => <Suspense fallback={<div>Loading...</div>}><DailyLogPage /></Suspense>} />
+        <Route path="/daily-log/:date" component={() => <Suspense fallback={<div>Loading...</div>}><DailyLogPage /></Suspense>} />
               <Route path="/proactive-intelligence" component={() => <Suspense fallback={<div>Loading...</div>}><ProactiveIntelligence /></Suspense>} />
               <Route path="/vendor-confidence" component={() => <Suspense fallback={<div>Loading...</div>}><VendorConfidence /></Suspense>} />
               <Route path="/herbie-digest" component={() => <Suspense fallback={<div>Loading...</div>}><HerbieDigest /></Suspense>} />

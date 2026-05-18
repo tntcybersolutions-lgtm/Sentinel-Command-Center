@@ -1,55 +1,33 @@
 // ============================================================================
-// punch-items.routes.ts — Sprint 9.1 backend
+// punch-items.routes.ts — Sprint F2 — POSTGRES PERSISTENCE
 // ----------------------------------------------------------------------------
-// REST surface for the Punch List module.
-//
-// v1: in-memory store keyed by punch item id. Persists across requests for the
-// life of the server process; survives Replit Autoscale restarts because every
-// request re-seeds from baseline when the map is empty. Swap to Drizzle when
-// you want multi-server consistency.
+// Replaces the original in-memory Map store with PostgreSQL via the existing
+// drizzle/pg pool. Survives Replit Autoscale container recycles.
 //
 // Endpoints:
-//   GET    /api/punch-items                — list (optional ?projectId, ?status)
-//   GET    /api/punch-items/:id            — get one
-//   POST   /api/punch-items                — create
-//   PATCH  /api/punch-items/:id            — partial update (status, assignee, ...)
-//   DELETE /api/punch-items/:id            — delete
+//   GET    /api/punch-items                       — list (filters: projectId, status, assignee)
+//   GET    /api/punch-items/_meta/stats           — counts by status + overdue + closed-7-day
+//   GET    /api/punch-items/:id                   — get one
+//   POST   /api/punch-items                       — create
+//   PATCH  /api/punch-items/:id                   — partial update
+//   DELETE /api/punch-items/:id                   — delete
 //
-// Status transitions auto-set closedAt when status flips to "closed" and clear
-// it when status flips back out of closed.
+// Status transitions auto-set closed_at when status flips to "closed" and
+// clear it when status flips back out of closed. Bootstrap auto-creates the
+// table on first request via CREATE TABLE IF NOT EXISTS, so the server boots
+// even before `npm run db:push` has been run.
 // ============================================================================
 
 import { Router, type Request, type Response } from "express";
+import { mobileAuthMiddleware } from "../mobile-auth";
 import { z } from "zod";
-
-const router = Router();
-
-// ── Types ────────────────────────────────────────────────────────────────────
+import { sql } from "drizzle-orm";
+import { db, pool } from "../db";
 
 const SEVERITIES = ["low", "medium", "high", "critical"] as const;
 const STATUSES = ["open", "in_progress", "ready_for_review", "closed"] as const;
-
 type PunchSeverity = (typeof SEVERITIES)[number];
 type PunchStatus = (typeof STATUSES)[number];
-
-interface PunchItem {
-  id: string;
-  title: string;
-  description?: string;
-  severity: PunchSeverity;
-  status: PunchStatus;
-  assignee?: string;
-  dueDate?: string;
-  locationLabel?: string;
-  photoUrl?: string;
-  createdAt: string;
-  closedAt?: string;
-  projectId?: string;
-  trade?: string;
-  createdBy?: string;
-}
-
-// ── Validation ───────────────────────────────────────────────────────────────
 
 const CreateSchema = z.object({
   title: z.string().min(1).max(500),
@@ -64,173 +42,233 @@ const CreateSchema = z.object({
   trade: z.string().max(100).optional(),
   createdBy: z.string().max(120).optional(),
 });
-
 const PatchSchema = CreateSchema.partial();
 
-// ── Store ────────────────────────────────────────────────────────────────────
-
-const store = new Map<string, PunchItem>();
-
-function nextId(): string {
-  return `p-${Date.now()}-${Math.floor(Math.random() * 9000 + 1000)}`;
+interface Row {
+  id: string;
+  title: string;
+  description: string | null;
+  severity: PunchSeverity;
+  status: PunchStatus;
+  assignee: string | null;
+  due_date: string | null;
+  location_label: string | null;
+  photo_url: string | null;
+  project_id: string | null;
+  trade: string | null;
+  created_by: string | null;
+  created_at: string;
+  closed_at: string | null;
+  updated_at: string;
 }
 
-function seedIfEmpty() {
-  if (store.size > 0) return;
-  const now = Date.now();
-  const day = 24 * 60 * 60 * 1000;
-  const seeds: PunchItem[] = [
-    {
-      id: "p-1001",
-      title: "Ceiling tile broken in Conference Room B",
-      severity: "medium",
-      status: "open",
-      assignee: "Jose M.",
-      dueDate: new Date(now + 3 * day).toISOString(),
-      locationLabel: "Level 3 / Conference Room B",
-      trade: "drywall",
-      createdAt: new Date(now - 1 * day).toISOString(),
-    },
-    {
-      id: "p-1002",
-      title: "Outlet not grounded — east wall, Unit 412",
-      severity: "critical",
-      status: "open",
-      assignee: "Marco R.",
-      dueDate: new Date(now + 1 * day).toISOString(),
-      locationLabel: "Level 4 / Unit 412",
-      trade: "electrical",
-      createdAt: new Date(now - 2 * day).toISOString(),
-    },
-    {
-      id: "p-1003",
-      title: "Paint touch-up — corridor 3A",
-      severity: "low",
-      status: "in_progress",
-      assignee: "Sara K.",
-      dueDate: new Date(now + 7 * day).toISOString(),
-      locationLabel: "Level 3 / Corridor 3A",
-      trade: "paint",
-      createdAt: new Date(now - 4 * day).toISOString(),
-    },
-    {
-      id: "p-1004",
-      title: "Door hardware re-keyed",
-      severity: "medium",
-      status: "ready_for_review",
-      assignee: "Jose M.",
-      locationLabel: "Level 1 / Main Entry",
-      trade: "finishes",
-      createdAt: new Date(now - 6 * day).toISOString(),
-    },
-    {
-      id: "p-1005",
-      title: "Smoke detector tested + signed off",
-      severity: "high",
-      status: "closed",
-      assignee: "Marco R.",
-      locationLabel: "Level 2 / All units",
-      trade: "fire-life-safety",
-      createdAt: new Date(now - 9 * day).toISOString(),
-      closedAt: new Date(now - 1 * day).toISOString(),
-    },
-  ];
-  for (const s of seeds) store.set(s.id, s);
+function rowToJson(r: Row) {
+  return {
+    id: r.id,
+    title: r.title,
+    description: r.description || undefined,
+    severity: r.severity,
+    status: r.status,
+    assignee: r.assignee || undefined,
+    dueDate: r.due_date || undefined,
+    locationLabel: r.location_label || undefined,
+    photoUrl: r.photo_url || undefined,
+    projectId: r.project_id || undefined,
+    trade: r.trade || undefined,
+    createdBy: r.created_by || undefined,
+    createdAt: r.created_at,
+    closedAt: r.closed_at || undefined,
+    updatedAt: r.updated_at,
+  };
 }
 
-// ── Handlers ─────────────────────────────────────────────────────────────────
+// ---------- Bootstrap ----------
 
-// GET /api/punch-items
-router.get("/", (req: Request, res: Response) => {
-  seedIfEmpty();
-  const projectId = typeof req.query.projectId === "string" ? req.query.projectId : undefined;
-  const status = typeof req.query.status === "string" ? req.query.status : undefined;
-  let items = Array.from(store.values());
-  if (projectId) items = items.filter((it) => it.projectId === projectId);
-  if (status && STATUSES.includes(status as PunchStatus)) {
-    items = items.filter((it) => it.status === status);
+let bootstrapped = false;
+async function ensureTable(): Promise<void> {
+  if (bootstrapped) return;
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS punch_items (
+      id              varchar(36) PRIMARY KEY DEFAULT gen_random_uuid(),
+      title           varchar(500) NOT NULL,
+      description     text,
+      severity        varchar(16) NOT NULL DEFAULT 'medium',
+      status          varchar(24) NOT NULL DEFAULT 'open',
+      assignee        varchar(120),
+      due_date        date,
+      location_label  varchar(300),
+      photo_url       varchar(1000),
+      project_id      varchar(100),
+      trade           varchar(100),
+      created_by      varchar(120),
+      created_at      timestamptz NOT NULL DEFAULT now(),
+      closed_at       timestamptz,
+      updated_at      timestamptz NOT NULL DEFAULT now()
+    );
+  `);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS punch_items_project_idx ON punch_items (project_id, status);`);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS punch_items_status_idx ON punch_items (status, created_at DESC);`);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS punch_items_assignee_idx ON punch_items (assignee, status);`);
+  bootstrapped = true;
+}
+
+async function maybeSeed(): Promise<void> {
+  const { rows } = await pool.query<{ count: string }>(`SELECT COUNT(*)::text AS count FROM punch_items`);
+  if (Number(rows[0]?.count || 0) > 0) return;
+  const today = new Date();
+  const plusDays = (n: number) => new Date(today.getTime() + n * 86400000).toISOString().slice(0, 10);
+  await pool.query(
+    `INSERT INTO punch_items (title, description, severity, status, assignee, due_date, location_label, trade, project_id, created_by)
+     VALUES
+       ($1,$2,'critical','open',$3,$4,'Stairwell B / Level 3','electrical','default','Chad Derocher'),
+       ($5,$6,'high','open',$7,$8,'Conference Room 201','drywall','default','Chad Derocher'),
+       ($9,$10,'medium','in_progress',$11,$12,'Lobby east wall','paint','default','Chad Derocher'),
+       ($13,$14,'low','ready_for_review',$15,$16,'Reception ceiling','finishes','default','Chad Derocher'),
+       ($17,$18,'high','closed',$19,$20,'Mech room','fire-life-safety','default','Chad Derocher')
+    `,
+    [
+      "Exit sign not illuminated", "Right side of egress door at Stairwell B/3 — bulb out and no battery backup", "M. Reyes (Bolt Electric)", plusDays(2),
+      "Drywall seam visible", "Tape joint showing through paint along south wall of Conference 201", "K. Holloway (Apex)", plusDays(4),
+      "Touch-up paint on lobby wall", "Scuff at chair-rail height, 8 ft from east window", "J. Park (Castro Painting)", plusDays(7),
+      "Replace stained ceiling tile", "12x12 grid B-4, water stain", "M. Garcia (Castro)", plusDays(3),
+      "Fire damper certificate missing", "Penetration above mech room ceiling needs FD certificate", "Bell Sprinklers", plusDays(-1),
+    ],
+  );
+  // Stamp closed_at on the seed-closed row
+  await pool.query(`UPDATE punch_items SET closed_at = now() WHERE status = 'closed' AND closed_at IS NULL`);
+}
+
+async function bootstrapOnce(): Promise<void> {
+  try {
+    await ensureTable();
+    await maybeSeed();
+  } catch (e) {
+    console.error("[punch-items] bootstrap failed", e);
   }
-  // Newest first
-  items.sort((a, b) => (b.createdAt > a.createdAt ? 1 : -1));
-  res.json(items);
+}
+void bootstrapOnce();
+
+// ---------- Router ----------
+
+const router = Router();
+
+// Sprint F5 — gate behind auth (toggle with SENTINEL_MOBILE_REQUIRE_AUTH=true)
+router.use(mobileAuthMiddleware);
+router.use(async (_req, _res, next) => { if (!bootstrapped) await bootstrapOnce(); next(); });
+
+router.get("/", async (req: Request, res: Response) => {
+  const { projectId, status, assignee, severity } = req.query as Record<string, string | undefined>;
+  const filters: string[] = [];
+  const params: any[] = [];
+  if (projectId) { params.push(projectId); filters.push(`project_id = $${params.length}`); }
+  if (status) { params.push(status); filters.push(`status = $${params.length}`); }
+  if (assignee) { params.push(assignee); filters.push(`assignee = $${params.length}`); }
+  if (severity) { params.push(severity); filters.push(`severity = $${params.length}`); }
+  const where = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
+  const { rows } = await pool.query<Row>(
+    `SELECT * FROM punch_items ${where} ORDER BY
+       CASE status WHEN 'open' THEN 0 WHEN 'in_progress' THEN 1 WHEN 'ready_for_review' THEN 2 ELSE 3 END,
+       CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END,
+       created_at DESC`,
+    params,
+  );
+  res.json(rows.map(rowToJson));
 });
 
-// GET /api/punch-items/:id
-router.get("/:id", (req: Request, res: Response) => {
-  seedIfEmpty();
-  const it = store.get(String(req.params.id));
-  if (!it) return res.status(404).json({ error: "Not found" });
-  res.json(it);
+router.get("/_meta/stats", async (_req, res) => {
+  const total = await pool.query<{ count: string }>(`SELECT COUNT(*)::text AS count FROM punch_items`);
+  const statuses = await pool.query<{ status: string; count: string }>(
+    `SELECT status, COUNT(*)::text AS count FROM punch_items GROUP BY status`,
+  );
+  const overdue = await pool.query<{ count: string }>(
+    `SELECT COUNT(*)::text AS count FROM punch_items WHERE status <> 'closed' AND due_date IS NOT NULL AND due_date < CURRENT_DATE`,
+  );
+  const last7Closed = await pool.query<{ count: string }>(
+    `SELECT COUNT(*)::text AS count FROM punch_items WHERE status = 'closed' AND closed_at >= now() - interval '7 days'`,
+  );
+  const byStatus: Record<string, number> = {};
+  for (const r of statuses.rows) byStatus[r.status] = Number(r.count);
+  res.json({
+    total: Number(total.rows[0]?.count || 0),
+    byStatus,
+    overdue: Number(overdue.rows[0]?.count || 0),
+    closedLast7: Number(last7Closed.rows[0]?.count || 0),
+  });
 });
 
-// POST /api/punch-items
-router.post("/", (req: Request, res: Response) => {
+router.get("/:id", async (req, res) => {
+  const { rows } = await pool.query<Row>(`SELECT * FROM punch_items WHERE id = $1`, [req.params.id]);
+  if (!rows[0]) return res.status(404).json({ error: "Punch item not found" });
+  res.json(rowToJson(rows[0]));
+});
+
+router.post("/", async (req, res) => {
   const parsed = CreateSchema.safeParse(req.body);
   if (!parsed.success) {
-    return res.status(400).json({ error: "Invalid input", issues: parsed.error.issues });
+    return res.status(400).json({ error: "Validation failed", issues: parsed.error.issues });
   }
-  seedIfEmpty();
-  const id = nextId();
-  const item: PunchItem = {
-    ...parsed.data,
-    id,
-    createdAt: new Date().toISOString(),
-    closedAt: parsed.data.status === "closed" ? new Date().toISOString() : undefined,
-  };
-  store.set(id, item);
-  res.status(201).json(item);
+  const d = parsed.data;
+  const { rows } = await pool.query<Row>(
+    `INSERT INTO punch_items
+       (title, description, severity, status, assignee, due_date, location_label, photo_url, project_id, trade, created_by, closed_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, CASE WHEN $4 = 'closed' THEN now() ELSE NULL END)
+     RETURNING *`,
+    [
+      d.title,
+      d.description ?? null,
+      d.severity,
+      d.status,
+      d.assignee ?? null,
+      d.dueDate ?? null,
+      d.locationLabel ?? null,
+      d.photoUrl ?? null,
+      d.projectId ?? null,
+      d.trade ?? null,
+      d.createdBy ?? null,
+    ],
+  );
+  res.status(201).json(rowToJson(rows[0]));
 });
 
-// PATCH /api/punch-items/:id
-router.patch("/:id", (req: Request, res: Response) => {
+router.patch("/:id", async (req, res) => {
   const parsed = PatchSchema.safeParse(req.body);
   if (!parsed.success) {
-    return res.status(400).json({ error: "Invalid input", issues: parsed.error.issues });
+    return res.status(400).json({ error: "Validation failed", issues: parsed.error.issues });
   }
-  seedIfEmpty();
-  const id = String(req.params.id);
-  const existing = store.get(id);
-  if (!existing) return res.status(404).json({ error: "Not found" });
-
-  const updated: PunchItem = {
-    ...existing,
-    ...parsed.data,
-  };
-
-  // Auto-manage closedAt when status transitions across the closed boundary
-  if (parsed.data.status === "closed" && existing.status !== "closed") {
-    updated.closedAt = new Date().toISOString();
-  } else if (parsed.data.status && parsed.data.status !== "closed" && existing.status === "closed") {
-    updated.closedAt = undefined;
+  const d = parsed.data;
+  const sets: string[] = [];
+  const vals: any[] = [];
+  const add = (col: string, val: any) => { vals.push(val); sets.push(`${col} = $${vals.length}`); };
+  if (d.title !== undefined) add("title", d.title);
+  if (d.description !== undefined) add("description", d.description);
+  if (d.severity !== undefined) add("severity", d.severity);
+  if (d.status !== undefined) {
+    add("status", d.status);
+    // Auto-stamp closed_at on transition into/out-of 'closed'
+    if (d.status === "closed") sets.push(`closed_at = COALESCE(closed_at, now())`);
+    else sets.push(`closed_at = NULL`);
   }
-
-  store.set(id, updated);
-  res.json(updated);
+  if (d.assignee !== undefined) add("assignee", d.assignee);
+  if (d.dueDate !== undefined) add("due_date", d.dueDate || null);
+  if (d.locationLabel !== undefined) add("location_label", d.locationLabel);
+  if (d.photoUrl !== undefined) add("photo_url", d.photoUrl);
+  if (d.projectId !== undefined) add("project_id", d.projectId);
+  if (d.trade !== undefined) add("trade", d.trade);
+  if (sets.length === 0) return res.status(400).json({ error: "Nothing to update" });
+  sets.push(`updated_at = now()`);
+  vals.push(req.params.id);
+  const { rows } = await pool.query<Row>(
+    `UPDATE punch_items SET ${sets.join(", ")} WHERE id = $${vals.length} RETURNING *`,
+    vals,
+  );
+  if (!rows[0]) return res.status(404).json({ error: "Punch item not found" });
+  res.json(rowToJson(rows[0]));
 });
 
-// DELETE /api/punch-items/:id
-router.delete("/:id", (req: Request, res: Response) => {
-  seedIfEmpty();
-  const id = String(req.params.id);
-  if (!store.has(id)) return res.status(404).json({ error: "Not found" });
-  store.delete(id);
-  res.status(204).end();
-});
-
-// ── Diagnostics (handy for QA, no PII) ──────────────────────────────────────
-
-// GET /api/punch-items/_stats — counts only, for the health endpoint
-router.get("/_meta/stats", (_req: Request, res: Response) => {
-  seedIfEmpty();
-  const items = Array.from(store.values());
-  const byStatus = STATUSES.reduce<Record<string, number>>((acc, s) => {
-    acc[s] = items.filter((it) => it.status === s).length;
-    return acc;
-  }, {});
-  const overdue = items.filter(
-    (it) => it.status !== "closed" && it.dueDate && new Date(it.dueDate).getTime() < Date.now(),
-  ).length;
-  res.json({ total: items.length, byStatus, overdue });
+router.delete("/:id", async (req, res) => {
+  const { rowCount } = await pool.query(`DELETE FROM punch_items WHERE id = $1`, [req.params.id]);
+  if (!rowCount) return res.status(404).json({ error: "Punch item not found" });
+  res.json({ ok: true });
 });
 
 export default router;

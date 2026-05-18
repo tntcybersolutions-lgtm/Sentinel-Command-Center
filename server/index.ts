@@ -19,6 +19,7 @@ import { registerSprint4Routes } from "./sprint4-routes";
 import { registerSprint6Routes } from "./sprint6-routes";
 import { registerSprint7Routes } from "./sprint7-routes";
 import punchItemsRouter from "./routes/punch-items.routes";
+import dailyLogsRouter from "./routes/daily-logs.routes";
 validateBidJacketTaxonomy();
 
 const app = express();
@@ -91,6 +92,7 @@ app.use((req, res, next) => {
   registerSprint6Routes(app);
   registerSprint7Routes(app); // __sprint7_5_wired__
   app.use("/api/punch-items", punchItemsRouter);
+  app.use("/api/daily-logs", dailyLogsRouter);
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
     const status = err.status || err.statusCode || 500;

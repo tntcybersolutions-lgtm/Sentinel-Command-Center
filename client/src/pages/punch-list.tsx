@@ -55,8 +55,10 @@ import { SafeArea } from "@/components/ui/safe-area";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
+import { apiFetch } from "@/lib/offline-queue";
+import { VoiceMicButton } from "@/components/voice-mic-button";
 
-// ── Types ────────────────────────────────────────────────────────────────────
+// ── Types ──────────────────────────────────────────────────────────────────────
 
 export type PunchSeverity = "low" | "medium" | "high" | "critical";
 export type PunchStatus = "open" | "in_progress" | "ready_for_review" | "closed";
@@ -96,7 +98,7 @@ const SEVERITY_TO_TONE: Record<PunchSeverity, StatusTone> = {
 
 const SEVERITY_ORDER: PunchSeverity[] = ["critical", "high", "medium", "low"];
 
-// ── Storage helpers (localStorage fallback) ──────────────────────────────────
+// ── Storage helpers (localStorage fallback) ───────────────────────────────────
 
 function loadFromStorage(): PunchItem[] {
   try {
@@ -185,7 +187,7 @@ function seedItems(): PunchItem[] {
 
 async function fetchPunchItems(): Promise<PunchItem[]> {
   try {
-    const res = await fetch("/api/punch-items");
+    const res = await apiFetch("/api/punch-items");
     if (res.ok) {
       const data = await res.json();
       if (Array.isArray(data)) return data as PunchItem[];
@@ -203,7 +205,7 @@ async function createPunchItem(input: Omit<PunchItem, "id" | "createdAt">): Prom
     createdAt: new Date().toISOString(),
   };
   try {
-    const res = await fetch("/api/punch-items", {
+    const res = await apiFetch("/api/punch-items", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(input),
@@ -220,7 +222,7 @@ async function createPunchItem(input: Omit<PunchItem, "id" | "createdAt">): Prom
 
 async function updatePunchItem(id: string, patch: Partial<PunchItem>): Promise<PunchItem | null> {
   try {
-    const res = await fetch(`/api/punch-items/${encodeURIComponent(id)}`, {
+    const res = await apiFetch(`/api/punch-items/${encodeURIComponent(id)}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(patch),
@@ -249,7 +251,7 @@ async function updatePunchItem(id: string, patch: Partial<PunchItem>): Promise<P
 
 async function deletePunchItem(id: string): Promise<boolean> {
   try {
-    const res = await fetch(`/api/punch-items/${encodeURIComponent(id)}`, { method: "DELETE" });
+    const res = await apiFetch(`/api/punch-items/${encodeURIComponent(id)}`, { method: "DELETE" });
     if (res.ok) return true;
   } catch {
     /* fall through */
@@ -259,7 +261,7 @@ async function deletePunchItem(id: string): Promise<boolean> {
   return true;
 }
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
+// ── Helpers ────────────────────────────────────────────────────────────────────
 
 function isOverdue(it: PunchItem): boolean {
   if (it.status === "closed") return false;
@@ -284,7 +286,7 @@ function severityLabel(s: PunchSeverity): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
-// ── Page ─────────────────────────────────────────────────────────────────────
+// ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function PunchListPage() {
   const [, navigate] = useLocation();
@@ -296,21 +298,21 @@ export default function PunchListPage() {
     staleTime: 30_000,
   });
 
-  // ── Filter state ────────────────────────────────────────────────────────
+  // ── Filter state ────────────────────────────────────────────────────────────
   const [filterSeverity, setFilterSeverity] = useState<PunchSeverity | "all">("all");
   const [filterAssignee, setFilterAssignee] = useState<string | "all">("all");
   const [searchText, setSearchText] = useState("");
 
-  // ── Modal/drawer state ──────────────────────────────────────────────────
+  // ── Modal/drawer state ──────────────────────────────────────────────────────
   const [createOpen, setCreateOpen] = useState(false);
   const [detailItem, setDetailItem] = useState<PunchItem | null>(null);
 
-  // ── Pull-to-refresh ─────────────────────────────────────────────────────
+  // ── Pull-to-refresh ─────────────────────────────────────────────────────────
   const { pullY, state: ptrState, bind: ptrBind } = usePullToRefresh({
     onRefresh: () => queryClient.invalidateQueries({ queryKey: ["/api/punch-items"] }),
   });
 
-  // ── Mutations (cache-invalidating) ──────────────────────────────────────
+  // ── Mutations (cache-invalidating) ──────────────────────────────────────────
   const createMutation = useMutation({
     mutationFn: createPunchItem,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/punch-items"] }),
@@ -327,7 +329,7 @@ export default function PunchListPage() {
     },
   });
 
-  // ── Derived data ────────────────────────────────────────────────────────
+  // ── Derived data ────────────────────────────────────────────────────────────
   const assignees = useMemo(() => {
     const set = new Set<string>();
     for (const it of items) if (it.assignee) set.add(it.assignee);
@@ -363,7 +365,7 @@ export default function PunchListPage() {
   const animatedClosed = useCountUp(stats.closedThisWeek);
   const animatedCritical = useCountUp(stats.critical);
 
-  // ── Status change handler ───────────────────────────────────────────────
+  // ── Status change handler ──────────────────────────────────────────────────
   function changeStatus(id: string, next: PunchStatus) {
     updateMutation.mutate({ id, patch: { status: next } });
   }
@@ -386,7 +388,7 @@ export default function PunchListPage() {
           </div>
         )}
 
-        {/* ── Header ───────────────────────────────────────────────────── */}
+        {/* ── Header ─────────────────────────────────────────────────────────── */}
         <div className="flex items-baseline justify-between flex-wrap gap-3">
           <div>
             <h1 className="text-2xl font-semibold tracking-tight flex items-center gap-2">
@@ -412,7 +414,7 @@ export default function PunchListPage() {
           </div>
         </div>
 
-        {/* ── Stats banner (hero CardTiered) ───────────────────────────── */}
+        {/* ── Stats banner (hero CardTiered) ─────────────────────────────── */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4" data-testid="punch-stats">
           <CardTiered tier="hero" className="flex items-center gap-4">
             <div className="p-2.5 rounded-md bg-amber-950/40 border border-amber-900/60">
@@ -461,7 +463,7 @@ export default function PunchListPage() {
           </CardTiered>
         </div>
 
-        {/* ── Filter bar ───────────────────────────────────────────────── */}
+        {/* ── Filter bar ──────────────────────────────────────────────────── */}
         <div className="flex items-center gap-2 flex-wrap" data-testid="punch-filters">
           <div className="relative flex-1 min-w-[200px] max-w-md">
             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-zinc-500" />
@@ -516,7 +518,7 @@ export default function PunchListPage() {
           )}
         </div>
 
-        {/* ── Kanban board ─────────────────────────────────────────────── */}
+        {/* ── Kanban board ────────────────────────────────────────────────── */}
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4" data-testid="punch-board">
           {STATUS_COLUMNS.map((col) => {
             const colItems = filtered
@@ -556,7 +558,7 @@ export default function PunchListPage() {
         </div>
       </div>
 
-      {/* ── Modal: create ──────────────────────────────────────────────── */}
+      {/* ── Modal: create ───────────────────────────────────────────────── */}
       {createOpen && (
         <CreatePunchModal
           assignees={assignees}
@@ -568,7 +570,7 @@ export default function PunchListPage() {
         />
       )}
 
-      {/* ── Drawer: detail ─────────────────────────────────────────────── */}
+      {/* ── Drawer: detail ──────────────────────────────────────────────── */}
       {detailItem && (
         <PunchDetailDrawer
           item={detailItem}
@@ -581,7 +583,7 @@ export default function PunchListPage() {
   );
 }
 
-// ── Column transition helpers ────────────────────────────────────────────────
+// ── Column transition helpers ──────────────────────────────────────────────
 
 function nextStatus(s: PunchStatus): PunchStatus {
   if (s === "open") return "in_progress";
@@ -596,7 +598,7 @@ function prevStatus(s: PunchStatus): PunchStatus {
   return s;
 }
 
-// ── Card ─────────────────────────────────────────────────────────────────────
+// ── Card ───────────────────────────────────────────────────────────────────
 
 function PunchItemCard({
   item,
@@ -664,7 +666,7 @@ function PunchItemCard({
   );
 }
 
-// ── Detail drawer ────────────────────────────────────────────────────────────
+// ── Detail drawer ──────────────────────────────────────────────────────────
 
 function PunchDetailDrawer({
   item,
@@ -797,7 +799,7 @@ function DetailRow({ label, value, icon }: { label: string; value: string; icon?
   );
 }
 
-// ── Create modal ─────────────────────────────────────────────────────────────
+// ── Create modal ──────────────────────────────────────────────────────────
 
 interface DraftState {
   title: string;
@@ -886,7 +888,20 @@ function CreatePunchModal({
             />
           </Field>
 
-          <Field label="Description">
+          <Field label={
+            <span className="flex items-center justify-between gap-2 w-full">
+              <span>Description</span>
+              {/* Sprint M6 — voice dictation; appends transcript to description. */}
+              <VoiceMicButton
+                compact
+                onTranscript={(text, meta) => {
+                  if (!meta.success) return;
+                  if (!text) return;
+                  dispatch({ description: (draft.description || "") + (draft.description ? " " : "") + text });
+                }}
+              />
+            </span>
+          }>
             <textarea
               rows={3}
               value={draft.description}
@@ -997,7 +1012,7 @@ function CreatePunchModal({
   );
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Field({ label, children }: { label: React.ReactNode; children: React.ReactNode }) {
   return (
     <label className="block">
       <span className="block text-[11px] uppercase tracking-wider text-zinc-500 mb-1">{label}</span>
@@ -1006,7 +1021,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-// ── Voice / AI hooks — wired in a follow-up commit ───────────────────────────
+// ── Voice / AI hooks — wired in a follow-up commit ──────────────────────────
 // Stub for /api/herbie/voice-to-punch — superintendent says
 // "ceiling tile in conference room B, broken" and Herbie returns a draft
 // punch item. Wire to recordAudio() + fetch().
