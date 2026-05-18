@@ -81,6 +81,9 @@ const dailyLogSchema = z.object({
   photoUrls: z.array(z.string().url()).default([]),
   signature: z.string().optional(),
   signedAt: z.string().optional(),
+  latitude: z.number().min(-90).max(90).optional().nullable(),
+  longitude: z.number().min(-180).max(180).optional().nullable(),
+  geoAccuracy: z.number().min(0).optional().nullable(),
   status: z.enum(["draft", "submitted", "approved"]).default("draft"),
 });
 
@@ -105,6 +108,9 @@ interface DailyLogRow {
   photo_urls: any;
   signature: string | null;
   signed_at: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  geo_accuracy: number | null;
   status: string;
   created_at: string;
   updated_at: string;
@@ -128,6 +134,9 @@ function rowToJson(r: DailyLogRow) {
     photoUrls: r.photo_urls || [],
     signature: r.signature || undefined,
     signedAt: r.signed_at || undefined,
+    latitude: r.latitude == null ? null : Number(r.latitude),
+    longitude: r.longitude == null ? null : Number(r.longitude),
+    geoAccuracy: r.geo_accuracy == null ? null : Number(r.geo_accuracy),
     status: r.status,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
@@ -326,6 +335,9 @@ dailyLogsRouter.post("/", async (req, res) => {
          delay_reason= $11,
          photo_urls  = $12::jsonb,
          signature   = $13,
+         latitude    = $14,
+         longitude   = $15,
+         geo_accuracy= $16,
          updated_at  = now()
        WHERE id = $1
        RETURNING *`,
@@ -343,6 +355,9 @@ dailyLogsRouter.post("/", async (req, res) => {
         d.delayReason ?? null,
         JSON.stringify(d.photoUrls ?? []),
         d.signature ?? null,
+        d.latitude ?? null,
+        d.longitude ?? null,
+        d.geoAccuracy ?? null,
       ],
     );
     return res.status(200).json(rowToJson(rows[0]));
@@ -351,9 +366,10 @@ dailyLogsRouter.post("/", async (req, res) => {
   const { rows } = await pool.query<DailyLogRow>(
     `INSERT INTO field_daily_logs
        (project_id, date, super_id, super_name, weather, crew, equipment, deliveries, visitors,
-        narrative, delay_hours, delay_reason, photo_urls, signature, signed_at, status)
+        narrative, delay_hours, delay_reason, photo_urls, signature, signed_at, status,
+        latitude, longitude, geo_accuracy)
      VALUES
-       ($1,$2,$3,$4,$5::jsonb,$6::jsonb,$7::jsonb,$8::jsonb,$9::jsonb,$10,$11,$12,$13::jsonb,$14,$15,$16)
+       ($1,$2,$3,$4,$5::jsonb,$6::jsonb,$7::jsonb,$8::jsonb,$9::jsonb,$10,$11,$12,$13::jsonb,$14,$15,$16,$17,$18,$19)
      RETURNING *`,
     [
       d.projectId, d.date,
@@ -370,6 +386,9 @@ dailyLogsRouter.post("/", async (req, res) => {
       d.signature ?? null,
       d.signedAt ?? (d.status === "submitted" ? new Date().toISOString() : null),
       d.status ?? "draft",
+      d.latitude ?? null,
+      d.longitude ?? null,
+      d.geoAccuracy ?? null,
     ],
   );
   res.status(201).json(rowToJson(rows[0]));
@@ -400,6 +419,9 @@ dailyLogsRouter.patch("/:id", async (req, res) => {
   if (d.photoUrls !== undefined) add("photo_urls", JSON.stringify(d.photoUrls), true);
   if (d.signature !== undefined) add("signature", d.signature);
   if (d.signedAt !== undefined) add("signed_at", d.signedAt);
+  if (d.latitude !== undefined) add("latitude", d.latitude);
+  if (d.longitude !== undefined) add("longitude", d.longitude);
+  if (d.geoAccuracy !== undefined) add("geo_accuracy", d.geoAccuracy);
   if (d.status !== undefined) {
     add("status", d.status);
     if (d.status === "submitted" && d.signedAt === undefined) add("signed_at", new Date().toISOString());
