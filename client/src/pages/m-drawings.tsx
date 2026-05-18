@@ -3,6 +3,7 @@ import { useRoute } from "wouter";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Document, Page, pdfjs } from "react-pdf";
 import { apiFetch } from "@/lib/offline-queue";
+import { DrawingMarkupOverlay, DrawingMarkupToolbar, useMarkupStorage, type MarkupTool } from "@/components/drawing-markup-canvas";
 import "react-pdf/dist/Page/AnnotationLayer.css";
 import "react-pdf/dist/Page/TextLayer.css";
 // Bundle the pdf.js worker as a same-origin asset so the service worker can
@@ -40,6 +41,16 @@ interface PunchRow { id: string; itemNumber?: string | number; title?: string; d
 type LinkType = "RFI" | "Photo" | "Punch" | "Submittal";
 const LINK_TYPES: LinkType[] = ["RFI", "Photo", "Punch", "Submittal"];
 
+// Sprint M5 — thin wrapper so we can call useMarkupStorage(drawingId)
+// without hoisting that hook into the main page (which would re-run on every
+// drawing switch and re-read localStorage unnecessarily).
+function DrawingMarkupToolbarHost({
+  drawingId, tool, setTool, page,
+}: { drawingId: string; tool: MarkupTool; setTool: (t: MarkupTool) => void; page: number }) {
+  const { clearPage } = useMarkupStorage(drawingId);
+  return <DrawingMarkupToolbar tool={tool} setTool={setTool} onClearPage={() => clearPage(page)} page={page} />;
+}
+
 export default function MobileDrawingsPage() {
   const [match, params] = useRoute("/projects/:id/drawings");
   const projectId = (match && params?.id) || "default";
@@ -51,6 +62,8 @@ export default function MobileDrawingsPage() {
   const [linkId, setLinkId] = useState<string>("");
   const [linkLabel, setLinkLabel] = useState("");
   const [pdfWidth, setPdfWidth] = useState(360);
+  // Sprint M5 — markup tool state + storage; "select" lets existing pin-drop/zoom logic pass through unchanged.
+  const [markupTool, setMarkupTool] = useState<MarkupTool>("select");
   const wrapperRef = useRef<HTMLDivElement | null>(null);
 
   // ── Pinch-zoom + pan state ─────────────────────────────────────────────────
@@ -240,6 +253,16 @@ export default function MobileDrawingsPage() {
         </select>
       </header>
 
+      {/* Sprint M5 — markup tools (arrow / text / freehand / eraser). */}
+      {selected && (
+        <DrawingMarkupToolbarHost
+          drawingId={selected.id}
+          tool={markupTool}
+          setTool={setMarkupTool}
+          page={page}
+        />
+      )}
+
       {drawings.length === 0 && !drawingsQ.isLoading && (
         <div
           data-testid="drawings-empty"
@@ -285,6 +308,8 @@ export default function MobileDrawingsPage() {
               >
                 <Page pageNumber={page} width={pdfWidth} renderAnnotationLayer={false} renderTextLayer={false} />
               </Document>
+              {/* Sprint M5 — markup overlay; pointer events pass-through when tool="select". */}
+              <DrawingMarkupOverlay drawingId={selected.id} page={page} tool={markupTool} />
               {pins.map((p) => {
                 const px = Number(p.x) * 100;
                 const py = Number(p.y) * 100;
