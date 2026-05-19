@@ -1,0 +1,150 @@
+#!/usr/bin/env bash
+set -euo pipefail
+echo "=== Sprint M-WIRE deploy ==="
+
+# --- Patch 1: schema-federal.ts ---
+if ! grep -q "samImportLog" shared/schema-federal.ts; then
+cat >> shared/schema-federal.ts << 'SCHEND'
+
+// ============================================================================
+// 10. SAM.gov document import audit log
+// ============================================================================
+
+export const samImportLog = pgTable("sam_import_log", {
+  id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id", { length: 36 }).notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  bidProjectId: varchar("bid_project_id", { length: 36 }),
+  opportunityId: varchar("opportunity_id", { length: 36 }),
+  startedAt: timestamp("started_at").defaultNow().notNull(),
+  finishedAt: timestamp("finished_at"),
+  filesAttempted: integer("files_attempted").default(0),
+  filesImported: integer("files_imported").default(0),
+  filesSkippedDuplicate: integer("files_skipped_duplicate").default(0),
+  bytesImported: integer("bytes_imported").default(0),
+  ok: boolean("ok").default(false),
+  errorsJson: jsonb("errors_json"),
+  triggeredBy: text("triggered_by"),
+}, (table) => ({
+  tenantIdx: index("idx_sam_import_log_tenant").on(table.tenantId),
+  bidIdx: index("idx_sam_import_log_bid").on(table.bidProjectId),
+}));
+SCHEND
+echo "  + samImportLog appended"
+fi
+
+# --- Patch 2: sam-document-importer.service.ts ---
+python3 - << 'PYEND'
+import re
+path = 'server/services/sam-document-importer.service.ts'
+with open(path) as f: src = f.read()
+if 'samImportLog' not in src:
+  src = src.replace('  jacketDocuments,\n} from "@shared/schema";',
+                    '  jacketDocuments,\n  samImportLog,\n} from "@shared/schema";')
+helper = '''
+async function recordImportLog(opts: {
+  tenantId: string;
+  bidProjectId: string;
+  opportunityId: string | null;
+  result: ImportResult;
+  triggeredBy: string;
+}): Promise<void> {
+  try {
+    await db.insert(samImportLog).values({
+      tenantId: opts.tenantId,
+      bidProjectId: opts.bidProjectId,
+      opportunityId: opts.opportunityId,
+      startedAt: new Date(),
+      finishedAt: new Date(),
+      filesAttempted: opts.result.filesAttempted,
+      filesImported: opts.result.filesImported,
+      filesSkippedDuplicate: opts.result.filesSkippedDuplicate,
+      bytesImported: opts.result.bytesImported,
+      ok: opts.result.ok,
+      errorsJson: opts.result.errors,
+      triggeredBy: opts.triggeredBy,
+    } as any);
+  } catch (e):
+    pass
+}
+
+'''
+# Use a JS-style helper instead since this is TS
+helper_ts = '''
+async function recordImportLog(opts: {
+  tenantId: string;
+  bidProjectId: string;
+  opportunityId: string | null;
+  result: ImportResult;
+  triggeredBy: string;
+}): Promise<void> {
+  try {
+    await db.insert(samImportLog).values({
+      tenantId: opts.tenantId,
+      bidProjectId: opts.bidProjectId,
+      opportunityId: opts.opportunityId,
+      startedAt: new Date(),
+      finishedAt: new Date(),
+      filesAttempted: opts.result.filesAttempted,
+      filesImported: opts.result.filesImported,
+      filesSkippedDuplicate: opts.result.filesSkippedDuplicate,
+      bytesImported: opts.result.bytesImported,
+      ok: opts.result.ok,
+      errorsJson: opts.result.errors,
+      triggeredBy: opts.triggeredBy,
+    } as any);
+  } catch (e: any) {
+    console.warn("[sam-importer] failed to write import log:", e?.message);
+  }
+}
+
+'''
+anchor = '/**\n * Main entry point. Imports every document for the bid project'
+if 'recordImportLog' not in src and anchor in src:
+  src = src.replace(anchor, helper_ts + anchor)
+src = re.sub(
+  r'(  out\.ok = out\.errors\.length < allUrls\.length;\n)(  return out;\n\})',
+  r'\1  await recordImportLog({\n    tenantId: project.tenantId,\n    bidProjectId,\n    opportunityId: project.opportunityId || null,\n    result: out,\n    triggeredBy: "api",\n  });\n\2',
+  src, count=1)
+with open(path,'w') as f: f.write(src)
+print("  + sam-importer patched")
+PYEND
+
+# --- Patch 3: routes.ts ---
+python3 - << 'PYEND'
+path = 'server/routes.ts'
+with open(path) as f: src = f.read()
+adds = ''
+if 'proposalDraftingRouter' not in src:
+  adds += 'import { proposalDraftingRouter } from "./routes/proposal-drafting.routes";\n'
+if 'jacketsRouter' not in src:
+  adds += 'import { jacketsRouter } from "./routes/jackets.routes";\n'
+if adds:
+  src = src.replace(
+    'import { magicLinkRouter } from "./routes/magic-link.routes";',
+    'import { magicLinkRouter } from "./routes/magic-link.routes";\n' + adds.rstrip())
+mounts = ''
+if '"/api/proposal-drafting"' not in src:
+  mounts += '  app.use("/api/proposal-drafting", proposalDraftingRouter);\n'
+if '"/api/jackets"' not in src:
+  mounts += '  app.use("/api/jackets", jacketsRouter);\n'
+if mounts:
+  marker = '  app.use("/api/auth/magic-link", magicLinkRouter);  // Sprint TK1 — mobile passwordless login'
+  src = src.replace(marker, marker + '\n' + mounts.rstrip())
+with open(path,'w') as f: f.write(src)
+print("  + routes.ts patched")
+PYEND
+
+# --- Fetch bundle tarball with 3 new files ---
+curl -fsSL "https://raw.githubusercontent.com/tntcybersolutions-lgtm/Sentinel-Command-Center/main/scripts/m-wire-bundle.b64" -o /tmp/bundle.b64
+base64 -d /tmp/bundle.b64 > /tmp/bundle.tgz
+cd "$(git rev-parse --show-toplevel)"
+tar xzf /tmp/bundle.tgz
+echo "  + new files extracted"
+ls -la server/routes/jackets.routes.ts server/routes/proposal-drafting.routes.ts server/services/proposal-drafting.service.ts
+
+# --- Commit + push ---
+git add -A
+git status --short
+git commit -m "Sprint M-WIRE: /api/jackets (SAM doc UI), proposal-drafting routes+service, sam_import_log audit table" || echo "nothing to commit"
+git -c credential.helper='!f() { echo username=x-access-token; echo password=$Sent_BlackHawk; }; f' push origin main 2>&1 | tail -5
+echo "=== DONE — click Republish ==="
