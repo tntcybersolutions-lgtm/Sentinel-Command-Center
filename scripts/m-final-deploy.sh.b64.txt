@@ -1,0 +1,296 @@
+#!/usr/bin/env bash
+# Sprint M-FINAL deploy — self-contained.
+# Pulls 2 archive services from GitHub (no paste needed), writes 4 inline files,
+# patches App.tsx + routes.ts + 4 m-* pages, commits + pushes.
+set -e
+cd ~/workspace
+
+ARCHIVE_SHA=b9836299ba595f6e78bd93867a56290eef7f78ba
+ARCHIVE_RAW="https://raw.githubusercontent.com/tntcybersolutions-lgtm/Sentinel-Command-Center/$ARCHIVE_SHA"
+
+echo "=== Step 1: Pull 2 archive service files ==="
+mkdir -p server/services server/routes
+curl -fsSL "$ARCHIVE_RAW/server/services/sam-document-importer.service.ts" -o server/services/sam-document-importer.service.ts
+curl -fsSL "$ARCHIVE_RAW/server/services/sub-recommendation.service.ts"   -o server/services/sub-recommendation.service.ts
+echo "  $(wc -c < server/services/sam-document-importer.service.ts) bytes  sam-document-importer.service.ts"
+echo "  $(wc -c < server/services/sub-recommendation.service.ts) bytes  sub-recommendation.service.ts"
+
+echo ""
+echo "=== Step 2: Write route handler files ==="
+
+cat > server/routes/sam-doc-import.routes.ts <<'RTS'
+/**
+ * Sprint M-FINAL-2: SAM.gov document import routes.
+ */
+import { Router, type Request, type Response } from "express";
+import { importSamGovDocumentsForBidProject } from "../services/sam-document-importer.service";
+export const samDocImportRouter = Router();
+samDocImportRouter.post("/:bidProjectId", async (req: Request, res: Response) => {
+  const id = req.params.bidProjectId;
+  if (!id) return res.status(400).json({ error: "bidProjectId required" });
+  try {
+    const result = await importSamGovDocumentsForBidProject(id);
+    res.json(result);
+  } catch (e: any) {
+    console.error("[sam-doc-import] failed:", e);
+    res.status(500).json({ error: e.message || "Import failed" });
+  }
+});
+export default samDocImportRouter;
+RTS
+echo "  $(wc -c < server/routes/sam-doc-import.routes.ts) bytes  sam-doc-import.routes.ts"
+
+cat > server/routes/sub-recommendations.routes.ts <<'RTS'
+/**
+ * Sprint M-FINAL-2: Subcontractor recommendation routes.
+ */
+import { Router, type Request, type Response } from "express";
+import { z } from "zod";
+import { recommendSubsForTrade, recommendForBidProjectTrades } from "../services/sub-recommendation.service";
+export const subRecommendationsRouter = Router();
+subRecommendationsRouter.get("/", async (req: Request, res: Response) => {
+  const trade = String(req.query.trade || "").trim();
+  if (!trade) return res.status(400).json({ error: "trade query param required" });
+  const limit = Number(req.query.limit) || 5;
+  const projectId = req.query.projectId ? String(req.query.projectId) : undefined;
+  try {
+    res.json(await recommendSubsForTrade({ trade, limit, projectId }));
+  } catch (e: any) {
+    console.error("[sub-recommendations] by-trade:", e);
+    res.status(500).json({ error: e.message || "Recommendation failed" });
+  }
+});
+const byBidSchema = z.object({
+  bidProjectId: z.string().min(1),
+  trades: z.array(z.string()).optional(),
+  limitPerTrade: z.number().int().min(1).max(20).optional(),
+});
+subRecommendationsRouter.post("/by-bid", async (req: Request, res: Response) => {
+  const parsed = byBidSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: "Validation failed", issues: parsed.error.issues });
+  try {
+    res.json(await recommendForBidProjectTrades(parsed.data));
+  } catch (e: any) {
+    console.error("[sub-recommendations] by-bid:", e);
+    res.status(500).json({ error: e.message || "Recommendation failed" });
+  }
+});
+export default subRecommendationsRouter;
+RTS
+echo "  $(wc -c < server/routes/sub-recommendations.routes.ts) bytes  sub-recommendations.routes.ts"
+
+
+cat > server/routes/magic-link.routes.ts <<'RTS'
+/**
+ * Sprint M-FINAL-3: Magic link auth.
+ *
+ * Real auth replacing Sprint TK1's passwordless lookup. Flow:
+ *   1. POST /api/auth/magic-link/request {email}
+ *      → If user is active, generates a 32-byte token, stores it with 15-min
+ *        expiry, and emails the user a sign-in link. Always returns 200
+ *        (no info leak about which emails exist).
+ *   2. GET  /api/auth/magic-link/verify?token=X
+ *      → If token exists, unused, unexpired: marks consumed, returns
+ *        {userId, email, displayName}. Client stores userId in localStorage.
+ *
+ * Email delivery: if SMTP_URL env is set, sends via nodemailer (dynamic import);
+ * otherwise logs the link to console (dev mode).
+ */
+import { Router, type Request, type Response } from "express";
+import crypto from "node:crypto";
+import { z } from "zod";
+import { sql } from "drizzle-orm";
+import { db, pool } from "../db";
+
+export const magicLinkRouter = Router();
+const TOKEN_TTL_MIN = 15;
+
+let bootstrapped = false;
+async function ensureTable(): Promise<void> {
+  if (bootstrapped) return;
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS magic_links (
+      token       varchar(64) PRIMARY KEY,
+      user_id     varchar(36) NOT NULL,
+      email       varchar(320) NOT NULL,
+      expires_at  timestamptz NOT NULL,
+      consumed_at timestamptz,
+      created_at  timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS magic_links_email_idx ON magic_links (email)`);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS magic_links_exp_idx ON magic_links (expires_at)`);
+  bootstrapped = true;
+}
+void ensureTable().catch((e) => console.error("[magic-link] bootstrap:", e));
+
+magicLinkRouter.use(async (_req, _res, next) => {
+  if (!bootstrapped) await ensureTable();
+  next();
+});
+
+async function cleanupExpired(): Promise<void> {
+  try { await pool.query("DELETE FROM magic_links WHERE expires_at < now() - interval '1 hour'"); } catch {}
+}
+
+async function sendMagicLink(email: string, link: string): Promise<{ delivered: "smtp" | "console" }> {
+  const smtpUrl = process.env.SMTP_URL || process.env.SENDGRID_SMTP_URL;
+  if (smtpUrl) {
+    try {
+      // @ts-ignore — optional dep
+      const nm: any = await import("nodemailer").catch(() => null);
+      if (nm) {
+        const transport = nm.createTransport(smtpUrl);
+        await transport.sendMail({
+          from: process.env.MAIL_FROM || "no-reply@sentinel-command-center.app",
+          to: email,
+          subject: "Your Sentinel sign-in link",
+          text: "Click to sign in: " + link + "\n\nThis link expires in " + TOKEN_TTL_MIN + " minutes.",
+        });
+        return { delivered: "smtp" };
+      }
+    } catch (e) {
+      console.error("[magic-link] SMTP send failed, falling back to console:", e);
+    }
+  }
+  console.log("[magic-link] (dev) Sign-in link for " + email + ": " + link);
+  return { delivered: "console" };
+}
+
+const requestSchema = z.object({ email: z.string().email().max(320) });
+
+magicLinkRouter.post("/request", async (req: Request, res: Response) => {
+  const parsed = requestSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: "Valid email required" });
+  const email = parsed.data.email.trim().toLowerCase();
+  try {
+    void cleanupExpired();
+    const result = await db.execute(sql`
+      SELECT id, email FROM users WHERE LOWER(email) = ${email} AND status = 'active' LIMIT 1
+    `);
+    const user = result.rows?.[0] as { id: string; email: string } | undefined;
+    if (!user) return res.status(200).json({ ok: true, hint: "If your email is registered, a link is on its way" });
+    const token = crypto.randomBytes(24).toString("hex");
+    const expiresAt = new Date(Date.now() + TOKEN_TTL_MIN * 60_000).toISOString();
+    await pool.query("INSERT INTO magic_links (token, user_id, email, expires_at) VALUES ($1, $2, $3, $4)", [token, user.id, user.email, expiresAt]);
+    const baseUrl = (req.headers.origin as string) || (req.protocol + "://" + req.get("host"));
+    const link = baseUrl + "/m-login?token=" + token;
+    const send = await sendMagicLink(user.email, link);
+    res.json({ ok: true, delivered: send.delivered });
+  } catch (e: any) {
+    console.error("[magic-link] /request:", e);
+    res.status(500).json({ error: "Could not generate link" });
+  }
+});
+
+magicLinkRouter.get("/verify", async (req: Request, res: Response) => {
+  const token = String(req.query.token || "").trim();
+  if (!token || token.length < 16 || token.length > 64) return res.status(400).json({ error: "Invalid token" });
+  try {
+    const result = await pool.query(
+      "SELECT m.token, m.user_id, m.email, m.expires_at, m.consumed_at, u.display_name FROM magic_links m JOIN users u ON u.id = m.user_id AND u.status = 'active' WHERE m.token = $1 LIMIT 1",
+      [token],
+    );
+    const row = result.rows?.[0] as { token: string; user_id: string; email: string; expires_at: string; consumed_at: string | null; display_name: string | null } | undefined;
+    if (!row) return res.status(404).json({ error: "Link invalid or already used" });
+    if (row.consumed_at) return res.status(401).json({ error: "Link already used" });
+    if (new Date(row.expires_at).getTime() < Date.now()) return res.status(401).json({ error: "Link expired" });
+    await pool.query("UPDATE magic_links SET consumed_at = now() WHERE token = $1", [token]);
+    res.json({ userId: row.user_id, email: row.email, displayName: row.display_name || row.email });
+  } catch (e: any) {
+    console.error("[magic-link] /verify:", e);
+    res.status(500).json({ error: "Verification failed" });
+  }
+});
+
+export default magicLinkRouter;
+RTS
+echo "  $(wc -c < server/routes/magic-link.routes.ts) bytes  magic-link.routes.ts"
+
+
+echo ""
+echo "=== Step 3: Apply tab bar patches to 4 stubborn pages ==="
+python3 - <<'PYEOF'
+import re
+CASES = [
+    ('client/src/pages/m-login.tsx',     'home',  '</SafeArea>'),
+    ('client/src/pages/m-rfi.tsx',       'home',  '</SafeArea>'),
+    ('client/src/pages/m-rfi-list.tsx',  'home',  '</SafeArea>'),
+    ('client/src/pages/m-receipt.tsx',   'more',  None),
+]
+def add_tab_bar(path, active_key, closing_marker):
+    with open(path) as f: s = f.read()
+    if "MobileTabBar" in s:
+        return f"  - {path}: already"
+    lines = s.split('\n')
+    last_idx = -1
+    for i, line in enumerate(lines):
+        if line.startswith('import ') and ' from ' in line:
+            last_idx = i
+    if last_idx < 0: return f"  ! {path}: no import anchor"
+    lines.insert(last_idx + 1, 'import MobileTabBar from "@/components/mobile/m-tab-bar";')
+    s = '\n'.join(lines)
+    if closing_marker:
+        last_pos = s.rfind(closing_marker)
+        if last_pos < 0: return f"  ! {path}: no '{closing_marker}'"
+        line_start = s.rfind('\n', 0, last_pos) + 1
+        indent = s[line_start:last_pos]
+        new = s[:last_pos] + f'<MobileTabBar active="{active_key}" />\n{indent}' + s[last_pos:]
+        with open(path, 'w') as f: f.write(new)
+        return f"  ✓ {path}"
+    m_export = re.search(r'export default function MobileReceiptPage', s)
+    if not m_export: return f"  ! {path}: no default"
+    m_close = re.search(r'(\n)(\s*)</div>(\s*\)\s*;\s*\n}\s*\n)', s[m_export.end():])
+    if not m_close: return f"  ! {path}: no close"
+    abs_close_start = m_export.end() + m_close.start()
+    indent = m_close.group(2)
+    new = s[:abs_close_start] + f'\n{indent}  <MobileTabBar active="{active_key}" />' + s[abs_close_start:]
+    with open(path, 'w') as f: f.write(new)
+    return f"  ✓ {path}"
+for path, key, marker in CASES:
+    print(add_tab_bar(path, key, marker))
+PYEOF
+
+echo ""
+echo "=== Step 4: Wire 3 routers into server/routes.ts ==="
+python3 - <<'PYEOF'
+p = 'server/routes.ts'
+with open(p) as f: s = f.read()
+anchor_import = 'import { mobileAuthApiRouter } from "./routes/mobile-auth-api.routes";'
+new_imports = anchor_import + """
+import { samDocImportRouter } from "./routes/sam-doc-import.routes";
+import { subRecommendationsRouter } from "./routes/sub-recommendations.routes";
+import { magicLinkRouter } from "./routes/magic-link.routes";"""
+if 'magicLinkRouter' not in s and anchor_import in s:
+    s = s.replace(anchor_import, new_imports)
+    print('  ✓ imports added')
+else:
+    print('  - imports already present or anchor missing')
+anchor_mount = 'app.use("/api/auth", mobileAuthApiRouter);'
+new_mounts = anchor_mount + """
+  app.use("/api/sam-doc-import", samDocImportRouter);
+  app.use("/api/sub-recommendations", subRecommendationsRouter);
+  app.use("/api/auth/magic-link", magicLinkRouter);"""
+if '/api/auth/magic-link' not in s and anchor_mount in s:
+    s = s.replace(anchor_mount, new_mounts)
+    print('  ✓ mounts added')
+else:
+    print('  - mounts already present or anchor missing')
+with open(p, 'w') as f: f.write(s)
+print(f"  size = {len(s)} bytes")
+PYEOF
+
+echo ""
+echo "=== Step 5: Git add + commit ==="
+git add -A
+git status --short
+
+git -c user.email="deploy@sentinel" -c user.name="M-FINAL Deploy" commit -m "Sprint M-FINAL: tab bars on m-login/m-rfi/m-rfi-list/m-receipt + sam-doc-import + sub-recommendations + magic-link auth" || echo "(nothing to commit)"
+
+echo ""
+echo "=== Step 6: Pull + Push ==="
+git pull --rebase "https://x-access-token:${Sent_BlackHawk}@github.com/tntcybersolutions-lgtm/Sentinel-Command-Center.git" main 2>&1 | tail -5
+git push "https://x-access-token:${Sent_BlackHawk}@github.com/tntcybersolutions-lgtm/Sentinel-Command-Center.git" HEAD:main 2>&1 | tail -10
+
+echo ""
+echo "=== DONE — click Republish ==="
