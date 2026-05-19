@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+set -euo pipefail
+echo "=== Sprint M-UX-2: Procore-style bid jacket ==="
+
+python3 - << 'PYEOF'
+import sys
+path = 'client/src/pages/bid-jacket.tsx'
+with open(path) as f: src = f.read()
+
+if 'data-[state=active]:bg-white data-[state=active]:shadow-sm data-[state=active]:text-blue-700' in src:
+  print("  = already patched, nothing to do")
+  sys.exit(0)
+
+OLD = '''        <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col">
+          <div className="border-b px-4">
+            <TabsList className="h-10 overflow-x-auto" data-testid="tabs-list">
+              <TabsTrigger value="overview" data-testid="tab-overview">Overview</TabsTrigger>
+              <TabsTrigger value="ai-intel" data-testid="tab-ai-intel">AI Intel</TabsTrigger>
+              <TabsTrigger value="capture-plan" data-testid="tab-capture-plan">Capture Plan</TabsTrigger>
+              <TabsTrigger value="documents" data-testid="tab-documents">Documents</TabsTrigger>
+              <TabsTrigger value="design" data-testid="tab-design">Design</TabsTrigger>
+              <TabsTrigger value="takeoff" data-testid="tab-takeoff">Takeoff</TabsTrigger>
+              <TabsTrigger value="pricing" data-testid="tab-pricing">Pricing</TabsTrigger>
+              <TabsTrigger value="compliance" data-testid="tab-compliance">Compliance</TabsTrigger>
+              <TabsTrigger value="proposal" data-testid="tab-proposal">Proposal</TabsTrigger>
+              <TabsTrigger value="binder" data-testid="tab-binder">Binder</TabsTrigger>
+              <TabsTrigger value="rfis" data-testid="tab-rfis">RFIs</TabsTrigger>
+              <TabsTrigger value="submittals" data-testid="tab-submittals">Submittals</TabsTrigger>
+              <TabsTrigger value="change-orders" data-testid="tab-change-orders">Change Orders</TabsTrigger>
+              <TabsTrigger value="daily-log" data-testid="tab-daily-log">Daily Log</TabsTrigger>
+              <TabsTrigger value="financials" data-testid="tab-financials">Financials</TabsTrigger>
+              <TabsTrigger value="directory" data-testid="tab-directory">Directory</TabsTrigger>
+              <TabsTrigger value="bidders" data-testid="tab-bidders">Bidders</TabsTrigger>
+              <TabsTrigger value="bid-form" data-testid="tab-bid-form">Bid Form</TabsTrigger>
+              <TabsTrigger value="leveling" data-testid="tab-leveling">Leveling</TabsTrigger>
+              <TabsTrigger value="artifacts" data-testid="tab-artifacts">Artifacts</TabsTrigger>
+              <TabsTrigger value="master-checklist" data-testid="tab-master-checklist">Checklist</TabsTrigger>
+              <TabsTrigger value="activity" data-testid="tab-activity">Activity</TabsTrigger>
+              <TabsTrigger value="transition" data-testid="tab-transition">Transition</TabsTrigger>
+            </TabsList>
+          </div>'''
+
+NEW_TPL = '''        <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-row" orientation="vertical">
+          <aside className="w-56 border-r bg-gray-50/60 overflow-y-auto flex-shrink-0">
+            <TabsList className="flex-col h-auto w-full bg-transparent p-2 items-stretch gap-0" data-testid="tabs-list">
+__GROUPS__
+            </TabsList>
+          </aside>
+          <div className="flex-1 overflow-auto flex flex-col min-w-0">'''
+
+TRIG = lambda value, label, icon: f'              <TabsTrigger value="{value}" data-testid="tab-{value}" className="justify-start gap-2 data-[state=active]:bg-white data-[state=active]:shadow-sm data-[state=active]:text-blue-700"><{icon} className="h-4 w-4"/>{label}</TabsTrigger>'
+HDR = lambda label: f'              <div className="px-2 pt-3 pb-1 text-[10px] font-bold uppercase tracking-wider text-gray-400">{label}</div>'
+
+GROUPS = [
+  ("Pursuit",   [("overview","Overview","LayoutGrid"),("ai-intel","AI Intel","Brain"),("capture-plan","Capture Plan","ClipboardList")]),
+  ("Documents", [("documents","Documents","FolderOpen"),("design","Design","Layers"),("takeoff","Takeoff","Wrench"),("artifacts","Artifacts","Receipt")]),
+  ("Estimating",[("pricing","Pricing","DollarSign"),("bid-form","Bid Form","FilePlus"),("leveling","Leveling","ArrowUpDown")]),
+  ("Compliance & Proposal",[("compliance","Compliance","Shield"),("proposal","Proposal","FileText"),("binder","Binder","BookOpen")]),
+  ("Collaboration",[("rfis","RFIs","FileQuestion"),("submittals","Submittals","CheckSquare"),("change-orders","Change Orders","RefreshCw"),("daily-log","Daily Log","CalendarDays")]),
+  ("Team",      [("bidders","Bidders","Building2"),("directory","Directory","Users")]),
+  ("Lifecycle", [("financials","Financials","DollarSign"),("master-checklist","Checklist","CheckCircle2"),("activity","Activity","Activity"),("transition","Transition","Trophy")]),
+]
+lines = []
+for grp, items in GROUPS:
+  lines.append(HDR(grp))
+  for v,l,i in items: lines.append(TRIG(v,l,i))
+NEW = NEW_TPL.replace('__GROUPS__', '\n'.join(lines))
+
+if OLD not in src:
+  print("  ! OLD block not found exactly — file may have already been modified")
+  sys.exit(1)
+src = src.replace(OLD, NEW)
+print("  + sidebar replaced")
+
+count = src.count('        </Tabs>')
+if count != 1:
+  print(f"  ! </Tabs> count = {count}, aborting")
+  sys.exit(1)
+src = src.replace('        </Tabs>', '          </div>\n        </Tabs>', 1)
+print("  + content area </div> closed")
+
+with open(path,'w') as f: f.write(src)
+print(f"  Done. File now {len(src.splitlines())} lines")
+PYEOF
+
+# commit + push
+git add -A
+git status --short
+git commit -m "Sprint M-UX-2: Procore-style bid jacket — vertical left rail with 7 grouped sections (Pursuit/Documents/Estimating/Compliance/Collaboration/Team/Lifecycle) replacing 24 horizontal tabs"
+git -c credential.helper='!f() { echo username=x-access-token; echo password=$Sent_BlackHawk; }; f' push origin main 2>&1 | tail -4
+echo "=== DONE — click Republish ==="
