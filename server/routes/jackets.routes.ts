@@ -135,7 +135,7 @@ jacketsRouter.get("/bid/:bidId/sam-summary", async (req: Request, res: Response)
       SELECT
         COUNT(*) AS doc_count,
         COALESCE(SUM(file_size_bytes), 0) AS total_bytes,
-        MAX(created_at) AS last_imported_at
+        MAX(jd.created_at) AS last_imported_at
       FROM jacket_documents jd
       JOIN jacket_folders jf ON jf.id = jd.folder_id
       WHERE jf.jacket_type = 'bid'
