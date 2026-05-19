@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+set -euo pipefail
+echo "=== Sprint M-LIEN Phase 1: /lien-waivers workspace ==="
+
+# Patch 1: App.tsx — add LienWaivers import + /lien-waivers routes
+python3 - << 'PYEOF'
+path = 'client/src/App.tsx'
+with open(path) as f: src = f.read()
+if 'import LienWaivers from' not in src:
+  marker = 'import Pursuit from "@/pages/pursuit";'
+  if marker in src:
+    src = src.replace(marker, marker + '\nimport LienWaivers from "@/pages/lien-waivers";')
+    print("  + LienWaivers import added")
+  else:
+    # fallback marker
+    marker = 'import FederalSearch from "@/pages/federal-search";'
+    if marker in src:
+      src = src.replace(marker, marker + '\nimport LienWaivers from "@/pages/lien-waivers";')
+      print("  + LienWaivers import added (fallback anchor)")
+if 'path="/lien-waivers"' not in src:
+  marker = '<Route path="/pursuit"'
+  if marker not in src:
+    marker = '<Route path="/capture/opportunities"'
+  if marker in src:
+    new = '<Route path="/lien-waivers" component={() => <SafeRoute component={LienWaivers} name="LienWaivers" />} />\n      <Route path="/lien-waivers/:module" component={() => <SafeRoute component={LienWaivers} name="LienWaivers" />} />\n      '
+    src = src.replace(marker, new + marker, 1)
+    print("  + /lien-waivers routes added")
+with open(path,'w') as f: f.write(src)
+PYEOF
+
+# Patch 2: routes.ts — mount /api/lien-waivers
+python3 - << 'PYEOF'
+path = 'server/routes.ts'
+with open(path) as f: src = f.read()
+if 'lienWaiversRouter' not in src:
+  marker = 'import { jacketsRouter } from "./routes/jackets.routes";'
+  if marker in src:
+    src = src.replace(marker, marker + '\nimport { lienWaiversRouter } from "./routes/lien-waivers.routes";')
+    print("  + lienWaiversRouter import added")
+if '"/api/lien-waivers"' not in src:
+  marker = '  app.use("/api/jackets", jacketsRouter);'
+  if marker in src:
+    src = src.replace(marker, marker + '\n  app.use("/api/lien-waivers", lienWaiversRouter);')
+    print("  + /api/lien-waivers mount added")
+with open(path,'w') as f: f.write(src)
+PYEOF
+
+# Patch 3: home-assistant.tsx — change Money tile route /financial/compliance -> /lien-waivers
+python3 - << 'PYEOF'
+path = 'client/src/pages/home-assistant.tsx'
+with open(path) as f: src = f.read()
+old = '      route: "/financial/compliance",'
+new = '      route: "/lien-waivers",'
+if old in src and new not in src:
+  src = src.replace(old, new, 1)
+  print("  + home Money tile route -> /lien-waivers")
+elif new in src:
+  print("  = already routes to /lien-waivers")
+with open(path,'w') as f: f.write(src)
+PYEOF
+
+# Bundle: 2 new files
+curl -fsSL "https://raw.githubusercontent.com/tntcybersolutions-lgtm/Sentinel-Command-Center/main/scripts/m-lien-new.b64" -o /tmp/lien.b64
+base64 -d /tmp/lien.b64 | tar xz
+echo "  + new files extracted"
+ls -la client/src/pages/lien-waivers.tsx server/routes/lien-waivers.routes.ts
+
+# Commit + push
+git add -A
+git status --short
+git commit -m "Sprint M-LIEN Phase 1: /lien-waivers cross-project workspace (Outstanding/Received/Approved/Templates/Settings rail) + /api/lien-waivers Express routes wrapping existing server/lien-waivers.ts service + Money This Week tile routes to /lien-waivers."
+git -c credential.helper='!f() { echo username=x-access-token; echo password=$Sent_BlackHawk; }; f' push origin main 2>&1 | tail -5
+echo "=== DONE — pull-rebase if needed, then Republish ==="
