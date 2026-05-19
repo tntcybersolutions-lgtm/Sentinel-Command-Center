@@ -262,6 +262,10 @@ const MobileRfiListPage = lazy(() => import('./pages/m-rfi-list'));
 const MobilePhotosPage = lazy(() => import('./pages/m-photos'));
 const MobileDrawingsPage = lazy(() => import('./pages/m-drawings'));
 const MobilePunchPage = lazy(() => import('./pages/m-punch'));
+const MobileReceiptPage = lazy(() => import('./pages/m-receipt'));
+const MobileDailyLogPage = lazy(() => import('./pages/m-daily-log'));
+const MobileApprovalsPage = lazy(() => import('./pages/m-approvals'));
+const MobileMorePage = lazy(() => import('./pages/m-more'));
 const ProfilePage = lazy(() => import('./pages/profile'));
 import { MobileShell } from "@/components/mobile-shell";
 import NotFound from "@/pages/not-found";
@@ -277,12 +281,19 @@ function Router() {
     <MobileShell>
     <Switch>
       {/* ── Home ── */}
-      <Route path="/" component={() => <LegacyRedirect to="/home" />} />
+      <Route path="/" component={() => { const isMobile = typeof navigator !== "undefined" && (/Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || window.innerWidth < 768); return <LegacyRedirect to={isMobile ? "/m-home" : "/home"} />; }} />
       <Route path="/home" component={() => <SafeRoute component={HomeAssistant} name="Home" />} />
       <Route path="/projects/:id/photos" component={() => <SafeRoute component={ProjectPhotosPage} name="ProjectPhotos" />} />
       <Route path="/m-login" component={() => <Suspense fallback={<div>Loading...</div>}><MobileLoginPage /></Suspense>} />
       <Route path="/m-rfi" component={() => <Suspense fallback={<div>Loading...</div>}><MobileRfiPage /></Suspense>} />
       <Route path="/m-rfi-list" component={() => <Suspense fallback={<div>Loading...</div>}><MobileRfiListPage /></Suspense>} />
+      <Route path="/m-receipt" component={() => <Suspense fallback={<div>Loading...</div>}><MobileReceiptPage /></Suspense>} />
+      <Route path="/projects/:id/m-receipt" component={() => <Suspense fallback={<div>Loading...</div>}><MobileReceiptPage /></Suspense>} />
+      <Route path="/m-daily-log" component={() => <Suspense fallback={<div>Loading...</div>}><MobileDailyLogPage /></Suspense>} />
+      <Route path="/m-approvals" component={() => <Suspense fallback={<div>Loading...</div>}><MobileApprovalsPage /></Suspense>} />
+      <Route path="/m-more" component={() => <Suspense fallback={<div>Loading...</div>}><MobileMorePage /></Suspense>} />
+      <Route path="/m-drawings" component={() => <Suspense fallback={<div>Loading...</div>}><MobileDrawingsPage /></Suspense>} />
+      <Route path="/m-drawings/:id" component={() => <Suspense fallback={<div>Loading...</div>}><MobileDrawingsPage /></Suspense>} />
       <Route path="/m-home" component={() => <Suspense fallback={<div>Loading...</div>}><MobileHomePage /></Suspense>} />
       <Route path="/projects/:id/m-photos" component={() => <Suspense fallback={<div>Loading...</div>}><MobilePhotosPage /></Suspense>} />
       <Route path="/projects/:id/drawings" component={() => <Suspense fallback={<div>Loading...</div>}><MobileDrawingsPage /></Suspense>} />

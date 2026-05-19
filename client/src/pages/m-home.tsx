@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { apiFetch, subscribe } from "@/lib/offline-queue";
 import { SyncSheet } from "@/components/sync-sheet";
+import MobileTabBar from "@/components/mobile/m-tab-bar";
 
 interface RiskScore {
   amount: number;
@@ -156,7 +157,7 @@ export default function MobileHomePage() {
       onTouchStart={onTouchStart}
       onTouchMove={onTouchMove}
       onTouchEnd={onTouchEnd}
-      style={{ background: "#0B0D11", minHeight: "100vh", color: "#E8EAEE", padding: "16px 16px 24px" }}
+      style={{ background: "#0B0D11", minHeight: "100vh", color: "#E8EAEE", padding: "16px 16px calc(80px + env(safe-area-inset-bottom)) 16px" }}
       data-testid="m-home-page"
     >
       <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
@@ -272,6 +273,7 @@ export default function MobileHomePage() {
           </div>
         )}
       </section>
+      <MobileTabBar active="home" />
     </div>
   );
 }
