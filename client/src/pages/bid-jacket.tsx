@@ -2518,34 +2518,42 @@ export default function BidJacket() {
         </div>
 
         {/* Tabs */}
-        <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col">
-          <div className="border-b px-4">
-            <TabsList className="h-10 overflow-x-auto" data-testid="tabs-list">
-              <TabsTrigger value="overview" data-testid="tab-overview">Overview</TabsTrigger>
-              <TabsTrigger value="ai-intel" data-testid="tab-ai-intel">AI Intel</TabsTrigger>
-              <TabsTrigger value="capture-plan" data-testid="tab-capture-plan">Capture Plan</TabsTrigger>
-              <TabsTrigger value="documents" data-testid="tab-documents">Documents</TabsTrigger>
-              <TabsTrigger value="design" data-testid="tab-design">Design</TabsTrigger>
-              <TabsTrigger value="takeoff" data-testid="tab-takeoff">Takeoff</TabsTrigger>
-              <TabsTrigger value="pricing" data-testid="tab-pricing">Pricing</TabsTrigger>
-              <TabsTrigger value="compliance" data-testid="tab-compliance">Compliance</TabsTrigger>
-              <TabsTrigger value="proposal" data-testid="tab-proposal">Proposal</TabsTrigger>
-              <TabsTrigger value="binder" data-testid="tab-binder">Binder</TabsTrigger>
-              <TabsTrigger value="rfis" data-testid="tab-rfis">RFIs</TabsTrigger>
-              <TabsTrigger value="submittals" data-testid="tab-submittals">Submittals</TabsTrigger>
-              <TabsTrigger value="change-orders" data-testid="tab-change-orders">Change Orders</TabsTrigger>
-              <TabsTrigger value="daily-log" data-testid="tab-daily-log">Daily Log</TabsTrigger>
-              <TabsTrigger value="financials" data-testid="tab-financials">Financials</TabsTrigger>
-              <TabsTrigger value="directory" data-testid="tab-directory">Directory</TabsTrigger>
-              <TabsTrigger value="bidders" data-testid="tab-bidders">Bidders</TabsTrigger>
-              <TabsTrigger value="bid-form" data-testid="tab-bid-form">Bid Form</TabsTrigger>
-              <TabsTrigger value="leveling" data-testid="tab-leveling">Leveling</TabsTrigger>
-              <TabsTrigger value="artifacts" data-testid="tab-artifacts">Artifacts</TabsTrigger>
-              <TabsTrigger value="master-checklist" data-testid="tab-master-checklist">Checklist</TabsTrigger>
-              <TabsTrigger value="activity" data-testid="tab-activity">Activity</TabsTrigger>
-              <TabsTrigger value="transition" data-testid="tab-transition">Transition</TabsTrigger>
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-row" orientation="vertical">
+          <aside className="w-56 border-r bg-gray-50/60 overflow-y-auto flex-shrink-0">
+            <TabsList className="flex-col h-auto w-full bg-transparent p-2 items-stretch gap-0" data-testid="tabs-list">
+              <div className="px-2 pt-3 pb-1 text-[10px] font-bold uppercase tracking-wider text-gray-400">Pursuit</div>
+              <TabsTrigger value="overview" data-testid="tab-overview" className="justify-start gap-2 data-[state=active]:bg-white data-[state=active]:shadow-sm data-[state=active]:text-blue-700"><LayoutGrid className="h-4 w-4"/>Overview</TabsTrigger>
+              <TabsTrigger value="ai-intel" data-testid="tab-ai-intel" className="justify-start gap-2 data-[state=active]:bg-white data-[state=active]:shadow-sm data-[state=active]:text-blue-700"><Brain className="h-4 w-4"/>AI Intel</TabsTrigger>
+              <TabsTrigger value="capture-plan" data-testid="tab-capture-plan" className="justify-start gap-2 data-[state=active]:bg-white data-[state=active]:shadow-sm data-[state=active]:text-blue-700"><ClipboardList className="h-4 w-4"/>Capture Plan</TabsTrigger>
+              <div className="px-2 pt-3 pb-1 text-[10px] font-bold uppercase tracking-wider text-gray-400">Documents</div>
+              <TabsTrigger value="documents" data-testid="tab-documents" className="justify-start gap-2 data-[state=active]:bg-white data-[state=active]:shadow-sm data-[state=active]:text-blue-700"><FolderOpen className="h-4 w-4"/>Documents</TabsTrigger>
+              <TabsTrigger value="design" data-testid="tab-design" className="justify-start gap-2 data-[state=active]:bg-white data-[state=active]:shadow-sm data-[state=active]:text-blue-700"><Layers className="h-4 w-4"/>Design</TabsTrigger>
+              <TabsTrigger value="takeoff" data-testid="tab-takeoff" className="justify-start gap-2 data-[state=active]:bg-white data-[state=active]:shadow-sm data-[state=active]:text-blue-700"><Wrench className="h-4 w-4"/>Takeoff</TabsTrigger>
+              <TabsTrigger value="artifacts" data-testid="tab-artifacts" className="justify-start gap-2 data-[state=active]:bg-white data-[state=active]:shadow-sm data-[state=active]:text-blue-700"><Receipt className="h-4 w-4"/>Artifacts</TabsTrigger>
+              <div className="px-2 pt-3 pb-1 text-[10px] font-bold uppercase tracking-wider text-gray-400">Estimating</div>
+              <TabsTrigger value="pricing" data-testid="tab-pricing" className="justify-start gap-2 data-[state=active]:bg-white data-[state=active]:shadow-sm data-[state=active]:text-blue-700"><DollarSign className="h-4 w-4"/>Pricing</TabsTrigger>
+              <TabsTrigger value="bid-form" data-testid="tab-bid-form" className="justify-start gap-2 data-[state=active]:bg-white data-[state=active]:shadow-sm data-[state=active]:text-blue-700"><FilePlus className="h-4 w-4"/>Bid Form</TabsTrigger>
+              <TabsTrigger value="leveling" data-testid="tab-leveling" className="justify-start gap-2 data-[state=active]:bg-white data-[state=active]:shadow-sm data-[state=active]:text-blue-700"><ArrowUpDown className="h-4 w-4"/>Leveling</TabsTrigger>
+              <div className="px-2 pt-3 pb-1 text-[10px] font-bold uppercase tracking-wider text-gray-400">Compliance & Proposal</div>
+              <TabsTrigger value="compliance" data-testid="tab-compliance" className="justify-start gap-2 data-[state=active]:bg-white data-[state=active]:shadow-sm data-[state=active]:text-blue-700"><Shield className="h-4 w-4"/>Compliance</TabsTrigger>
+              <TabsTrigger value="proposal" data-testid="tab-proposal" className="justify-start gap-2 data-[state=active]:bg-white data-[state=active]:shadow-sm data-[state=active]:text-blue-700"><FileText className="h-4 w-4"/>Proposal</TabsTrigger>
+              <TabsTrigger value="binder" data-testid="tab-binder" className="justify-start gap-2 data-[state=active]:bg-white data-[state=active]:shadow-sm data-[state=active]:text-blue-700"><BookOpen className="h-4 w-4"/>Binder</TabsTrigger>
+              <div className="px-2 pt-3 pb-1 text-[10px] font-bold uppercase tracking-wider text-gray-400">Collaboration</div>
+              <TabsTrigger value="rfis" data-testid="tab-rfis" className="justify-start gap-2 data-[state=active]:bg-white data-[state=active]:shadow-sm data-[state=active]:text-blue-700"><FileQuestion className="h-4 w-4"/>RFIs</TabsTrigger>
+              <TabsTrigger value="submittals" data-testid="tab-submittals" className="justify-start gap-2 data-[state=active]:bg-white data-[state=active]:shadow-sm data-[state=active]:text-blue-700"><CheckSquare className="h-4 w-4"/>Submittals</TabsTrigger>
+              <TabsTrigger value="change-orders" data-testid="tab-change-orders" className="justify-start gap-2 data-[state=active]:bg-white data-[state=active]:shadow-sm data-[state=active]:text-blue-700"><RefreshCw className="h-4 w-4"/>Change Orders</TabsTrigger>
+              <TabsTrigger value="daily-log" data-testid="tab-daily-log" className="justify-start gap-2 data-[state=active]:bg-white data-[state=active]:shadow-sm data-[state=active]:text-blue-700"><CalendarDays className="h-4 w-4"/>Daily Log</TabsTrigger>
+              <div className="px-2 pt-3 pb-1 text-[10px] font-bold uppercase tracking-wider text-gray-400">Team</div>
+              <TabsTrigger value="bidders" data-testid="tab-bidders" className="justify-start gap-2 data-[state=active]:bg-white data-[state=active]:shadow-sm data-[state=active]:text-blue-700"><Building2 className="h-4 w-4"/>Bidders</TabsTrigger>
+              <TabsTrigger value="directory" data-testid="tab-directory" className="justify-start gap-2 data-[state=active]:bg-white data-[state=active]:shadow-sm data-[state=active]:text-blue-700"><Users className="h-4 w-4"/>Directory</TabsTrigger>
+              <div className="px-2 pt-3 pb-1 text-[10px] font-bold uppercase tracking-wider text-gray-400">Lifecycle</div>
+              <TabsTrigger value="financials" data-testid="tab-financials" className="justify-start gap-2 data-[state=active]:bg-white data-[state=active]:shadow-sm data-[state=active]:text-blue-700"><DollarSign className="h-4 w-4"/>Financials</TabsTrigger>
+              <TabsTrigger value="master-checklist" data-testid="tab-master-checklist" className="justify-start gap-2 data-[state=active]:bg-white data-[state=active]:shadow-sm data-[state=active]:text-blue-700"><CheckCircle2 className="h-4 w-4"/>Checklist</TabsTrigger>
+              <TabsTrigger value="activity" data-testid="tab-activity" className="justify-start gap-2 data-[state=active]:bg-white data-[state=active]:shadow-sm data-[state=active]:text-blue-700"><Activity className="h-4 w-4"/>Activity</TabsTrigger>
+              <TabsTrigger value="transition" data-testid="tab-transition" className="justify-start gap-2 data-[state=active]:bg-white data-[state=active]:shadow-sm data-[state=active]:text-blue-700"><Trophy className="h-4 w-4"/>Transition</TabsTrigger>
             </TabsList>
-          </div>
+          </aside>
+          <div className="flex-1 overflow-auto flex flex-col min-w-0">
 
           {/* ==================== OVERVIEW TAB ==================== */}
           <TabsContent value="overview" className="flex-1 overflow-auto p-4 mt-0">
@@ -5819,6 +5827,7 @@ export default function BidJacket() {
           <TabsContent value="transition" className="flex-1 overflow-auto p-4 mt-0">
             <TransitionTab bidId={bidId!} data={transitionData} isLoading={transitionLoading} />
           </TabsContent>
+          </div>
         </Tabs>
 
         {/* Document Viewer Dialog */}
