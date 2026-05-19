@@ -193,7 +193,7 @@ function MoneyThisWeek() {
           : "outstanding",
       icon: ShieldAlert,
       accent: "border-l-amber-500",
-      route: "/financial/compliance",
+      route: "/lien-waivers",
     },
     {
       label: "Invoices Overdue",

@@ -227,6 +227,7 @@ import ViewerDemo from "@/pages/viewer-demo";
 import VendorPortal from "@/pages/vendor-portal";
 import Competitors from "@/pages/competitors";
 import FederalSearch from "@/pages/federal-search";
+import LienWaivers from "@/pages/lien-waivers";
 import CaptureFeed from "@/pages/capture-feed";
 import CapturePipeline from "@/pages/capture-pipeline";
 import CaptureDetail from "@/pages/capture-detail";
@@ -317,6 +318,8 @@ function Router() {
       <Route path="/my-day" component={() => <LegacyRedirect to="/home" />} />
 
       {/* ── Capture ── */}
+      <Route path="/lien-waivers" component={() => <SafeRoute component={LienWaivers} name="LienWaivers" />} />
+      <Route path="/lien-waivers/:module" component={() => <SafeRoute component={LienWaivers} name="LienWaivers" />} />
       <Route path="/capture/opportunities" component={() => <SafeRoute component={Opportunities} name="Opportunities" />} />
       <Route path="/capture/pipeline" component={() => <SafeRoute component={CapturePipeline} name="Pipeline" />} />
       <Route path="/capture/agencies" component={() => <SafeRoute component={Companies} name="Agencies" />} />
