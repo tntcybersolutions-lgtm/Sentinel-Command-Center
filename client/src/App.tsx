@@ -266,6 +266,8 @@ const MobileReceiptPage = lazy(() => import('./pages/m-receipt'));
 const MobileDailyLogPage = lazy(() => import('./pages/m-daily-log'));
 const MobileApprovalsPage = lazy(() => import('./pages/m-approvals'));
 const MobileMorePage = lazy(() => import('./pages/m-more'));
+const MobileNotificationsPage = lazy(() => import('./pages/m-notifications'));
+const MobileChangeOrdersPage = lazy(() => import('./pages/m-change-orders'));
 const ProfilePage = lazy(() => import('./pages/profile'));
 import { MobileShell } from "@/components/mobile-shell";
 import NotFound from "@/pages/not-found";
@@ -292,6 +294,9 @@ function Router() {
       <Route path="/m-daily-log" component={() => <Suspense fallback={<div>Loading...</div>}><MobileDailyLogPage /></Suspense>} />
       <Route path="/m-approvals" component={() => <Suspense fallback={<div>Loading...</div>}><MobileApprovalsPage /></Suspense>} />
       <Route path="/m-more" component={() => <Suspense fallback={<div>Loading...</div>}><MobileMorePage /></Suspense>} />
+      <Route path="/m-notifications" component={() => <Suspense fallback={<div>Loading...</div>}><MobileNotificationsPage /></Suspense>} />
+      <Route path="/m-change-orders" component={() => <Suspense fallback={<div>Loading...</div>}><MobileChangeOrdersPage /></Suspense>} />
+      <Route path="/m-photos" component={() => <Suspense fallback={<div>Loading...</div>}><MobilePhotosPage /></Suspense>} />
       <Route path="/m-drawings" component={() => <Suspense fallback={<div>Loading...</div>}><MobileDrawingsPage /></Suspense>} />
       <Route path="/m-drawings/:id" component={() => <Suspense fallback={<div>Loading...</div>}><MobileDrawingsPage /></Suspense>} />
       <Route path="/m-home" component={() => <Suspense fallback={<div>Loading...</div>}><MobileHomePage /></Suspense>} />

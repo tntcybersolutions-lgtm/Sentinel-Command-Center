@@ -11,6 +11,7 @@ import "react-pdf/dist/Page/TextLayer.css";
 // cache it for offline drawing viewing. The previous CDN URL (unpkg.com) is
 // cross-origin and explicitly skipped by sw.js, which would break offline.
 import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
+import MobileTabBar from "@/components/mobile/m-tab-bar";
 
 pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
@@ -515,6 +516,7 @@ function PdfSkeleton() {
       }}
     >
       <style>{`@keyframes pdf-shimmer { 0% { background-position: 200% 0 } 100% { background-position: -200% 0 } }`}</style>
+      <MobileTabBar active="home" />
     </div>
   );
 }

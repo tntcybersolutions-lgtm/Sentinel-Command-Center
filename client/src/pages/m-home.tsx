@@ -163,7 +163,7 @@ export default function MobileHomePage() {
       <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
         <button
           data-testid="m-home-project-switcher"
-          onClick={() => setLocation("/projects/active")}
+          onClick={() => setLocation("/m-more")}
           style={{
             background: "#14171C", border: "0.5px solid #2C2C2A", color: "#E8EAEE",
             borderRadius: 999, padding: "6px 12px", fontSize: 13, cursor: "pointer",
@@ -183,7 +183,7 @@ export default function MobileHomePage() {
           )}
           <button
             data-testid="m-home-herbie-avatar"
-            onClick={() => setLocation("/automation/herbie")}
+            onClick={() => setLocation("/m-approvals")}
             style={{
               width: 28, height: 28, borderRadius: "50%", background: "#1D9E75", color: "#fff",
               display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 700,

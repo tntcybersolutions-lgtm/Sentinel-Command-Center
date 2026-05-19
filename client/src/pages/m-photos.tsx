@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import { useRoute } from "wouter";
 import { apiFetch, pending } from "@/lib/offline-queue";
+import MobileTabBar from "@/components/mobile/m-tab-bar";
 
 interface Pin { x: number; y: number; n: number; }
 
@@ -250,6 +251,7 @@ export default function MobilePhotosPage() {
           )}
         </div>
       )}
+      <MobileTabBar active="home" />
     </div>
   );
 }

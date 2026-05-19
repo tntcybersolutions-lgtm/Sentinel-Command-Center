@@ -12,6 +12,8 @@ const LINKS: Link[] = [
   { label: "Drawings",   href: "/m-drawings",  subtitle: "Plan sheets & markups" },
   { label: "Photos",     href: "/projects/default/m-photos", subtitle: "Site photos with captions" },
   { label: "Receipts",   href: "/m-receipt",   subtitle: "Capture & extract receipts" },
+  { label: "Notifications", href: "/m-notifications", subtitle: "Field alerts & messages" },
+  { label: "Change Orders", href: "/m-change-orders", subtitle: "Approve/deny CO requests" },
   { label: "Profile",    href: "/profile",     subtitle: "Account & sign out" },
 ];
 

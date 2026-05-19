@@ -33,6 +33,7 @@ import { apiFetch, enqueuePhoto, getPhotoDisplayUrl } from "@/lib/offline-queue"
 import { usePullToRefresh } from "@/hooks/use-pull-to-refresh";
 import { SafeArea } from "@/components/ui/safe-area";
 import { StatusPill, type StatusPillTone } from "@/components/ui/status-pill";
+import MobileTabBar from "@/components/mobile/m-tab-bar";
 
 type Severity = "critical" | "high" | "medium" | "low";
 type Status = "open" | "in_progress" | "ready_for_review" | "closed";
@@ -600,6 +601,7 @@ function FieldRow({
           </button>
         )}
       </div>
+      <MobileTabBar active="punch" />
     </div>
   );
 }
