@@ -136,7 +136,7 @@ import { subRecommendationsRouter } from "./routes/sub-recommendations.routes";
 import { magicLinkRouter } from "./routes/magic-link.routes";
 import { proposalDraftingRouter } from "./routes/proposal-drafting.routes";
 import { jacketsRouter } from "./routes/jackets.routes";
-import { lienWaiversRouter } from "./routes/lien-waivers.routes";
+import { lienWaiverRouter as lienWaiversRouter } from "./lien-waiver-routes";
 import { createFolderTaxonomyService } from "./services/folder-taxonomy.service";
 import { createSamIngestService } from "./services/sam-ingest.service";
 import { createBidReadinessService } from "./services/bid-readiness.service";
