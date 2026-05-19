@@ -24,6 +24,7 @@ import {
   opportunities,
   jacketFolders,
   jacketDocuments,
+  samImportLog,
 } from "@shared/schema";
 import { randomUUID } from "crypto";
 
@@ -228,6 +229,34 @@ async function processInPool<T, R>(items: T[], n: number, fn: (item: T) => Promi
   return out;
 }
 
+
+async function recordImportLog(opts: {
+  tenantId: string;
+  bidProjectId: string;
+  opportunityId: string | null;
+  result: ImportResult;
+  triggeredBy: string;
+}): Promise<void> {
+  try {
+    await db.insert(samImportLog).values({
+      tenantId: opts.tenantId,
+      bidProjectId: opts.bidProjectId,
+      opportunityId: opts.opportunityId,
+      startedAt: new Date(),
+      finishedAt: new Date(),
+      filesAttempted: opts.result.filesAttempted,
+      filesImported: opts.result.filesImported,
+      filesSkippedDuplicate: opts.result.filesSkippedDuplicate,
+      bytesImported: opts.result.bytesImported,
+      ok: opts.result.ok,
+      errorsJson: opts.result.errors,
+      triggeredBy: opts.triggeredBy,
+    } as any);
+  } catch (e: any) {
+    console.warn("[sam-importer] failed to write import log:", e?.message);
+  }
+}
+
 /**
  * Main entry point. Imports every document for the bid project's underlying
  * SAM.gov opportunity into the jacket. Idempotent.
@@ -297,5 +326,12 @@ export async function importSamGovDocumentsForBidProject(bidProjectId: string): 
     }
   }
   out.ok = out.errors.length < allUrls.length;
+  await recordImportLog({
+    tenantId: project.tenantId,
+    bidProjectId,
+    opportunityId: project.opportunityId || null,
+    result: out,
+    triggeredBy: "api",
+  });
   return out;
 }

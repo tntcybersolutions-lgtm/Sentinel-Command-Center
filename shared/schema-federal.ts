@@ -179,3 +179,26 @@ export const subcontractingPlans = pgTable("subcontracting_plans", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
+
+// ============================================================================
+// 10. SAM.gov document import audit log
+// ============================================================================
+
+export const samImportLog = pgTable("sam_import_log", {
+  id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()`),
+  tenantId: varchar("tenant_id", { length: 36 }).notNull().references(() => tenants.id, { onDelete: "cascade" }),
+  bidProjectId: varchar("bid_project_id", { length: 36 }),
+  opportunityId: varchar("opportunity_id", { length: 36 }),
+  startedAt: timestamp("started_at").defaultNow().notNull(),
+  finishedAt: timestamp("finished_at"),
+  filesAttempted: integer("files_attempted").default(0),
+  filesImported: integer("files_imported").default(0),
+  filesSkippedDuplicate: integer("files_skipped_duplicate").default(0),
+  bytesImported: integer("bytes_imported").default(0),
+  ok: boolean("ok").default(false),
+  errorsJson: jsonb("errors_json"),
+  triggeredBy: text("triggered_by"),
+}, (table) => ({
+  tenantIdx: index("idx_sam_import_log_tenant").on(table.tenantId),
+  bidIdx: index("idx_sam_import_log_bid").on(table.bidProjectId),
+}));

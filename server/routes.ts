@@ -134,6 +134,8 @@ import { mobileAuthApiRouter } from "./routes/mobile-auth-api.routes";
 import { samDocImportRouter } from "./routes/sam-doc-import.routes";
 import { subRecommendationsRouter } from "./routes/sub-recommendations.routes";
 import { magicLinkRouter } from "./routes/magic-link.routes";
+import { proposalDraftingRouter } from "./routes/proposal-drafting.routes";
+import { jacketsRouter } from "./routes/jackets.routes";
 import { createFolderTaxonomyService } from "./services/folder-taxonomy.service";
 import { createSamIngestService } from "./services/sam-ingest.service";
 import { createBidReadinessService } from "./services/bid-readiness.service";
@@ -1397,6 +1399,8 @@ export async function registerRoutes(
   app.use("/api/sam-doc-import", samDocImportRouter);
   app.use("/api/sub-recommendations", subRecommendationsRouter);
   app.use("/api/auth/magic-link", magicLinkRouter);  // Sprint TK1 — mobile passwordless login
+  app.use("/api/proposal-drafting", proposalDraftingRouter);
+  app.use("/api/jackets", jacketsRouter);
   app.use("/api/herbie-command", herbieCommandRoutes);
 
   app.use("/api/herbie", herbieRouter);

@@ -186,7 +186,6 @@ app.use((req, res, next) => {
       try {
         const clientTemplate = path.resolve(
           process.cwd(),
-          "..",
           "client",
           "index.html",
         );
