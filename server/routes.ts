@@ -131,6 +131,9 @@ import { createO365Service } from "./integrations/o365/graph.client";
 import { herbieCommandRoutes } from "./routes/herbie-command.routes";
 import { herbieRouter } from "./routes/herbie";
 import { mobileAuthApiRouter } from "./routes/mobile-auth-api.routes";
+import { samDocImportRouter } from "./routes/sam-doc-import.routes";
+import { subRecommendationsRouter } from "./routes/sub-recommendations.routes";
+import { magicLinkRouter } from "./routes/magic-link.routes";
 import { createFolderTaxonomyService } from "./services/folder-taxonomy.service";
 import { createSamIngestService } from "./services/sam-ingest.service";
 import { createBidReadinessService } from "./services/bid-readiness.service";
@@ -1390,7 +1393,10 @@ export async function registerRoutes(
   registerObjectStorageRoutes(app);
 
   // Register HERBIE Command Dashboard routes
-  app.use("/api/auth", mobileAuthApiRouter);  // Sprint TK1 — mobile passwordless login
+  app.use("/api/auth", mobileAuthApiRouter);
+  app.use("/api/sam-doc-import", samDocImportRouter);
+  app.use("/api/sub-recommendations", subRecommendationsRouter);
+  app.use("/api/auth/magic-link", magicLinkRouter);  // Sprint TK1 — mobile passwordless login
   app.use("/api/herbie-command", herbieCommandRoutes);
 
   app.use("/api/herbie", herbieRouter);

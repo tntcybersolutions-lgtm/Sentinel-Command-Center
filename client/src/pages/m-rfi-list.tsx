@@ -19,6 +19,7 @@ import { usePullToRefresh } from "@/hooks/use-pull-to-refresh";
 import { useQueryClient } from "@tanstack/react-query";
 import { CardTiered } from "@/components/ui/card-tiered";
 import { StatusPill } from "@/components/ui/status-pill";
+import MobileTabBar from "@/components/mobile/m-tab-bar";
 
 interface Rfi {
   id: string;
@@ -220,6 +221,7 @@ export default function MobileRfiListPage() {
           );
         })}
       </main>
+    <MobileTabBar active="home" />
     </SafeArea>
   );
 }

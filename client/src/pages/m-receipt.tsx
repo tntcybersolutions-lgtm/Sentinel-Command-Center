@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useParams } from "wouter";
 import { apiFetch, subscribe } from "@/lib/offline-queue";
 import * as haptics from "@/lib/haptics";
+import MobileTabBar from "@/components/mobile/m-tab-bar";
 
 type Extraction = {
   vendor: string; total: number | null; currency: string;
@@ -133,6 +134,7 @@ export default function MobileReceiptPage() {
           </div>
         )}
       </section>
+      <MobileTabBar active="more" />
     </div>
   );
 }

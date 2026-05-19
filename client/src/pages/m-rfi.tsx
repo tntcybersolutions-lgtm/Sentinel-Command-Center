@@ -17,6 +17,7 @@ import { useProjectContext } from "@/nav/project-context";
 import { SafeArea } from "@/components/ui/safe-area";
 import { CardTiered } from "@/components/ui/card-tiered";
 import { VoiceMicButton } from "@/components/voice-mic-button";
+import MobileTabBar from "@/components/mobile/m-tab-bar";
 
 type Priority = "low" | "normal" | "high" | "urgent";
 
@@ -148,6 +149,7 @@ export default function MobileRfiPage() {
           </button>
         </div>
       </main>
+    <MobileTabBar active="home" />
     </SafeArea>
   );
 }

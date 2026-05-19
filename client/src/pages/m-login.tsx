@@ -21,6 +21,7 @@ import { useEffect, useState } from "react";
 import { useLocation } from "wouter";
 import { LogIn, AlertTriangle } from "lucide-react";
 import { SafeArea } from "@/components/ui/safe-area";
+import MobileTabBar from "@/components/mobile/m-tab-bar";
 
 const STORAGE_USER_ID = "sentinel-user-id";
 const STORAGE_USER_NAME = "sentinel-user-name";
@@ -145,6 +146,7 @@ export default function MobileLoginPage() {
           in a later sprint. Your session is stored on this device only.
         </p>
       </div>
+    <MobileTabBar active="home" />
     </SafeArea>
   );
 }
