@@ -11,6 +11,8 @@ import {
   herbieExtractionEvidence,
   documentAlerts,
   BID_JACKET_FOLDERS,
+  companyProfile,
+  bidHistory,
 } from "@shared/schema";
 import { eq, and, sql, desc, inArray, asc } from "drizzle-orm";
 import { randomUUID } from "crypto";
@@ -155,6 +157,69 @@ export class BidReadinessService {
         eq(bidAddenda.acknowledged, true)
       ));
 
+    const isNonEmptyObject = (val: unknown): boolean => {
+      if (val === null || val === undefined) return false;
+      if (Array.isArray(val)) return val.length > 0;
+      return typeof val === "object" && Object.keys(val).length > 0;
+    };
+
+    const profileRows = await db.select({
+      insuranceLimits: companyProfile.insuranceLimits,
+      bondingCapacity: companyProfile.bondingCapacity,
+      certifications: companyProfile.certifications,
+    })
+      .from(companyProfile)
+      .where(eq(companyProfile.tenantId, this.tenantId))
+      .limit(1);
+
+    const profile = profileRows[0] ?? null;
+
+    const hasProfileInsurance = isNonEmptyObject(profile?.insuranceLimits);
+    const hasProfileBonding = isNonEmptyObject(profile?.bondingCapacity);
+    const hasProfileCertifications = profile?.certifications != null && profile.certifications !== false;
+
+    const winRows = await db.select({ id: bidHistory.id })
+      .from(bidHistory)
+      .where(and(
+        eq(bidHistory.tenantId, this.tenantId),
+        eq(bidHistory.outcome, "win")
+      ))
+      .limit(1);
+
+    const hasWinHistory = winRows.length > 0;
+
+    const insuranceCertPresent = insuranceDocs > 0 || hasProfileInsurance;
+    const coverageVerifiedPresent = hasInsuranceEvidence || hasProfileInsurance;
+    let insuranceScore: number;
+    if (hasProfileInsurance) {
+      insuranceScore = 100;
+    } else {
+      insuranceScore = insuranceDocs > 0 && hasInsuranceEvidence ? 100 : (insuranceDocs > 0 ? 50 : 0);
+    }
+
+    const bondingCapacityPresent = hasBondingEvidence || hasProfileBonding;
+    let bondingScore: number;
+    if (hasProfileBonding && !hasBondingEvidence) {
+      bondingScore = 50;
+    } else if (hasBondingEvidence) {
+      bondingScore = 100;
+    } else {
+      bondingScore = 0;
+    }
+
+    const repsCertsPresent = formsDocs >= 2 || hasProfileCertifications;
+    let formsScore: number;
+    if (formsDocs > 0) {
+      formsScore = bidFormExists ? 100 : 75;
+    } else if (hasProfileCertifications) {
+      formsScore = Math.min(100, 33);
+    } else {
+      formsScore = 0;
+    }
+
+    const pastPerfPresent = pastPerfDocs > 0 || hasWinHistory;
+    const pastPerfScore = pastPerfPresent ? 100 : 0;
+
     return {
       solicitation: {
         score: solicitationDocs > 0 ? 100 : 0,
@@ -165,28 +230,28 @@ export class BidReadinessService {
         ],
       },
       forms: {
-        score: formsDocs > 0 ? (bidFormExists ? 100 : 75) : 0,
+        score: formsScore,
         weight: this.WEIGHTS.forms,
         items: [
           { name: "Required Forms", present: formsDocs > 0, required: true },
           { name: "Bid Form Created", present: bidFormExists, required: true },
-          { name: "Reps & Certs", present: formsDocs >= 2, required: true },
+          { name: "Reps & Certs", present: repsCertsPresent, required: true },
         ],
       },
       insurance: {
-        score: insuranceDocs > 0 && hasInsuranceEvidence ? 100 : (insuranceDocs > 0 ? 50 : 0),
+        score: insuranceScore,
         weight: this.WEIGHTS.insurance,
         items: [
-          { name: "Insurance Certificate", present: insuranceDocs > 0, required: true },
-          { name: "Coverage Verified", present: hasInsuranceEvidence, required: true },
+          { name: "Insurance Certificate", present: insuranceCertPresent, required: true },
+          { name: "Coverage Verified", present: coverageVerifiedPresent, required: true },
         ],
       },
       bonding: {
-        score: hasBondingEvidence ? 100 : 0,
+        score: bondingScore,
         weight: this.WEIGHTS.bonding,
         items: [
           { name: "Bid Bond", present: hasBondingEvidence, required: true },
-          { name: "Bonding Capacity Verified", present: hasBondingEvidence, required: true },
+          { name: "Bonding Capacity Verified", present: bondingCapacityPresent, required: true },
         ],
       },
       pricing: {
@@ -205,10 +270,10 @@ export class BidReadinessService {
         ],
       },
       pastPerformance: {
-        score: pastPerfDocs > 0 ? 100 : 0,
+        score: pastPerfScore,
         weight: this.WEIGHTS.pastPerformance,
         items: [
-          { name: "Past Performance References", present: pastPerfDocs > 0, required: true },
+          { name: "Past Performance References", present: pastPerfPresent, required: true },
         ],
       },
       subQuotes: {
