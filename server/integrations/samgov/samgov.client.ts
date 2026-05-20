@@ -527,7 +527,7 @@ export class SamGovIngestionService {
       externalId: opp.noticeId,
       contentHash,
       rawJson,
-      parserVersion: "1.0",
+      parserVersion: "1.1",
       runId,
     });
 
@@ -571,6 +571,10 @@ export class SamGovIngestionService {
       }
     }
 
+    // 2026-05-20 field-name fix: map to the drizzle field names that actually
+    // exist in shared/schema.ts:opportunities. Previously this used names like
+    // agencyName/responseDueAt/setAsideCode/locationCity that drizzle silently
+    // dropped, so ingested rows had NULL for everything except title/postedAt.
     const normalizedData = {
       tenantId: this.tenantId,
       sourceSystemId: this.sourceSystemId,
@@ -578,26 +582,28 @@ export class SamGovIngestionService {
       buyerId,
       title: opp.title,
       synopsis: opp.description || null,
+      description: opp.description || null,
       url: opp.uiLink || null,
-      solicitationNumber: opp.solicitationNumber || null,
-      noticeType: opp.type || null,
+      solicitationType: opp.type || null,
       status: "open",
       postedAt: opp.postedDate ? new Date(opp.postedDate) : null,
-      responseDueAt: opp.responseDeadLine ? new Date(opp.responseDeadLine) : null,
-      archiveDate: opp.archiveDate ? new Date(opp.archiveDate) : null,
-      setAsideCode: opp.typeOfSetAside || null,
-      setAsideDescription: opp.typeOfSetAsideDescription || null,
-      naicsCodes:
-        opp.naicsCodes || (opp.naicsCode ? [opp.naicsCode] : []),
-      classificationCode: opp.classificationCode || null,
-      locationCity: opp.placeOfPerformance?.city?.name || null,
-      locationState: opp.placeOfPerformance?.state?.code || null,
-      locationCountry: opp.placeOfPerformance?.country?.code || "USA",
-      agencyName: opp.fullParentPathName || null,
-      officeName: opp.office?.name || null,
-      primaryContactName: opp.pointOfContact?.[0]?.name || null,
-      primaryContactEmail: opp.pointOfContact?.[0]?.email || null,
-      primaryContactPhone: opp.pointOfContact?.[0]?.phone || null,
+      dueAt: opp.responseDeadLine ? new Date(opp.responseDeadLine) : null,
+      setAside: opp.typeOfSetAside || null,
+      setAsideCategory: opp.typeOfSetAsideDescription || null,
+      naicsCode: opp.naicsCode || (opp.naicsCodes?.[0] ?? null),
+      naicsCodes: opp.naicsCodes || (opp.naicsCode ? [opp.naicsCode] : []),
+      agency: opp.fullParentPathName || null,
+      placeOfPerformanceState: opp.placeOfPerformance?.state?.code || null,
+      locationJson: {
+        city: opp.placeOfPerformance?.city?.name || null,
+        state: opp.placeOfPerformance?.state?.code || null,
+        country: opp.placeOfPerformance?.country?.code || "USA",
+        office: opp.office?.name || null,
+        contact: opp.pointOfContact?.[0] || null,
+        solicitationNumber: opp.solicitationNumber || null,
+        archiveDate: opp.archiveDate || null,
+        classificationCode: opp.classificationCode || null,
+      },
       lastSeenAt: new Date(),
     };
 
