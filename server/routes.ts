@@ -1900,6 +1900,29 @@ export async function registerRoutes(
     }
   });
 
+  app.post("/api/admin/autosatisfy-all", async (req: Request, res: Response) => {
+    try {
+      const { autoSatisfyArtifactsFromCompanyProfile } = await import("./services/bid-jacket-artifacts.service");
+      const { bidProjects } = await import("@shared/schema");
+      const { db: ddb } = await import("./db");
+      const all = await ddb.select().from(bidProjects);
+      const results: any[] = [];
+      for (const bp of all) {
+        try {
+          const r = await autoSatisfyArtifactsFromCompanyProfile(bp.tenantId, bp.id);
+          results.push({ bidProjectId: bp.id, tenantId: bp.tenantId, satisfied: r.satisfied });
+        } catch (e: any) {
+          results.push({ bidProjectId: bp.id, tenantId: bp.tenantId, error: e?.message || String(e) });
+        }
+      }
+      const totalSatisfied = results.reduce((a, r) => a + (r.satisfied?.length || 0), 0);
+      return res.json({ ok: true, projects: results.length, totalSatisfied, results });
+    } catch (e: any) {
+      console.error("[admin/autosatisfy-all] FAILED:", e);
+      return res.status(500).json({ error: e?.message || String(e) });
+    }
+  });
+
   app.post("/api/admin/metrics/snapshot", async (req: Request, res: Response) => {
     try {
       const { writeAllSnapshotsForAllTenants } = await import("./services/metric-snapshot.service");
