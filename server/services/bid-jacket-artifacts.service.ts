@@ -7,6 +7,79 @@ import {
 } from "@shared/schema";
 import { eq, and, sql } from "drizzle-orm";
 
+// Auto-satisfy company-level artifacts from company_profile.
+// Insurance/Bonding/Reps&Certs are company-wide and don't belong in a per-bid
+// "missing items" warning if the company has them on file.
+export async function autoSatisfyArtifactsFromCompanyProfile(
+  tenantId: string,
+  bidProjectId: string,
+): Promise<{ satisfied: string[]; checked: number }> {
+  const { companyProfile, bidHistory } = await import("@shared/schema");
+  const [profile] = await db
+    .select()
+    .from(companyProfile)
+    .where(eq(companyProfile.tenantId, tenantId))
+    .limit(1);
+
+  const satisfied: string[] = [];
+  if (!profile) {
+    console.log(`[auto-satisfy] no company profile for tenant ${tenantId}`);
+    return { satisfied, checked: 0 };
+  }
+
+  // Map company-profile fields to artifact template_codes that should auto-satisfy
+  const mappings: Array<{ field: keyof typeof profile; codes: string[]; label: string }> = [
+    { field: "insuranceLimits",  codes: ["INSURANCE_CERTS"],                    label: "insurance" },
+    { field: "bondingCapacity",  codes: ["BONDING_LETTER"],                     label: "bonding" },
+    { field: "certifications",   codes: ["REPS_CERTS", "COMPANY_CERTS", "SF1408"], label: "reps&certs" },
+    { field: "pastPerformanceHighlights", codes: ["PAST_PERF", "PAST_PERFORMANCE", "PAST_PERF_REFS"], label: "past-perf" },
+  ];
+
+  for (const m of mappings) {
+    const val = (profile as any)[m.field];
+    if (!val || (Array.isArray(val) && val.length === 0) || (typeof val === "object" && Object.keys(val).length === 0)) continue;
+    for (const code of m.codes) {
+      const updated = await db
+        .update(bidJacketArtifacts)
+        .set({
+          status: "ready",
+          updatedAt: new Date(),
+          metadataJson: { autoSatisfied: true, source: "company_profile", field: m.field },
+        })
+        .where(
+          and(
+            eq(bidJacketArtifacts.bidProjectId, bidProjectId),
+            eq(bidJacketArtifacts.templateCode, code),
+          ),
+        )
+        .returning({ id: bidJacketArtifacts.id });
+      if (updated.length > 0) satisfied.push(`${m.label}(${code})x${updated.length}`);
+    }
+  }
+
+  // Past performance fallback: if bid_history has any wins, satisfy past-perf codes
+  if (!satisfied.some((x) => x.startsWith("past-perf"))) {
+    const winCount = await db
+      .select({ id: bidHistory.id })
+      .from(bidHistory)
+      .where(and(eq(bidHistory.tenantId, tenantId), eq(bidHistory.outcome, "win")))
+      .limit(1);
+    if (winCount.length > 0) {
+      for (const code of ["PAST_PERF", "PAST_PERFORMANCE", "PAST_PERF_REFS"]) {
+        const updated = await db
+          .update(bidJacketArtifacts)
+          .set({ status: "ready", updatedAt: new Date(), metadataJson: { autoSatisfied: true, source: "bid_history" } })
+          .where(and(eq(bidJacketArtifacts.bidProjectId, bidProjectId), eq(bidJacketArtifacts.templateCode, code)))
+          .returning({ id: bidJacketArtifacts.id });
+        if (updated.length > 0) satisfied.push(`past-perf-history(${code})x${updated.length}`);
+      }
+    }
+  }
+
+  console.log(`[auto-satisfy] bid=${bidProjectId} satisfied: ${satisfied.join(", ") || "(none)"}`);
+  return { satisfied, checked: mappings.length };
+}
+
 export async function seedArtifactsForBidProject(
   tenantId: string,
   bidProjectId: string

@@ -2734,6 +2734,14 @@ export async function registerRoutes(
             const seededCount = await ingestSamAttachments(tenantId, created.bidProjectId, resourceLinks, descriptionUrl);
             console.log(`[pursue] ingestSamAttachments seeded ${seededCount} for ${created.bidProjectId}`);
           }
+          // Auto-satisfy company-level artifacts (insurance, bonding, certs, past-perf)
+          try {
+            const { autoSatisfyArtifactsFromCompanyProfile } = await import("./services/bid-jacket-artifacts.service");
+            const auto = await autoSatisfyArtifactsFromCompanyProfile(tenantId, created.bidProjectId);
+            console.log(`[pursue] auto-satisfied ${auto.satisfied.length} from company profile`);
+          } catch (e: any) {
+            console.error(`[pursue] auto-satisfy failed:`, e?.message);
+          }
         }
       } catch (e: any) {
         console.error(`[pursue] ingestSamAttachments failed for ${created.bidProjectId}:`, e?.message);
