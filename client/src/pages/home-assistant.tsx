@@ -46,6 +46,7 @@ import {
   Calendar as CalendarIcon,
   Bot,
   AlertTriangle,
+  Briefcase,
 } from "lucide-react";
 import type { NavCounts } from "@/nav/navConfig";
 import { StatusPill } from "@/components/ui/status-pill";
@@ -270,6 +271,149 @@ interface HerbieBriefData {
 
 interface DigestTotals { critical: number; high: number; medium: number; low: number; }
 interface TinyDigest { totals: DigestTotals; }
+
+// ── Bid Opportunities Hero (TOP-OF-FOLD for GCs) ────────────────────────────
+// Calls /api/opportunities. Shows total count + Top 5 most urgent (sorted by
+// due date asc, red <7d). Front and center so a GC opening /home immediately
+// sees what SAM.gov surfaced overnight. Click any row to open the bid jacket.
+
+interface OppRow {
+  id: string;
+  title: string;
+  agency?: string | null;
+  setAside?: string | null;
+  status?: string | null;
+  dueAt?: string | null;
+  postedAt?: string | null;
+  value?: number | null;
+  score?: number | null;
+}
+
+function BidOpportunitiesHero() {
+  const [, setLocation] = useLocation();
+  const { data, isLoading } = useQuery<OppRow[]>({
+    queryKey: ["/api/opportunities"],
+    queryFn: async () => {
+      try {
+        const res = await fetch("/api/opportunities");
+        if (!res.ok) return [];
+        const j = await res.json();
+        return Array.isArray(j) ? j : (j?.opportunities ?? []);
+      } catch {
+        return [];
+      }
+    },
+    staleTime: 60_000,
+  });
+
+  const ops: OppRow[] = data ?? [];
+  const now = Date.now();
+  const dueDays = (s?: string | null) => {
+    if (!s) return null;
+    const ms = new Date(s).getTime() - now;
+    return Math.ceil(ms / 86400000);
+  };
+  const total = ops.length;
+  const needsTriage = ops.filter(o => !o.status || ["", "open", "undecided"].includes(String(o.status).toLowerCase())).length;
+  const dueThisWeek = ops.filter(o => {
+    const d = dueDays(o.dueAt);
+    return d != null && d >= 0 && d <= 7;
+  }).length;
+  const topFit = ops.reduce<number>((m, o) => Math.max(m, Number(o.score ?? 0)), 0);
+  const urgent = [...ops]
+    .filter(o => o.dueAt && (dueDays(o.dueAt) ?? -1) >= 0)
+    .sort((a, b) => new Date(a.dueAt!).getTime() - new Date(b.dueAt!).getTime())
+    .slice(0, 5);
+
+  const kpis = [
+    { label: "Active Opps",      value: total,        accent: "text-sky-300",     bg: "bg-sky-500/10",     border: "border-sky-500/40" },
+    { label: "Need Triage",      value: needsTriage,  accent: "text-amber-300",   bg: "bg-amber-500/10",   border: "border-amber-500/40" },
+    { label: "Due This Week",    value: dueThisWeek,  accent: "text-red-300",     bg: "bg-red-500/10",     border: "border-red-500/40" },
+    { label: "Top Fit",          value: topFit || "--", accent: "text-emerald-300", bg: "bg-emerald-500/10", border: "border-emerald-500/40" },
+  ];
+
+  return (
+    <div
+      className="rounded-lg border-2 border-sky-500/40 bg-gradient-to-br from-sky-950/40 via-indigo-950/30 to-violet-950/30 p-5 space-y-4 shadow-lg shadow-sky-900/20"
+      data-testid="bid-opportunities-hero"
+    >
+      <div className="flex items-center justify-between">
+        <h2 className="text-xl font-semibold flex items-center gap-2">
+          <Briefcase className="h-6 w-6 text-sky-400" />
+          Bid Opportunities
+          <span className="text-xs font-normal text-zinc-400 ml-1">live from SAM.gov</span>
+        </h2>
+        <button
+          onClick={() => setLocation("/capture/opportunities")}
+          className="text-sm text-sky-300 hover:text-white flex items-center gap-1 transition-colors px-3 py-1.5 rounded border border-sky-500/30 hover:border-sky-400 hover:bg-sky-500/10"
+          data-testid="link-open-pipeline"
+        >
+          Open Pipeline <ChevronRight className="h-4 w-4" />
+        </button>
+      </div>
+
+      {/* KPI strip */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3" data-testid="bid-opps-kpis">
+        {kpis.map(k => (
+          <div
+            key={k.label}
+            className={`rounded border ${k.border} ${k.bg} p-3`}
+            data-testid={`bid-opps-kpi-${k.label.toLowerCase().replace(/\s+/g, "-")}`}
+          >
+            <div className="text-[10px] uppercase tracking-wider text-zinc-400 mb-1">{k.label}</div>
+            <div className={`text-3xl font-mono font-bold ${k.accent}`}>
+              {isLoading ? "--" : k.value}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Urgent list */}
+      <div className="space-y-1" data-testid="bid-opps-urgent-list">
+        {isLoading && (
+          <div className="text-sm text-zinc-500 px-3 py-4">Loading opportunities…</div>
+        )}
+        {!isLoading && urgent.length === 0 && (
+          <div className="text-sm text-zinc-500 px-3 py-4">
+            No opportunities with upcoming deadlines.{" "}
+            <button onClick={() => setLocation("/capture/opportunities")} className="text-sky-300 hover:underline">
+              Browse all {total} opportunities →
+            </button>
+          </div>
+        )}
+        {!isLoading && urgent.map(o => {
+          const d = dueDays(o.dueAt);
+          const dueClass = d != null && d <= 7 ? "text-red-300 font-semibold" : "text-zinc-300";
+          return (
+            <button
+              key={o.id}
+              onClick={() => setLocation(`/capture/opportunity/${o.id}`)}
+              className="w-full text-left px-3 py-2.5 hover:bg-white/5 rounded transition-colors flex items-center gap-3 border border-transparent hover:border-white/10"
+              data-testid={`bid-opp-row-${o.id}`}
+            >
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-medium truncate text-white">{o.title || "(no title)"}</div>
+                <div className="text-xs text-zinc-500 truncate mt-0.5">
+                  {o.agency || "Unknown agency"}
+                  {o.value ? ` · ${formatCurrency(o.value, true)}` : ""}
+                </div>
+              </div>
+              {o.setAside && (
+                <span className="text-[10px] px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 font-medium uppercase tracking-wider whitespace-nowrap">
+                  {o.setAside}
+                </span>
+              )}
+              <div className={`text-sm font-mono ${dueClass} whitespace-nowrap min-w-[60px] text-right`}>
+                {d == null ? "--" : d < 0 ? "overdue" : d === 0 ? "today" : `${d}d`}
+              </div>
+              <ChevronRight className="h-4 w-4 text-zinc-600" />
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 function HerbieBriefBanner() {
   // First try the brief endpoint
@@ -597,6 +741,9 @@ export default function HomeAssistant() {
           {formatDate()}
         </span>
       </div>
+
+      {/* Bid Opportunities (top-of-fold for GCs) */}
+      <BidOpportunitiesHero />
 
       {/* Herbie's one-line brief */}
       <HerbieBriefBanner />
