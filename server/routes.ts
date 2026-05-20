@@ -2183,7 +2183,7 @@ export async function registerRoutes(
       const formatted = opportunities.slice(0, 5).map((opp) => ({
         id: opp.id,
         title: opp.title,
-        agency: opp.setAside || null,
+        agency: opp.agency || null,
         dueAt: opp.dueAt?.toISOString() || null,
         score: null,
         status: opp.status,
@@ -2492,7 +2492,7 @@ export async function registerRoutes(
         return {
           id: opp.id,
           title: opp.title,
-          agency: opp.setAside || null,
+          agency: opp.agency || null,
           synopsis: opp.synopsis || opp.description || "",
           naicsCodes: opp.naicsCodes || [],
           setAside: opp.setAside,
