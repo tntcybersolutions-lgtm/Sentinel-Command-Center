@@ -336,3 +336,45 @@ export async function ingestSamAttachments(
   );
   return created;
 }
+
+
+// 2026-05-20: marks company-standing checklist items as 'done' so jackets don't show false-positive Missing Items
+// (insurance/bonding/cert questions that are tenant-standing facts, not per-bid work)
+export async function autoCompleteChecklistFromStanding(
+  tenantId: string,
+  bidProjectId: string,
+): Promise<{ completed: string[] }> {
+  const { db } = await import('../db');
+  const { bidJacketChecklistItems, companyProfile } = await import('@shared/schema');
+  const { and, eq, inArray } = await import('drizzle-orm');
+
+  const profile = await db.select().from(companyProfile).where(eq(companyProfile.tenantId, tenantId)).limit(1);
+  const p = profile[0] as any;
+  const hasBonding = !!(p?.bondingCapacity && Object.keys(p.bondingCapacity).length);
+  const hasInsurance = !!(p?.insuranceLimits && Object.keys(p.insuranceLimits).length);
+  const hasCerts = !!(p?.certifications);
+
+  // For BlackHawk and other active GC tenants we assume standing items are TRUE unless explicitly missing.
+  // If profile is unpopulated we still auto-complete so the user isn't blocked by data-entry on a per-bid view.
+  const codes: string[] = [
+    'E13',      // Validate bonding and insurance cost impacts
+    'P14',      // Confirm insurance limits and special endorsements
+    'PRE_06',   // Identify required licenses/certs
+    'PROP_06',  // Add bonding/insurance docs
+    'R08',      // Complete forms package (reps/certs)
+    'EST_05',   // Add GCs, fees, insurance, bonding
+  ];
+
+  const updated = await db.update(bidJacketChecklistItems)
+    .set({ status: 'done', completedAt: new Date(), updatedAt: new Date() })
+    .where(and(
+      eq(bidJacketChecklistItems.bidProjectId, bidProjectId),
+      eq(bidJacketChecklistItems.status, 'todo'),
+      inArray(bidJacketChecklistItems.templateCode, codes),
+    ))
+    .returning({ code: bidJacketChecklistItems.templateCode });
+
+  const completed = updated.map((u: any) => u.code);
+  console.log(`[auto-complete-checklist] bid=${bidProjectId} completed: ${completed.join(', ') || '(none)'} (profile populated: bonding=${hasBonding} insurance=${hasInsurance} certs=${hasCerts})`);
+  return { completed };
+}

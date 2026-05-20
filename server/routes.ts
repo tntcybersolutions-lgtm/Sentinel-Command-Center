@@ -1910,13 +1910,16 @@ export async function registerRoutes(
       for (const bp of all) {
         try {
           const r = await autoSatisfyArtifactsFromCompanyProfile(bp.tenantId, bp.id);
-          results.push({ bidProjectId: bp.id, tenantId: bp.tenantId, satisfied: r.satisfied });
+          const { autoCompleteChecklistFromStanding } = await import("./services/bid-jacket-artifacts.service");
+          const r2 = await autoCompleteChecklistFromStanding(bp.tenantId, bp.id);
+          results.push({ bidProjectId: bp.id, tenantId: bp.tenantId, satisfied: r.satisfied, completedChecklist: r2.completed });
         } catch (e: any) {
           results.push({ bidProjectId: bp.id, tenantId: bp.tenantId, error: e?.message || String(e) });
         }
       }
       const totalSatisfied = results.reduce((a, r) => a + (r.satisfied?.length || 0), 0);
-      return res.json({ ok: true, projects: results.length, totalSatisfied, results });
+      const totalChecklistCompleted = results.reduce((a, r) => a + (r.completedChecklist?.length || 0), 0);
+      return res.json({ ok: true, projects: results.length, totalSatisfied, totalChecklistCompleted, results });
     } catch (e: any) {
       console.error("[admin/autosatisfy-all] FAILED:", e);
       return res.status(500).json({ error: e?.message || String(e) });
@@ -2761,6 +2764,9 @@ export async function registerRoutes(
           try {
             const { autoSatisfyArtifactsFromCompanyProfile } = await import("./services/bid-jacket-artifacts.service");
             const auto = await autoSatisfyArtifactsFromCompanyProfile(tenantId, created.bidProjectId);
+        const { autoCompleteChecklistFromStanding } = await import("./services/bid-jacket-artifacts.service");
+        const cl = await autoCompleteChecklistFromStanding(tenantId, created.bidProjectId);
+        console.log(`[pursue] auto-completed ${cl.completed.length} checklist items`);
             console.log(`[pursue] auto-satisfied ${auto.satisfied.length} from company profile`);
           } catch (e: any) {
             console.error(`[pursue] auto-satisfy failed:`, e?.message);
