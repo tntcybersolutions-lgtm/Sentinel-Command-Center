@@ -4,6 +4,8 @@ import App from "./App";
 import "./index.css";
 import { initTheme } from "./lib/theme";
 
+console.log("[CLIENT_DEPLOY_MARKER] LIENWAIVERS_v2 " + new Date().toISOString());
+
 // Boot diagnostics
 declare global {
   interface Window {
