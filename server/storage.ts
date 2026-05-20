@@ -291,7 +291,31 @@ export class DatabaseStorage implements IStorage {
 
   async createTenant(tenant: InsertTenant): Promise<Tenant> {
     const [created] = await db.insert(tenants).values(tenant).returning();
+    await this.seedDefaultCompanyProfile(created);
     return created;
+  }
+
+  private async seedDefaultCompanyProfile(tenant: Tenant): Promise<void> {
+    try {
+      const existing = await db.select({ id: companyProfile.id })
+        .from(companyProfile)
+        .where(eq(companyProfile.tenantId, tenant.id))
+        .limit(1);
+      if (existing.length > 0) return;
+
+      await db.insert(companyProfile).values({
+        tenantId: tenant.id,
+        legalName: tenant.legalName,
+        dbaName: tenant.dbaName ?? null,
+        certifications: [
+          { type: "general", name: "General Contractor License", number: "PENDING" },
+        ],
+        bondingCapacity: { single: 1000000, aggregate: 3000000, carrier: "Not set" },
+        insuranceLimits: { general: 1000000, auto: 1000000, workers: 500000, umbrella: 0 },
+      } as InsertCompanyProfile).onConflictDoNothing();
+    } catch (error) {
+      console.error("[seedDefaultCompanyProfile] Failed to seed profile for tenant", tenant.id, error);
+    }
   }
 
   // Opportunities
