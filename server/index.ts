@@ -1,4 +1,5 @@
-// Build marker: 2026-05-12T00:56:18Z (added to force fresh esbuild output)
+// Build marker: 2026-05-20T02:36:08Z (bump to force fresh esbuild + vite output)
+// Runtime marker: DEPLOY_SENTINEL_LIENWAIVERS_FIX active
 import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
@@ -20,6 +21,8 @@ import { registerSprint6Routes } from "./sprint6-routes";
 import { registerSprint7Routes } from "./sprint7-routes";
 import punchItemsRouter from "./routes/punch-items.routes";
 import dailyLogsRouter from "./routes/daily-logs.routes";
+
+console.log("[STARTUP] DEPLOY_SENTINEL_LIENWAIVERS_FIX active — " + new Date().toISOString());
 validateBidJacketTaxonomy();
 
 const app = express();
