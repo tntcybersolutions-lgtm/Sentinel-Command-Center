@@ -272,6 +272,54 @@ interface HerbieBriefData {
 interface DigestTotals { critical: number; high: number; medium: number; low: number; }
 interface TinyDigest { totals: DigestTotals; }
 
+// Pursue button: POSTs /api/opportunities/:id/pursue and redirects to the
+// bid jacket. Shows inline state while creating.
+function PursueButton({ oppId }: { oppId: string }) {
+  const [, setLocation] = useLocation();
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const handleClick = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (busy) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const res = await fetch(`/api/opportunities/${oppId}/pursue`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      const j = await res.json();
+      if (!res.ok || !j.bidProjectId) {
+        setErr(j.error || "failed");
+        setBusy(false);
+        return;
+      }
+      setLocation(`/capture/pursuits/${j.bidProjectId}`);
+    } catch (e: any) {
+      setErr(e?.message || "network error");
+      setBusy(false);
+    }
+  };
+
+  return (
+    <button
+      onClick={handleClick}
+      disabled={busy}
+      className={`text-xs px-3 py-1.5 rounded font-medium whitespace-nowrap transition-colors ${
+        busy
+          ? "bg-zinc-700 text-zinc-400 cursor-wait"
+          : "bg-emerald-500 text-emerald-950 hover:bg-emerald-400"
+      }`}
+      data-testid={`btn-pursue-${oppId}`}
+      title={err ? `Error: ${err}` : "Create a bid jacket for this opportunity"}
+    >
+      {busy ? "Creating…" : "Pursue"}
+    </button>
+  );
+}
+
 // ── Bid Opportunities Hero (TOP-OF-FOLD for GCs) ────────────────────────────
 // Calls /api/opportunities. Shows total count + Top 5 most urgent (sorted by
 // due date asc, red <7d). Front and center so a GC opening /home immediately
@@ -385,19 +433,22 @@ function BidOpportunitiesHero() {
           const d = dueDays(o.dueAt);
           const dueClass = d != null && d <= 7 ? "text-red-300 font-semibold" : "text-zinc-300";
           return (
-            <button
+            <div
               key={o.id}
-              onClick={() => setLocation(`/capture/opportunity/${o.id}`)}
-              className="w-full text-left px-3 py-2.5 hover:bg-white/5 rounded transition-colors flex items-center gap-3 border border-transparent hover:border-white/10"
+              className="w-full px-3 py-2.5 hover:bg-white/5 rounded transition-colors flex items-center gap-3 border border-transparent hover:border-white/10"
               data-testid={`bid-opp-row-${o.id}`}
             >
-              <div className="flex-1 min-w-0">
+              <button
+                onClick={() => setLocation(`/capture/opportunity/${o.id}`)}
+                className="flex-1 min-w-0 text-left"
+                data-testid={`bid-opp-row-open-${o.id}`}
+              >
                 <div className="text-sm font-medium truncate text-white">{o.title || "(no title)"}</div>
                 <div className="text-xs text-zinc-500 truncate mt-0.5">
                   {o.agency || "Unknown agency"}
                   {o.value ? ` · ${formatCurrency(o.value, true)}` : ""}
                 </div>
-              </div>
+              </button>
               {o.setAside && (
                 <span className="text-[10px] px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 font-medium uppercase tracking-wider whitespace-nowrap">
                   {o.setAside}
@@ -406,8 +457,8 @@ function BidOpportunitiesHero() {
               <div className={`text-sm font-mono ${dueClass} whitespace-nowrap min-w-[60px] text-right`}>
                 {d == null ? "--" : d < 0 ? "overdue" : d === 0 ? "today" : `${d}d`}
               </div>
-              <ChevronRight className="h-4 w-4 text-zinc-600" />
-            </button>
+              <PursueButton oppId={o.id} />
+            </div>
           );
         })}
       </div>

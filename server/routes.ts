@@ -2671,6 +2671,47 @@ export async function registerRoutes(
     }
   });
 
+    // POST /api/opportunities/:id/pursue
+  // One-click 'Pursue Bid' from the dashboard. Creates a bid_project for this
+  // opportunity (if none exists yet) and kicks off attachment filing in the
+  // background. Returns the bidProjectId so the UI can redirect to the jacket.
+  app.post("/api/opportunities/:id/pursue", async (req: Request, res: Response) => {
+    try {
+      const oppId = String(req.params.id);
+      const tenantId = String(req.body?.tenantId || DEFAULT_TENANT_ID);
+      const { productionAutoCreateDeps } = await import("./services/samgov-auto-create.service");
+
+      // If a bid_project already exists for this opp, return it (idempotent)
+      const exists = await productionAutoCreateDeps.bidProjectExistsForOpp(tenantId, oppId);
+      if (exists) {
+        const { bidProjects } = await import("@shared/schema");
+        const { db } = await import("./db");
+        const { and, eq } = await import("drizzle-orm");
+        const [row] = await db
+          .select({ id: bidProjects.id })
+          .from(bidProjects)
+          .where(and(eq(bidProjects.tenantId, tenantId), eq(bidProjects.opportunityId, oppId)))
+          .limit(1);
+        return res.json({ ok: true, bidProjectId: row?.id, alreadyExisted: true });
+      }
+
+      // Create the jacket (DB row + folder structure + checklist + artifact stubs)
+      const created = await productionAutoCreateDeps.createJacketForOpp(tenantId, oppId);
+      console.log(`[pursue] created bid_project ${created.bidProjectId} for opp ${oppId}`);
+
+      // Fire-and-forget the attachment filing. Files land in the jacket as they
+      // arrive; the UI refreshes them automatically.
+      productionAutoCreateDeps.fileArtifacts(tenantId, created.bidProjectId)
+        .then(r => console.log(`[pursue] filed ${r.filed} / failed ${r.failed} for ${created.bidProjectId}`))
+        .catch(e => console.error(`[pursue] file error for ${created.bidProjectId}:`, e?.message));
+
+      return res.json({ ok: true, bidProjectId: created.bidProjectId, alreadyExisted: false });
+    } catch (e: any) {
+      console.error(`[pursue] FAILED for opp ${req.params.id}:`, e);
+      return res.status(500).json({ error: e?.message || String(e) });
+    }
+  });
+
   app.post("/api/opportunities", async (req: Request, res: Response) => {
     try {
       const validated = insertOpportunitySchema.safeParse({
