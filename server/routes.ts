@@ -1855,6 +1855,51 @@ export async function registerRoutes(
     }
   });
 
+    // POST /api/admin/run-samgov-ingest
+  // Manual trigger for SAM.gov ingestion. Auth: X-Trigger-Token header must
+  // match first 16 chars of SAM_GOV_API_KEY (a known-secret already deployed).
+  // Runs: ingest → auto-create → herbie autonomous cycle.
+  app.post("/api/admin/run-samgov-ingest", async (req: Request, res: Response) => {
+    try {
+      const apiKey = process.env.SAM_GOV_API_KEY || "";
+      const expected = apiKey.slice(0, 16);
+      const provided = String(req.header("x-trigger-token") || "");
+      if (!expected || provided !== expected) {
+        return res.status(401).json({ error: "unauthorized" });
+      }
+      const tenantId = String(req.body?.tenantId || "blackhawk-default");
+      console.log(`[admin/run-samgov-ingest] starting for tenant=${tenantId}`);
+      const { createSamGovIngestionService } = await import("./integrations/samgov/samgov.client");
+      const svc = await createSamGovIngestionService(tenantId);
+      if (!svc) return res.status(500).json({ error: "SAM_GOV_API_KEY not configured" });
+      const ingest = await svc.runIngestion();
+      console.log(`[admin/run-samgov-ingest] ingest done:`, ingest);
+      let autoCreate: any = null;
+      try {
+        const { runAutoCreate, productionAutoCreateDeps } = await import("./services/samgov-auto-create.service");
+        autoCreate = await runAutoCreate(tenantId, productionAutoCreateDeps);
+        console.log(`[admin/run-samgov-ingest] autoCreate done:`, autoCreate);
+      } catch (e: any) {
+        console.error(`[admin/run-samgov-ingest] autoCreate failed:`, e?.message);
+        autoCreate = { error: e?.message || String(e) };
+      }
+      let herbie: any = null;
+      try {
+        const { getHerbieAutonomousAgent } = await import("./agents/herbie.autonomous");
+        const h = getHerbieAutonomousAgent(tenantId);
+        herbie = await h.runAutonomousCycle();
+        console.log(`[admin/run-samgov-ingest] herbie done:`, herbie);
+      } catch (e: any) {
+        console.error(`[admin/run-samgov-ingest] herbie failed:`, e?.message);
+        herbie = { error: e?.message || String(e) };
+      }
+      return res.json({ ok: true, tenantId, ingest, autoCreate, herbie });
+    } catch (e: any) {
+      console.error(`[admin/run-samgov-ingest] FAILED:`, e);
+      return res.status(500).json({ error: e?.message || String(e) });
+    }
+  });
+
   app.post("/api/admin/metrics/snapshot", async (req: Request, res: Response) => {
     try {
       const { writeAllSnapshotsForAllTenants } = await import("./services/metric-snapshot.service");
