@@ -14,7 +14,7 @@
  *   -> single document metadata + presigned URL hint
  */
 import { Router, type Request, type Response } from "express";
-import { eq, and, sql } from "drizzle-orm";
+import { eq, and, sql, inArray, desc } from "drizzle-orm";
 import { db } from "../db";
 import { jacketFolders, jacketDocuments, bidProjects } from "@shared/schema";
 
@@ -38,13 +38,16 @@ async function buildJacketResponse(jacketType: string, jacketId: string, tenantI
   let docs: any[] = [];
   if (folderIds.length > 0) {
     // Pull docs in chunks to avoid huge IN clauses
-    docs = await db.execute(sql`
-      SELECT * FROM jacket_documents
-      WHERE folder_id = ANY(${folderIds})
-      AND (latest_version IS NULL OR latest_version = TRUE)
-      ORDER BY created_at DESC
-      LIMIT 5000
-    `).then((r: any) => r.rows || r || []);
+    const rows = await db
+      .select()
+      .from(jacketDocuments)
+      .where(and(
+        inArray(jacketDocuments.folderId, folderIds),
+        sql`(latest_version IS NULL OR latest_version = TRUE)`,
+      ))
+      .orderBy(desc(jacketDocuments.createdAt))
+      .limit(5000);
+    docs = rows as any[];
   }
 
   // Group docs by folder
