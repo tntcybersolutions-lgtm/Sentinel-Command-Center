@@ -1,7 +1,42 @@
+// server/integrations/samgov/samgov.client.ts
+//
+// SAM.gov API client + ingestion service.
+//
+// Fixes (2026-05-20) — addresses 3 months of silent ingestion failure:
+//   1. CRITICAL: date format. SAM.gov v2 REQUIRES MM/dd/yyyy. Old code sent
+//      `new Date().toISOString().split('T')[0]` which is yyyy-MM-dd and returns
+//      400 on every call.
+//   2. URL: canonical https://api.sam.gov/prod/opportunities/v2/search kept
+//      (this DOES work; the /opportunities/v2/search variant in getOpportunityById
+//      was inconsistent — now normalized).
+//   3. Failure logging: response body is captured and surfaced in error message
+//      so we know WHY a call failed (401 = bad key, 429 = rate-limit, etc).
+//   4. Retries with exponential backoff for 429 and 5xx (3 attempts, 1s/2s/4s).
+//   5. Pagination: searchOpportunities now follows totalRecords through all pages
+//      (capped at 10 pages = 1000 records per run to stay polite).
+//   6. Headers: Accept: application/json, User-Agent, and a 30s timeout.
+//   7. runIngestion: looks back 7 days by default (was 30) since cron fires every
+//      10 minutes — 7 days is plenty of overlap to catch backfills without
+//      hammering the API. Also pulls ptype="o,k,p" (Solicitation + Combined
+//      Synopsis + Presolicitation) which is what a GC actually wants to see.
+
 import { db } from "../../db";
-import { sourceSystems, sourceRuns, sourceItemsRaw, opportunities, opportunityAmendments, buyers } from "@shared/schema";
+import {
+  sourceSystems,
+  sourceRuns,
+  sourceItemsRaw,
+  opportunities,
+  opportunityAmendments,
+  buyers,
+} from "@shared/schema";
 import { eq, and } from "drizzle-orm";
-import { recordSourceRunTouch, getImpactedBidProjectIdsForRun, enqueueArtifactIngestionJob } from "../../services/ingestion/ingestion.helpers";
+import {
+  recordSourceRunTouch,
+  getImpactedBidProjectIdsForRun,
+  enqueueArtifactIngestionJob,
+} from "../../services/ingestion/ingestion.helpers";
+
+// ─── Types (unchanged public surface) ─────────────────────────────────────────
 
 export interface SamGovOpportunity {
   noticeId: string;
@@ -24,10 +59,7 @@ export interface SamGovOpportunity {
   organizationType?: string;
   resourceLinks?: string[];
   uiLink?: string;
-  office?: {
-    name?: string;
-    code?: string;
-  };
+  office?: { name?: string; code?: string };
   pointOfContact?: Array<{
     type?: string;
     name?: string;
@@ -35,175 +67,20 @@ export interface SamGovOpportunity {
     phone?: string;
   }>;
   placeOfPerformance?: {
-    city?: {
-      name?: string;
-      code?: string;
-    };
-    state?: {
-      name?: string;
-      code?: string;
-    };
-    country?: {
-      name?: string;
-      code?: string;
-    };
+    city?: { name?: string; code?: string };
+    state?: { name?: string; code?: string };
+    country?: { name?: string; code?: string };
   };
   description?: string;
 }
 
 export interface SamGovSearchParams {
-  postedFrom?: string;
+  postedFrom?: string; // accepted in EITHER MM/dd/yyyy or yyyy-MM-dd — we normalize.
   postedTo?: string;
   ptype?: string;
   naics?: string;
   limit?: number;
   offset?: number;
-}
-
-export class SamGovClient {
-  private baseUrl = "https://api.sam.gov/prod/opportunities/v2/search";
-  private apiKey: string;
-
-  constructor(apiKey: string) {
-    this.apiKey = apiKey;
-  }
-
-  async searchOpportunities(params: SamGovSearchParams): Promise<SamGovOpportunity[]> {
-    const queryParams = new URLSearchParams();
-    
-    if (params.postedFrom) queryParams.set("postedFrom", params.postedFrom);
-    if (params.postedTo) queryParams.set("postedTo", params.postedTo);
-    if (params.ptype) queryParams.set("ptype", params.ptype);
-    if (params.naics) queryParams.set("ncode", params.naics);
-    queryParams.set("limit", (params.limit || 100).toString());
-    queryParams.set("offset", (params.offset || 0).toString());
-    queryParams.set("api_key", this.apiKey);
-
-    try {
-      const response = await fetch(`${this.baseUrl}?${queryParams.toString()}`);
-      
-      if (!response.ok) {
-        throw new Error(`SAM.gov API error: ${response.status} ${response.statusText}`);
-      }
-
-      const data = await response.json();
-      return data.opportunitiesData || [];
-    } catch (error) {
-      console.error("SAM.gov API request failed:", error);
-      throw error;
-    }
-  }
-
-  async getOpportunityById(noticeId: string): Promise<SamGovOpportunity | null> {
-    try {
-      const response = await fetch(
-        `https://api.sam.gov/opportunities/v2/search?noticeId=${noticeId}&api_key=${this.apiKey}`
-      );
-
-      if (!response.ok) {
-        return null;
-      }
-
-      const data = await response.json();
-      return data.opportunitiesData?.[0] || null;
-    } catch (error) {
-      console.error(`Failed to fetch opportunity ${noticeId}:`, error);
-      return null;
-    }
-  }
-
-  async getOpportunityDetail(noticeId: string): Promise<SamGovOpportunityDetail | null> {
-    try {
-      const queryParams = new URLSearchParams();
-      queryParams.set("api_key", this.apiKey);
-      queryParams.set("noticeId", noticeId);
-
-      const response = await fetch(
-        `https://api.sam.gov/prod/opportunities/v2/search?${queryParams.toString()}`,
-        {
-          headers: { Accept: "application/json" },
-          signal: AbortSignal.timeout(30000),
-        }
-      );
-
-      if (!response.ok) {
-        const errText = await response.text().catch(() => "");
-        console.error(`[samgov-client] Detail fetch failed for ${noticeId}: ${response.status} ${errText}`);
-        return null;
-      }
-
-      const data = await response.json();
-      const opp = data.opportunitiesData?.[0];
-      if (!opp) return null;
-
-      const attachments: SamGovAttachment[] = [];
-
-      if (opp.resourceLinks && Array.isArray(opp.resourceLinks)) {
-        for (const link of opp.resourceLinks) {
-          const filename = link.split("/").pop() || link;
-          attachments.push({
-            url: link,
-            name: decodeURIComponent(filename),
-            source: "resourceLinks",
-          });
-        }
-      }
-
-      if (opp.links && Array.isArray(opp.links)) {
-        for (const link of opp.links) {
-          if (link.href && link.rel !== "self") {
-            attachments.push({
-              url: link.href,
-              name: link.rel || link.href.split("/").pop() || "linked-document",
-              source: "links",
-            });
-          }
-        }
-      }
-
-      if (opp.additionalInfoLink) {
-        attachments.push({
-          url: opp.additionalInfoLink,
-          name: "Additional Information",
-          source: "additionalInfoLink",
-        });
-      }
-
-      if (opp.award?.awardee?.ueiSAM) {
-        // no attachment but useful metadata
-      }
-
-      const relatedNotices: string[] = [];
-      if (opp.relatedNotice) {
-        if (typeof opp.relatedNotice === "string") {
-          relatedNotices.push(opp.relatedNotice);
-        } else if (Array.isArray(opp.relatedNotice)) {
-          relatedNotices.push(...opp.relatedNotice);
-        }
-      }
-
-      return {
-        noticeId: opp.noticeId,
-        title: opp.title,
-        solicitationNumber: opp.solicitationNumber,
-        description: opp.description,
-        additionalInfoLink: opp.additionalInfoLink,
-        uiLink: opp.uiLink,
-        attachments,
-        relatedNotices,
-        resourceLinks: opp.resourceLinks || [],
-        pointOfContact: opp.pointOfContact,
-        postedDate: opp.postedDate,
-        responseDeadLine: opp.responseDeadLine,
-        archiveDate: opp.archiveDate,
-        type: opp.type,
-        active: opp.active,
-      };
-    } catch (error) {
-      console.error(`[samgov-client] Failed to fetch detail for ${noticeId}:`, error);
-      return null;
-    }
-  }
 }
 
 export interface SamGovAttachment {
@@ -235,6 +112,257 @@ export interface SamGovOpportunityDetail {
   active?: string;
 }
 
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+const SAM_BASE_URL = "https://api.sam.gov/prod/opportunities/v2/search";
+const DEFAULT_TIMEOUT_MS = 30_000;
+const USER_AGENT = "Sentinel-Command-Center/1.0 (+ops@sentinel)";
+const MAX_PAGES_PER_RUN = 10; // 10 pages × 100 limit = 1000 records max per cron tick
+const MAX_RETRIES = 3;
+
+/** Format a date as MM/dd/yyyy — the ONLY format SAM.gov v2 accepts. */
+function formatSamDate(input: Date | string): string {
+  if (typeof input === "string") {
+    // Already MM/dd/yyyy? pass through.
+    if (/^\d{2}\/\d{2}\/\d{4}$/.test(input)) return input;
+    // yyyy-MM-dd → reformat
+    const m = input.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (m) return `${m[2]}/${m[3]}/${m[1]}`;
+    // fall through — let Date parse it
+    input = new Date(input);
+  }
+  const mm = String(input.getMonth() + 1).padStart(2, "0");
+  const dd = String(input.getDate()).padStart(2, "0");
+  const yyyy = input.getFullYear();
+  return `${mm}/${dd}/${yyyy}`;
+}
+
+function isRetryable(status: number): boolean {
+  return status === 429 || (status >= 500 && status < 600);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+// ─── Client ───────────────────────────────────────────────────────────────────
+
+export class SamGovClient {
+  private apiKey: string;
+
+  constructor(apiKey: string) {
+    if (!apiKey) throw new Error("SamGovClient: apiKey is required");
+    this.apiKey = apiKey;
+  }
+
+  /** Single page fetch — used internally by searchOpportunities for pagination. */
+  private async fetchPage(params: SamGovSearchParams): Promise<{
+    totalRecords: number;
+    opportunitiesData: SamGovOpportunity[];
+  }> {
+    const q = new URLSearchParams();
+    if (params.postedFrom) q.set("postedFrom", formatSamDate(params.postedFrom));
+    if (params.postedTo) q.set("postedTo", formatSamDate(params.postedTo));
+    q.set("ptype", params.ptype || "o,k,p");
+    if (params.naics) q.set("ncode", params.naics);
+    q.set("limit", String(params.limit ?? 100));
+    q.set("offset", String(params.offset ?? 0));
+    q.set("api_key", this.apiKey);
+
+    const url = `${SAM_BASE_URL}?${q.toString()}`;
+    const sanitizedUrl = url.replace(this.apiKey, "***");
+
+    let lastErr: Error | null = null;
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        const res = await fetch(url, {
+          headers: {
+            Accept: "application/json",
+            "User-Agent": USER_AGENT,
+          },
+          signal: AbortSignal.timeout(DEFAULT_TIMEOUT_MS),
+        });
+
+        if (!res.ok) {
+          const body = await res.text().catch(() => "");
+          const snippet = body.slice(0, 500);
+          const msg = `SAM.gov ${res.status} ${res.statusText} for ${sanitizedUrl} — body: ${snippet}`;
+          if (isRetryable(res.status) && attempt < MAX_RETRIES) {
+            const backoff = 1000 * Math.pow(2, attempt - 1);
+            console.warn(`[samgov] ${msg} — retry ${attempt}/${MAX_RETRIES} in ${backoff}ms`);
+            await sleep(backoff);
+            lastErr = new Error(msg);
+            continue;
+          }
+          throw new Error(msg);
+        }
+
+        const data = (await res.json()) as {
+          totalRecords?: number;
+          opportunitiesData?: SamGovOpportunity[];
+        };
+        return {
+          totalRecords: data.totalRecords ?? 0,
+          opportunitiesData: data.opportunitiesData ?? [],
+        };
+      } catch (err: any) {
+        lastErr = err instanceof Error ? err : new Error(String(err));
+        // network / timeout — retry
+        if (attempt < MAX_RETRIES) {
+          const backoff = 1000 * Math.pow(2, attempt - 1);
+          console.warn(
+            `[samgov] fetch error attempt ${attempt}/${MAX_RETRIES}: ${lastErr.message} — retry in ${backoff}ms`,
+          );
+          await sleep(backoff);
+          continue;
+        }
+        throw lastErr;
+      }
+    }
+    throw lastErr ?? new Error("[samgov] exhausted retries");
+  }
+
+  /** Search opportunities, transparently following pagination. */
+  async searchOpportunities(
+    params: SamGovSearchParams,
+  ): Promise<SamGovOpportunity[]> {
+    const limit = params.limit ?? 100;
+    let offset = params.offset ?? 0;
+    let total = 0;
+    let pages = 0;
+    const all: SamGovOpportunity[] = [];
+
+    do {
+      const page = await this.fetchPage({ ...params, limit, offset });
+      total = page.totalRecords;
+      all.push(...page.opportunitiesData);
+      pages++;
+      offset += limit;
+      if (pages >= MAX_PAGES_PER_RUN) break;
+      if (page.opportunitiesData.length < limit) break; // last page
+    } while (offset < total);
+
+    console.log(
+      `[samgov] searchOpportunities: total=${total} fetched=${all.length} pages=${pages}`,
+    );
+    return all;
+  }
+
+  async getOpportunityById(
+    noticeId: string,
+  ): Promise<SamGovOpportunity | null> {
+    try {
+      const q = new URLSearchParams();
+      q.set("noticeId", noticeId);
+      q.set("api_key", this.apiKey);
+      const url = `${SAM_BASE_URL}?${q.toString()}`;
+
+      const res = await fetch(url, {
+        headers: { Accept: "application/json", "User-Agent": USER_AGENT },
+        signal: AbortSignal.timeout(DEFAULT_TIMEOUT_MS),
+      });
+      if (!res.ok) {
+        const body = await res.text().catch(() => "");
+        console.error(
+          `[samgov] getOpportunityById ${noticeId}: ${res.status} — ${body.slice(0, 300)}`,
+        );
+        return null;
+      }
+      const data = await res.json();
+      return data.opportunitiesData?.[0] ?? null;
+    } catch (err) {
+      console.error(`[samgov] getOpportunityById ${noticeId} threw:`, err);
+      return null;
+    }
+  }
+
+  async getOpportunityDetail(
+    noticeId: string,
+  ): Promise<SamGovOpportunityDetail | null> {
+    try {
+      const q = new URLSearchParams();
+      q.set("noticeId", noticeId);
+      q.set("api_key", this.apiKey);
+      const url = `${SAM_BASE_URL}?${q.toString()}`;
+
+      const res = await fetch(url, {
+        headers: { Accept: "application/json", "User-Agent": USER_AGENT },
+        signal: AbortSignal.timeout(DEFAULT_TIMEOUT_MS),
+      });
+      if (!res.ok) {
+        const body = await res.text().catch(() => "");
+        console.error(
+          `[samgov-client] Detail fetch failed for ${noticeId}: ${res.status} ${body.slice(0, 300)}`,
+        );
+        return null;
+      }
+
+      const data = await res.json();
+      const opp = data.opportunitiesData?.[0];
+      if (!opp) return null;
+
+      const attachments: SamGovAttachment[] = [];
+      if (opp.resourceLinks && Array.isArray(opp.resourceLinks)) {
+        for (const link of opp.resourceLinks) {
+          const filename = link.split("/").pop() || link;
+          attachments.push({
+            url: link,
+            name: decodeURIComponent(filename),
+            source: "resourceLinks",
+          });
+        }
+      }
+      if (opp.links && Array.isArray(opp.links)) {
+        for (const link of opp.links) {
+          if (link.href && link.rel !== "self") {
+            attachments.push({
+              url: link.href,
+              name: link.rel || link.href.split("/").pop() || "linked-document",
+              source: "links",
+            });
+          }
+        }
+      }
+      if (opp.additionalInfoLink) {
+        attachments.push({
+          url: opp.additionalInfoLink,
+          name: "Additional Information",
+          source: "additionalInfoLink",
+        });
+      }
+
+      const relatedNotices: string[] = [];
+      if (opp.relatedNotice) {
+        if (typeof opp.relatedNotice === "string") relatedNotices.push(opp.relatedNotice);
+        else if (Array.isArray(opp.relatedNotice)) relatedNotices.push(...opp.relatedNotice);
+      }
+
+      return {
+        noticeId: opp.noticeId,
+        title: opp.title,
+        solicitationNumber: opp.solicitationNumber,
+        description: opp.description,
+        additionalInfoLink: opp.additionalInfoLink,
+        uiLink: opp.uiLink,
+        attachments,
+        relatedNotices,
+        resourceLinks: opp.resourceLinks || [],
+        pointOfContact: opp.pointOfContact,
+        postedDate: opp.postedDate,
+        responseDeadLine: opp.responseDeadLine,
+        archiveDate: opp.archiveDate,
+        type: opp.type,
+        active: opp.active,
+      };
+    } catch (err) {
+      console.error(`[samgov-client] Failed to fetch detail for ${noticeId}:`, err);
+      return null;
+    }
+  }
+}
+
+// ─── Ingestion service ────────────────────────────────────────────────────────
+
 export class SamGovIngestionService {
   private client: SamGovClient;
   private tenantId: string;
@@ -246,30 +374,46 @@ export class SamGovIngestionService {
     this.sourceSystemId = sourceSystemId;
   }
 
-  async runIngestion(): Promise<{ created: number; updated: number; errors: number }> {
-    const [run] = await db.insert(sourceRuns).values({
-      tenantId: this.tenantId,
-      sourceSystemId: this.sourceSystemId,
-      status: "running",
-      countsJson: {},
-    }).returning({ id: sourceRuns.id });
+  /**
+   * Run one ingestion pass. Looks back 7 days by default (cron fires every
+   * 10 minutes so 7d overlap catches anything backfilled while staying small).
+   */
+  async runIngestion(): Promise<{
+    created: number;
+    updated: number;
+    errors: number;
+    fetched: number;
+  }> {
+    const [run] = await db
+      .insert(sourceRuns)
+      .values({
+        tenantId: this.tenantId,
+        sourceSystemId: this.sourceSystemId,
+        status: "running",
+        countsJson: {},
+      })
+      .returning({ id: sourceRuns.id });
 
-    const stats = { created: 0, updated: 0, errors: 0 };
+    const stats = { created: 0, updated: 0, errors: 0, fetched: 0 };
 
     try {
       const today = new Date();
-      const thirtyDaysAgo = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000);
-      
+      const lookback = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
+
       const params: SamGovSearchParams = {
-        postedFrom: thirtyDaysAgo.toISOString().split('T')[0],
-        postedTo: today.toISOString().split('T')[0],
-        ptype: "o,k", 
+        postedFrom: formatSamDate(lookback),
+        postedTo: formatSamDate(today),
+        ptype: "o,k,p", // Solicitation + Combined Synopsis + Presolicitation
         limit: 100,
       };
 
-      const opportunities_data = await this.client.searchOpportunities(params);
+      const oppList = await this.client.searchOpportunities(params);
+      stats.fetched = oppList.length;
+      console.log(
+        `[samgov-ingest] fetched ${oppList.length} opportunities from SAM.gov for window ${params.postedFrom} → ${params.postedTo}`,
+      );
 
-      for (const opp of opportunities_data) {
+      for (const opp of oppList) {
         try {
           const result = await this.processOpportunity(opp, run.id);
           if (result.outcome === "created") stats.created++;
@@ -285,8 +429,11 @@ export class SamGovIngestionService {
               action: result.outcome,
             });
           }
-        } catch (error) {
-          console.error(`Error processing opportunity ${opp.noticeId}:`, error);
+        } catch (err) {
+          console.error(
+            `[samgov-ingest] error processing opportunity ${opp.noticeId}:`,
+            err,
+          );
           stats.errors++;
         }
       }
@@ -304,7 +451,8 @@ export class SamGovIngestionService {
         });
       }
 
-      await db.update(sourceRuns)
+      await db
+        .update(sourceRuns)
         .set({
           status: "ok",
           endedAt: new Date(),
@@ -312,15 +460,21 @@ export class SamGovIngestionService {
         })
         .where(eq(sourceRuns.id, run.id));
 
-    } catch (error) {
-      await db.update(sourceRuns)
+      console.log(
+        `[samgov-ingest] run ${run.id} OK — fetched=${stats.fetched} created=${stats.created} updated=${stats.updated} errors=${stats.errors}`,
+      );
+    } catch (err) {
+      const msg = (err as Error).message;
+      console.error(`[samgov-ingest] run ${run.id} FAILED: ${msg}`);
+      await db
+        .update(sourceRuns)
         .set({
           status: "failed",
           endedAt: new Date(),
-          errorJson: { message: (error as Error).message },
+          errorJson: { message: msg, stack: (err as Error).stack },
         })
         .where(eq(sourceRuns.id, run.id));
-      throw error;
+      throw err;
     }
 
     return stats;
@@ -328,31 +482,43 @@ export class SamGovIngestionService {
 
   private async processOpportunity(
     opp: SamGovOpportunity,
-    runId: string
-  ): Promise<{ outcome: "created" | "updated" | "unchanged"; opportunityId: string }> {
+    runId: string,
+  ): Promise<{
+    outcome: "created" | "updated" | "unchanged";
+    opportunityId: string;
+  }> {
     const rawJson = opp as unknown as Record<string, unknown>;
     const contentHash = await this.hashContent(JSON.stringify(rawJson));
 
-    const existingRaw = await db.select()
+    const existingRaw = await db
+      .select()
       .from(sourceItemsRaw)
-      .where(and(
-        eq(sourceItemsRaw.tenantId, this.tenantId),
-        eq(sourceItemsRaw.sourceSystemId, this.sourceSystemId),
-        eq(sourceItemsRaw.externalId, opp.noticeId),
-        eq(sourceItemsRaw.contentHash, contentHash)
-      ))
+      .where(
+        and(
+          eq(sourceItemsRaw.tenantId, this.tenantId),
+          eq(sourceItemsRaw.sourceSystemId, this.sourceSystemId),
+          eq(sourceItemsRaw.externalId, opp.noticeId),
+          eq(sourceItemsRaw.contentHash, contentHash),
+        ),
+      )
       .limit(1);
 
     if (existingRaw.length > 0) {
-      const existingOppForUnchanged = await db.select({ id: opportunities.id })
+      const existingOpp = await db
+        .select({ id: opportunities.id })
         .from(opportunities)
-        .where(and(
-          eq(opportunities.tenantId, this.tenantId),
-          eq(opportunities.sourceSystemId, this.sourceSystemId),
-          eq(opportunities.externalId, opp.noticeId)
-        ))
+        .where(
+          and(
+            eq(opportunities.tenantId, this.tenantId),
+            eq(opportunities.sourceSystemId, this.sourceSystemId),
+            eq(opportunities.externalId, opp.noticeId),
+          ),
+        )
         .limit(1);
-      return { outcome: "unchanged", opportunityId: existingOppForUnchanged[0]?.id ?? "" };
+      return {
+        outcome: "unchanged",
+        opportunityId: existingOpp[0]?.id ?? "",
+      };
     }
 
     await db.insert(sourceItemsRaw).values({
@@ -365,30 +531,41 @@ export class SamGovIngestionService {
       runId,
     });
 
-    const existingOpp = await db.select()
+    const existingOpp = await db
+      .select()
       .from(opportunities)
-      .where(and(
-        eq(opportunities.tenantId, this.tenantId),
-        eq(opportunities.sourceSystemId, this.sourceSystemId),
-        eq(opportunities.externalId, opp.noticeId)
-      ))
+      .where(
+        and(
+          eq(opportunities.tenantId, this.tenantId),
+          eq(opportunities.sourceSystemId, this.sourceSystemId),
+          eq(opportunities.externalId, opp.noticeId),
+        ),
+      )
       .limit(1);
 
     let buyerId: string | null = null;
     if (opp.fullParentPathName) {
-      const [buyer] = await db.insert(buyers).values({
-        tenantId: this.tenantId,
-        name: opp.fullParentPathName,
-        type: opp.organizationType || "agency",
-        normalizedKey: opp.fullParentPathCode || opp.fullParentPathName.toLowerCase().replace(/\s+/g, '_'),
-      }).onConflictDoNothing().returning({ id: buyers.id });
-      
-      if (buyer) {
-        buyerId = buyer.id;
+      const normalizedKey =
+        opp.fullParentPathCode ||
+        opp.fullParentPathName.toLowerCase().replace(/\s+/g, "_");
+      const [newBuyer] = await db
+        .insert(buyers)
+        .values({
+          tenantId: this.tenantId,
+          name: opp.fullParentPathName,
+          type: opp.organizationType || "agency",
+          normalizedKey,
+        })
+        .onConflictDoNothing()
+        .returning({ id: buyers.id });
+
+      if (newBuyer) {
+        buyerId = newBuyer.id;
       } else {
-        const existingBuyer = await db.select()
+        const existingBuyer = await db
+          .select()
           .from(buyers)
-          .where(eq(buyers.normalizedKey, opp.fullParentPathCode || opp.fullParentPathName.toLowerCase().replace(/\s+/g, '_')))
+          .where(eq(buyers.normalizedKey, normalizedKey))
           .limit(1);
         buyerId = existingBuyer[0]?.id || null;
       }
@@ -410,7 +587,8 @@ export class SamGovIngestionService {
       archiveDate: opp.archiveDate ? new Date(opp.archiveDate) : null,
       setAsideCode: opp.typeOfSetAside || null,
       setAsideDescription: opp.typeOfSetAsideDescription || null,
-      naicsCodes: opp.naicsCodes || (opp.naicsCode ? [opp.naicsCode] : []),
+      naicsCodes:
+        opp.naicsCodes || (opp.naicsCode ? [opp.naicsCode] : []),
       classificationCode: opp.classificationCode || null,
       locationCity: opp.placeOfPerformance?.city?.name || null,
       locationState: opp.placeOfPerformance?.state?.code || null,
@@ -424,11 +602,9 @@ export class SamGovIngestionService {
     };
 
     if (existingOpp.length > 0) {
-      await db.update(opportunities)
-        .set({
-          ...normalizedData,
-          updatedAt: new Date(),
-        })
+      await db
+        .update(opportunities)
+        .set({ ...normalizedData, updatedAt: new Date() })
         .where(eq(opportunities.id, existingOpp[0].id));
 
       await db.insert(opportunityAmendments).values({
@@ -441,7 +617,10 @@ export class SamGovIngestionService {
 
       return { outcome: "updated", opportunityId: existingOpp[0].id };
     } else {
-      const [newOpp] = await db.insert(opportunities).values(normalizedData).returning({ id: opportunities.id });
+      const [newOpp] = await db
+        .insert(opportunities)
+        .values(normalizedData)
+        .returning({ id: opportunities.id });
       return { outcome: "created", opportunityId: newOpp.id };
     }
   }
@@ -451,35 +630,45 @@ export class SamGovIngestionService {
     const data = encoder.encode(content);
     const hashBuffer = await crypto.subtle.digest("SHA-256", data);
     const hashArray = Array.from(new Uint8Array(hashBuffer));
-    return hashArray.map(b => b.toString(16).padStart(2, "0")).join("");
+    return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
   }
 }
 
-export async function createSamGovIngestionService(tenantId: string): Promise<SamGovIngestionService | null> {
+// ─── Factory ──────────────────────────────────────────────────────────────────
+
+export async function createSamGovIngestionService(
+  tenantId: string,
+): Promise<SamGovIngestionService | null> {
   const apiKey = process.env.SAM_GOV_API_KEY;
   if (!apiKey) {
-    console.warn("SAM_GOV_API_KEY not configured");
+    console.warn("[samgov] SAM_GOV_API_KEY not configured");
     return null;
   }
 
-  const [sourceSystem] = await db.select()
+  const [sourceSystem] = await db
+    .select()
     .from(sourceSystems)
-    .where(and(
-      eq(sourceSystems.tenantId, tenantId),
-      eq(sourceSystems.key, "samgov")
-    ))
+    .where(
+      and(
+        eq(sourceSystems.tenantId, tenantId),
+        eq(sourceSystems.key, "samgov"),
+      ),
+    )
     .limit(1);
 
   if (!sourceSystem) {
-    const [newSource] = await db.insert(sourceSystems).values({
-      tenantId,
-      key: "samgov",
-      name: "SAM.gov",
-      type: "api",
-      enabled: true,
-      configJson: { pollMinutes: 10 },
-    }).returning({ id: sourceSystems.id });
-    
+    const [newSource] = await db
+      .insert(sourceSystems)
+      .values({
+        tenantId,
+        key: "samgov",
+        name: "SAM.gov",
+        type: "api",
+        enabled: true,
+        configJson: { pollMinutes: 10 },
+      })
+      .returning({ id: sourceSystems.id });
+
     return new SamGovIngestionService(apiKey, tenantId, newSource.id);
   }
 

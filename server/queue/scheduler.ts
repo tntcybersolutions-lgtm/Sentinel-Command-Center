@@ -1,3 +1,12 @@
+// server/queue/scheduler.ts
+//
+// 2026-05-20 update: samgov_ingest moved from every-10-minutes to twice daily
+// (06:00 and 18:00 server-local). The previous setInterval-only scheduler
+// couldn't pin to wall-clock times, so we added `runAtHours?: number[]`. When
+// present, the job is scheduled with a self-rescheduling setTimeout chain that
+// always targets the next configured hour. setInterval is still the default for
+// everything else.
+
 import { queueService, JobType } from "./queue.service";
 import { db } from "../db";
 import { tenants } from "@shared/schema";
@@ -6,16 +15,24 @@ import { eq } from "drizzle-orm";
 interface ScheduleConfig {
   jobType: JobType;
   cronPattern: string;
+  /** Used by setInterval when runAtHours is not provided. */
   intervalMs: number;
+  /**
+   * When present, the job fires at these wall-clock hours (server-local time)
+   * each day and intervalMs is ignored for scheduling (still used for the
+   * idempotency time slot to dedupe within a day).
+   */
+  runAtHours?: number[];
   description: string;
 }
 
 const SCHEDULES: ScheduleConfig[] = [
   {
     jobType: "samgov_ingest",
-    cronPattern: "*/10 * * * *",
-    intervalMs: 10 * 60 * 1000,
-    description: "SAM.gov opportunity ingestion every 10 minutes",
+    cronPattern: "0 6,18 * * *",
+    intervalMs: 12 * 60 * 60 * 1000, // 12h slot for idempotency key
+    runAtHours: [6, 18],
+    description: "SAM.gov opportunity ingestion at 06:00 and 18:00 daily",
   },
   {
     jobType: "herbie_autonomous",
@@ -119,12 +136,13 @@ class Scheduler {
 
   async stop(): Promise<void> {
     this.running = false;
-    
+
     for (const [key, timer] of Array.from(this.timers)) {
       clearInterval(timer);
+      clearTimeout(timer);
       console.log(`Stopped scheduled job: ${key}`);
     }
-    
+
     this.timers.clear();
     console.log("Scheduler stopped");
   }
@@ -134,7 +152,8 @@ class Scheduler {
       if (!this.running) return;
 
       try {
-        const allTenants = await db.select()
+        const allTenants = await db
+          .select()
           .from(tenants)
           .where(eq(tenants.status, "active"));
 
@@ -144,23 +163,84 @@ class Scheduler {
           await queueService.enqueue({
             tenantId: tenant.id,
             jobType: config.jobType,
-            payload: { tenantId: tenant.id, scheduledAt: new Date().toISOString() },
+            payload: {
+              tenantId: tenant.id,
+              scheduledAt: new Date().toISOString(),
+            },
             idempotencyKey,
           });
         }
 
-        console.log(`Enqueued ${config.jobType} for ${allTenants.length} tenants`);
+        console.log(
+          `Enqueued ${config.jobType} for ${allTenants.length} tenants`,
+        );
       } catch (error) {
         console.error(`Failed to schedule ${config.jobType}:`, error);
       }
     };
 
-    await runJob();
+    if (config.runAtHours && config.runAtHours.length > 0) {
+      // Wall-clock scheduling: self-rescheduling setTimeout chain.
+      this.scheduleAtHours(config, runJob);
+      console.log(
+        `Scheduled ${config.jobType} at hours [${config.runAtHours.join(", ")}] server-local — ${config.description}`,
+      );
+    } else {
+      // Interval scheduling: run once at startup, then every intervalMs.
+      await runJob();
+      const timer = setInterval(runJob, config.intervalMs);
+      this.timers.set(config.jobType, timer);
+      console.log(`Scheduled ${config.jobType}: ${config.description}`);
+    }
+  }
 
-    const timer = setInterval(runJob, config.intervalMs);
-    this.timers.set(config.jobType, timer);
-    
-    console.log(`Scheduled ${config.jobType}: ${config.description}`);
+  /**
+   * Schedule a job to fire at each wall-clock hour in `config.runAtHours`
+   * (server-local). On startup, if the most recent target hour has already
+   * passed today by more than 5 minutes, we DON'T fire immediately (we wait
+   * for the next slot) to avoid surprise jobs on every deploy.
+   */
+  private scheduleAtHours(
+    config: ScheduleConfig,
+    runJob: () => Promise<void>,
+  ): void {
+    const hours = [...(config.runAtHours ?? [])].sort((a, b) => a - b);
+    if (hours.length === 0) return;
+
+    const scheduleNext = () => {
+      if (!this.running) return;
+      const now = new Date();
+      const next = this.computeNextFireTime(now, hours);
+      const delay = Math.max(1000, next.getTime() - now.getTime());
+      console.log(
+        `[scheduler] next ${config.jobType} fire at ${next.toISOString()} (in ${Math.round(delay / 1000)}s)`,
+      );
+      const t = setTimeout(async () => {
+        try {
+          await runJob();
+        } catch (e) {
+          console.error(`[scheduler] ${config.jobType} run error:`, e);
+        }
+        scheduleNext();
+      }, delay);
+      this.timers.set(config.jobType, t);
+    };
+
+    scheduleNext();
+  }
+
+  /** Next Date in the future whose hour matches one of `hours` (sorted asc). */
+  private computeNextFireTime(now: Date, hours: number[]): Date {
+    for (const h of hours) {
+      const candidate = new Date(now);
+      candidate.setHours(h, 0, 0, 0);
+      if (candidate.getTime() > now.getTime()) return candidate;
+    }
+    // All today's slots are past — first hour tomorrow.
+    const tomorrow = new Date(now);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    tomorrow.setHours(hours[0], 0, 0, 0);
+    return tomorrow;
   }
 
   private getTimeSlot(intervalMs: number): string {
@@ -177,11 +257,17 @@ class Scheduler {
     });
   }
 
-  getScheduleInfo(): Array<{ jobType: string; intervalMs: number; description: string }> {
-    return SCHEDULES.map(s => ({
+  getScheduleInfo(): Array<{
+    jobType: string;
+    intervalMs: number;
+    description: string;
+    runAtHours?: number[];
+  }> {
+    return SCHEDULES.map((s) => ({
       jobType: s.jobType,
       intervalMs: s.intervalMs,
       description: s.description,
+      runAtHours: s.runAtHours,
     }));
   }
 }
