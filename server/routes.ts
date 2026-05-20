@@ -2695,17 +2695,69 @@ export async function registerRoutes(
         return res.json({ ok: true, bidProjectId: row?.id, alreadyExisted: true });
       }
 
-      // Create the jacket (DB row + folder structure + checklist + artifact stubs)
+      // Create the jacket (DB row + folder structure + checklist + template stubs)
       const created = await productionAutoCreateDeps.createJacketForOpp(tenantId, oppId);
       console.log(`[pursue] created bid_project ${created.bidProjectId} for opp ${oppId}`);
 
-      // Fire-and-forget the attachment filing. Files land in the jacket as they
-      // arrive; the UI refreshes them automatically.
-      productionAutoCreateDeps.fileArtifacts(tenantId, created.bidProjectId)
-        .then(r => console.log(`[pursue] filed ${r.filed} / failed ${r.failed} for ${created.bidProjectId}`))
-        .catch(e => console.error(`[pursue] file error for ${created.bidProjectId}:`, e?.message));
+      // CRITICAL: pull SAM resource links and seed bid_jacket_artifacts rows
+      // for each attachment so fileArtifacts has something to download. Look
+      // first at the cached source_items_raw.rawJson, fall back to a live
+      // SAM.gov detail fetch.
+      let resourceLinks: string[] = [];
+      let descriptionUrl: string | undefined = undefined;
+      try {
+        const { opportunities: oppsTbl, sourceItemsRaw } = await import("@shared/schema");
+        const { db } = await import("./db");
+        const { and, eq } = await import("drizzle-orm");
+        const [oppRow] = await db.select({ externalId: oppsTbl.externalId }).from(oppsTbl).where(eq(oppsTbl.id, oppId));
+        if (oppRow?.externalId) {
+          const [raw] = await db.select({ rawJson: sourceItemsRaw.rawJson })
+            .from(sourceItemsRaw)
+            .where(and(eq(sourceItemsRaw.tenantId, tenantId), eq(sourceItemsRaw.externalId, oppRow.externalId)))
+            .limit(1);
+          const r = raw?.rawJson as any;
+          if (Array.isArray(r?.resourceLinks)) resourceLinks = r.resourceLinks.filter((x: any) => typeof x === "string");
+          if (typeof r?.additionalInfoLink === "string") descriptionUrl = r.additionalInfoLink;
+          else if (typeof r?.uiLink === "string") descriptionUrl = r.uiLink;
+          if (resourceLinks.length === 0 && process.env.SAM_GOV_API_KEY) {
+            const { SamGovClient } = await import("./integrations/samgov/samgov.client");
+            const detail = await new SamGovClient(process.env.SAM_GOV_API_KEY).getOpportunityDetail(oppRow.externalId);
+            if (detail) {
+              resourceLinks = (detail.resourceLinks || []).filter((x) => typeof x === "string");
+              if (!descriptionUrl && detail.additionalInfoLink) descriptionUrl = detail.additionalInfoLink;
+              if (!descriptionUrl && detail.uiLink) descriptionUrl = detail.uiLink;
+            }
+          }
+          console.log(`[pursue] opp ${oppId} extId=${oppRow.externalId} resourceLinks=${resourceLinks.length} descUrl=${descriptionUrl ? "yes" : "no"}`);
+          if (resourceLinks.length > 0 || descriptionUrl) {
+            const { ingestSamAttachments } = await import("./services/bid-jacket-artifacts.service");
+            const seededCount = await ingestSamAttachments(tenantId, created.bidProjectId, resourceLinks, descriptionUrl);
+            console.log(`[pursue] ingestSamAttachments seeded ${seededCount} for ${created.bidProjectId}`);
+          }
+        }
+      } catch (e: any) {
+        console.error(`[pursue] ingestSamAttachments failed for ${created.bidProjectId}:`, e?.message);
+      }
 
-      return res.json({ ok: true, bidProjectId: created.bidProjectId, alreadyExisted: false });
+      // Now actually download the attachments. Await briefly (15s) so the UI
+      // shows real files on first load; if it takes longer the rest finishes
+      // in the background and the UI picks them up on next refresh.
+      const filingPromise = productionAutoCreateDeps.fileArtifacts(tenantId, created.bidProjectId)
+        .then(r => { console.log(`[pursue] filed ${r.filed} / failed ${r.failed} for ${created.bidProjectId}`); return r; })
+        .catch(e => { console.error(`[pursue] file error for ${created.bidProjectId}:`, e?.message); return { filed: 0, failed: 0 }; });
+      const filed = await Promise.race([
+        filingPromise,
+        new Promise<{ filed: number; failed: number }>(resolve => setTimeout(() => resolve({ filed: -1, failed: 0 }), 15000)),
+      ]);
+
+      return res.json({
+        ok: true,
+        bidProjectId: created.bidProjectId,
+        alreadyExisted: false,
+        samResourceLinks: resourceLinks.length,
+        descriptionUrl: descriptionUrl ?? null,
+        filed: filed.filed === -1 ? "in_progress" : filed.filed,
+      });
     } catch (e: any) {
       console.error(`[pursue] FAILED for opp ${req.params.id}:`, e);
       return res.status(500).json({ error: e?.message || String(e) });
