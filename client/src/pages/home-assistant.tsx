@@ -59,6 +59,9 @@ import { GettingStartedChecklist } from "@/components/home/getting-started-check
 import { HomeEmptyState } from "@/components/home/home-empty-state";
 import { useQuery as useClarityQuery } from "@tanstack/react-query";
 // SENTINEL-CLARITY-WIRED
+import { ProjectChip } from "@/components/home/project-chip";
+import { MyOpenItems } from "@/components/home/my-open-items";
+import { SmartTakeoffSpotlight } from "@/components/home/smart-takeoff-spotlight";
 
 // ── Helpers (unchanged from v1) ──────────────────────────────────────────────
 
@@ -820,7 +823,15 @@ export default function HomeAssistant() {
       <QuickActionsStrip />
       <GettingStartedChecklist />
       {/* Bid Opportunities (top-of-fold for GCs) */}
-      <BidOpportunitiesHero />
+      {/* Procore-style top stripe: project chip + my open items + smart takeoff */}
+      <div className="space-y-3">
+        <ProjectChip />
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+          <MyOpenItems />
+          <SmartTakeoffSpotlight />
+        </div>
+      </div>
+            <BidOpportunitiesHero />
 
       {/* Herbie's one-line brief */}
       <HerbieBriefBanner />

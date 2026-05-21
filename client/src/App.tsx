@@ -270,6 +270,12 @@ const MobileApprovalsPage = lazy(() => import('./pages/m-approvals'));
 const MobileMorePage = lazy(() => import('./pages/m-more'));
 const MobileNotificationsPage = lazy(() => import('./pages/m-notifications'));
 const MobileChangeOrdersPage = lazy(() => import('./pages/m-change-orders'));
+const Welcome = lazy(() => import('./pages/welcome'));
+const ProjectCreate = lazy(() => import('./pages/project-create'));
+const ImportProcore = lazy(() => import('./pages/import-procore'));
+const ImportBuildertrend = lazy(() => import('./pages/import-buildertrend'));
+const ImportCsv = lazy(() => import('./pages/import-csv'));
+const TeamInvite = lazy(() => import('./pages/team-invite'));
 const ProfilePage = lazy(() => import('./pages/profile'));
 import { MobileShell } from "@/components/mobile-shell";
 import NotFound from "@/pages/not-found";
@@ -287,6 +293,13 @@ function Router() {
       {/* ── Home ── */}
       <Route path="/" component={() => { const isMobile = typeof navigator !== "undefined" && (/Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || window.innerWidth < 768); return <LegacyRedirect to={isMobile ? "/m-home" : "/home"} />; }} />
       <Route path="/home" component={() => <SafeRoute component={HomeAssistant} name="Home" />} />
+{/* ── Onboarding + Imports + Team ── */}
+<Route path="/welcome" component={() => <Suspense fallback={<div>Loading...</div>}><Welcome /></Suspense>} />
+<Route path="/projects/new" component={() => <Suspense fallback={<div>Loading...</div>}><ProjectCreate /></Suspense>} />
+<Route path="/import/procore" component={() => <Suspense fallback={<div>Loading...</div>}><ImportProcore /></Suspense>} />
+<Route path="/import/buildertrend" component={() => <Suspense fallback={<div>Loading...</div>}><ImportBuildertrend /></Suspense>} />
+<Route path="/import/csv" component={() => <Suspense fallback={<div>Loading...</div>}><ImportCsv /></Suspense>} />
+<Route path="/team/invite" component={() => <Suspense fallback={<div>Loading...</div>}><TeamInvite /></Suspense>} />
       <Route path="/projects/:id/photos" component={() => <SafeRoute component={ProjectPhotosPage} name="ProjectPhotos" />} />
       <Route path="/m-login" component={() => <Suspense fallback={<div>Loading...</div>}><MobileLoginPage /></Suspense>} />
       <Route path="/m-rfi" component={() => <Suspense fallback={<div>Loading...</div>}><MobileRfiPage /></Suspense>} />
