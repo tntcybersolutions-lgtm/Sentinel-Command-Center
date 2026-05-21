@@ -57,6 +57,8 @@ import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { apiFetch } from "@/lib/offline-queue";
 import { VoiceMicButton } from "@/components/voice-mic-button";
+import { SavedFilters } from "@/components/saved-filters";
+import { SwipeCard } from "@/components/swipe-card";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -463,6 +465,18 @@ export default function PunchListPage() {
           </CardTiered>
         </div>
 
+        {/* Sprint L3-A — Saved Filter chips */}
+        <SavedFilters
+          filterKey="punch"
+          currentState={{ severity: filterSeverity, assignee: filterAssignee, q: searchText }}
+          onApply={(s) => {
+            setFilterSeverity((s.severity as PunchSeverity | "all") || "all");
+            setFilterAssignee((s.assignee as string) || "all");
+            setSearchText((s.q as string) || "");
+          }}
+          className="mb-2"
+        />
+
         {/* ── Filter bar ──────────────────────────────────────────────────── */}
         <div className="flex items-center gap-2 flex-wrap" data-testid="punch-filters">
           <div className="relative flex-1 min-w-[200px] max-w-md">
@@ -543,13 +557,21 @@ export default function PunchListPage() {
                   </CardTiered>
                 ) : (
                   colItems.map((it) => (
-                    <PunchItemCard
+                    <SwipeCard
                       key={it.id}
-                      item={it}
-                      onOpen={() => { /* FW1: mobile-tap navigates */ if (typeof window !== 'undefined' && window.innerWidth < 768) { navigate('/m-punch/' + it.id); } else { setDetailItem(it); } }}
-                      onAdvance={() => changeStatus(it.id, nextStatus(it.status))}
-                      onRetreat={() => changeStatus(it.id, prevStatus(it.status))}
-                    />
+                      onSwipeRight={() => changeStatus(it.id, nextStatus(it.status))}
+                      onSwipeLeft={() => changeStatus(it.id, prevStatus(it.status))}
+                      disabled={it.status === "closed"}
+                      rightLabel="Advance"
+                      leftLabel="Back"
+                    >
+                      <PunchItemCard
+                        item={it}
+                        onOpen={() => { /* FW1: mobile-tap navigates */ if (typeof window !== 'undefined' && window.innerWidth < 768) { navigate('/m-punch/' + it.id); } else { setDetailItem(it); } }}
+                        onAdvance={() => changeStatus(it.id, nextStatus(it.status))}
+                        onRetreat={() => changeStatus(it.id, prevStatus(it.status))}
+                      />
+                    </SwipeCard>
                   ))
                 )}
               </div>
