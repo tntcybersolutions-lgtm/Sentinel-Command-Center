@@ -4,6 +4,10 @@ import { useLocation } from "wouter";
 import { apiFetch, subscribe } from "@/lib/offline-queue";
 import { SyncSheet } from "@/components/sync-sheet";
 import MobileTabBar from "@/components/mobile/m-tab-bar";
+import { NextActionHero } from "@/components/home/next-action-hero";
+import { QuickActionsStrip } from "@/components/home/quick-actions-strip";
+import { GettingStartedChecklist } from "@/components/home/getting-started-checklist";
+// SENTINEL-CLARITY-MOBILE-WIRED
 
 interface RiskScore {
   amount: number;
@@ -192,6 +196,12 @@ export default function MobileHomePage() {
           >H</button>
         </div>
       </header>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 20 }}>
+        <NextActionHero />
+        <QuickActionsStrip />
+        <GettingStartedChecklist />
+      </div>
 
       <SyncSheet open={sheetOpen} onClose={() => setSheetOpen(false)} />
 

@@ -53,6 +53,12 @@ import { StatusPill } from "@/components/ui/status-pill";
 import { CardTiered } from "@/components/ui/card-tiered";
 import { useCountUp } from "@/hooks/use-count-up";
 import { SafeArea } from "@/components/ui/safe-area";
+import { NextActionHero } from "@/components/home/next-action-hero";
+import { QuickActionsStrip } from "@/components/home/quick-actions-strip";
+import { GettingStartedChecklist } from "@/components/home/getting-started-checklist";
+import { HomeEmptyState } from "@/components/home/home-empty-state";
+import { useQuery as useClarityQuery } from "@tanstack/react-query";
+// SENTINEL-CLARITY-WIRED
 
 // ── Helpers (unchanged from v1) ──────────────────────────────────────────────
 
@@ -780,6 +786,22 @@ export default function HomeAssistant() {
   const countsQuery = useQuery<NavCounts>({ queryKey: ["/api/nav-counts"] });
   const counts = countsQuery.data;
 
+  const projectsClarityQuery = useClarityQuery<any[]>({
+    queryKey: ["/api/projects"],
+    queryFn: async () => {
+      try {
+        const r = await fetch("/api/projects");
+        if (!r.ok) return [];
+        const d = await r.json();
+        return Array.isArray(d) ? d : (Array.isArray(d?.items) ? d.items : []);
+      } catch {
+        return [];
+      }
+    },
+    staleTime: 30_000,
+  });
+  const hasNoProjects = !projectsClarityQuery.isLoading && (projectsClarityQuery.data?.length ?? 0) === 0;
+
   return (
     <SafeArea sides={["top", "bottom"]} className="min-h-screen bg-black text-white" data-testid="home-page-safe">
     <div className="p-6 space-y-8" data-testid="home-page">
@@ -793,6 +815,10 @@ export default function HomeAssistant() {
         </span>
       </div>
 
+      {hasNoProjects ? (<HomeEmptyState />) : (<>
+      <NextActionHero />
+      <QuickActionsStrip />
+      <GettingStartedChecklist />
       {/* Bid Opportunities (top-of-fold for GCs) */}
       <BidOpportunitiesHero />
 
@@ -858,6 +884,7 @@ export default function HomeAssistant() {
 
       {/* Recent Activity — collapsed, default closed */}
       <RecentActivity />
+    </>)}
     </div>
     </SafeArea>
   );
