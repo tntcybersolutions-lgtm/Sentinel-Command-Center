@@ -31,8 +31,10 @@ import {
   Download,
   Share2,
   Gauge,
+  Star,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import useProjectFavorites from "@/hooks/use-project-favorites";
 import { RowActionMenu } from "@/features/row-actions/RowActionMenu";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -112,6 +114,7 @@ export default function Projects() {
   const [selectedTab, setSelectedTab] = useState("active");
   const [sortBy, setSortBy] = useState("projectNumber");
   const { toast } = useToast();
+  const favs = useProjectFavorites();
 
   const handleNewProject = () => {
     toast({ title: "New Project", description: "Opening project creation form..." });
@@ -359,10 +362,19 @@ export default function Projects() {
             </Card>
           ) : (
             <div className="space-y-4">
-              {filteredProjects.map((project) => (
+              {favs.sortFavoritesFirst(filteredProjects, (p) => String(p.id)).map((project) => (
                 <Card key={project.id} className="hover-elevate cursor-pointer" data-testid={`project-card-${project.id}`} onClick={() => setLocation(`/projects/${encodeURIComponent(String(project.id))}`)}>
                   <CardContent className="p-6">
                     <div className="flex flex-col lg:flex-row lg:items-start gap-4">
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); favs.toggle(String(project.id)); }}
+                        className="rounded-md p-1.5 hover:bg-zinc-800 self-start"
+                        aria-label={favs.isFavorite(String(project.id)) ? "Unfavorite" : "Favorite"}
+                        data-testid={`project-fav-${project.id}`}
+                      >
+                        <Star className={`h-4 w-4 ${favs.isFavorite(String(project.id)) ? "fill-amber-400 text-amber-400" : "text-zinc-500"}`} />
+                      </button>
                       <div className="flex-1 space-y-3">
                         <div className="flex items-start justify-between gap-4 flex-wrap">
                           <div>
