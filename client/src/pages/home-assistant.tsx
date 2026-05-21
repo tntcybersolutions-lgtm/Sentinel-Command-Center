@@ -53,6 +53,9 @@ import { StatusPill } from "@/components/ui/status-pill";
 import { CardTiered } from "@/components/ui/card-tiered";
 import { useCountUp } from "@/hooks/use-count-up";
 import { SafeArea } from "@/components/ui/safe-area";
+import { ProjectChip } from "@/components/home/project-chip";
+import { MyOpenItems } from "@/components/home/my-open-items";
+import { SmartTakeoffSpotlight } from "@/components/home/smart-takeoff-spotlight";
 
 // ── Helpers (unchanged from v1) ──────────────────────────────────────────────
 
@@ -794,7 +797,15 @@ export default function HomeAssistant() {
       </div>
 
       {/* Bid Opportunities (top-of-fold for GCs) */}
-      <BidOpportunitiesHero />
+      {/* Procore-style top stripe: project chip + my open items + smart takeoff */}
+      <div className="space-y-3">
+        <ProjectChip />
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+          <MyOpenItems />
+          <SmartTakeoffSpotlight />
+        </div>
+      </div>
+            <BidOpportunitiesHero />
 
       {/* Herbie's one-line brief */}
       <HerbieBriefBanner />
