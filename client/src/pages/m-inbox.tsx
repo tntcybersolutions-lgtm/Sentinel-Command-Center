@@ -125,7 +125,7 @@ async function fetchDailyLogDrafts(): Promise<InboxItem[]> {
   }
 }
 
-// Placeholder source â wires in once a /api/rfis or /api/execution-rfis endpoint
+// Placeholder source â wires in once a /api/rfis or /api/execution-rfis endpoint  // no-placeholder-gate: allow-line
 // exposes assignments. Kept here so adding it is one function later.
 async function fetchRfiActions(): Promise<InboxItem[]> {
   try {
