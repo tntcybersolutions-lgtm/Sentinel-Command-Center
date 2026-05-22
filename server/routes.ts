@@ -19667,8 +19667,8 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
 
   app.get("/api/purchase-orders", async (req: Request, res: Response) => {
     try {
-      const { purchaseOrders: poTable, projects: projectsTable, vendors: vendorsTable } = await import("@shared/schema");
-      const { eq, desc, and } = await import("drizzle-orm");
+      const { purchaseOrders: poTable, projects: projectsTable, vendors: vendorsTable, purchaseOrderLines } = await import("@shared/schema");
+      const { eq, desc, and, inArray } = await import("drizzle-orm");
       const projectId = req.query.projectId as string | undefined;
       const conditions: any[] = [eq(poTable.tenantId, DEFAULT_TENANT_ID)];
       if (projectId) conditions.push(eq(poTable.projectId, projectId));
@@ -19678,6 +19678,8 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
         vendorId: poTable.vendorId,
         projectId: poTable.projectId,
         status: poTable.status,
+        subtotal: poTable.subtotal,
+        taxAmount: poTable.taxAmount,
         totalAmount: poTable.totalAmount,
         orderDate: poTable.orderDate,
         expectedDeliveryDate: poTable.expectedDeliveryDate,
@@ -19691,7 +19693,19 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
         .leftJoin(vendorsTable, eq(poTable.vendorId, vendorsTable.id))
         .where(and(...conditions))
         .orderBy(desc(poTable.createdAt));
-      res.json(rows.map(r => ({ ...r, isUnlinked: !r.projectId })));
+      // Fetch line items for these POs (one query)
+      const ids = rows.map(r => r.id);
+      const lines = ids.length
+        ? await db.select().from(purchaseOrderLines).where(inArray(purchaseOrderLines.purchaseOrderId, ids))
+        : [];
+      const byPo: Record<string, any[]> = {};
+      for (const ln of lines) {
+        (byPo[ln.purchaseOrderId] ||= []).push(ln);
+      }
+      res.json(rows.map(r => {
+        const meta = (r.notesJson as any) || {};
+        return { ...r, ...meta, lineItems: byPo[r.id] || [], isUnlinked: !r.projectId };
+      }));
     } catch (error) {
       console.error("Error fetching purchase orders:", error);
       res.status(500).json({ error: "Failed to fetch purchase orders" });
@@ -19718,13 +19732,23 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
         managerName: submittalTable.managerName,
         contractorName: submittalTable.contractorName,
         approvers: submittalTable.approvers,
+        reference: submittalTable.reference,
+        attachmentsJson: submittalTable.attachmentsJson,
+        submittedAt: submittalTable.submittedAt,
+        approvedAt: submittalTable.approvedAt,
         createdAt: submittalTable.createdAt,
+        updatedAt: submittalTable.updatedAt,
         projectName: projectsTable.name,
       }).from(submittalTable)
         .leftJoin(projectsTable, eq(submittalTable.projectId, projectsTable.id))
         .where(and(...conditions))
         .orderBy(desc(submittalTable.createdAt));
-      res.json(rows);
+      res.json(rows.map((r: any) => {
+        const meta = (r.attachmentsJson as any) || {};
+        const attachments = Array.isArray(meta) ? meta : (meta.attachments || []);
+        const obj = Array.isArray(meta) ? {} : meta;
+        return { ...r, ...obj, attachments };
+      }));
     } catch (error) {
       console.error("Error fetching submittals:", error);
       res.status(500).json({ error: "Failed to fetch submittals" });
@@ -19748,14 +19772,22 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
         priority: taskTable.priority,
         labels: taskTable.labels,
         dueDate: taskTable.dueDate,
+        completedAt: taskTable.completedAt,
+        attachmentsJson: taskTable.attachmentsJson,
         source: taskTable.source,
         createdAt: taskTable.createdAt,
+        updatedAt: taskTable.updatedAt,
         projectName: projectsTable.name,
       }).from(taskTable)
         .leftJoin(projectsTable, eq(taskTable.projectId, projectsTable.id))
         .where(and(...conditions))
         .orderBy(desc(taskTable.createdAt));
-      res.json(rows);
+      res.json(rows.map((r: any) => {
+        const meta = (r.attachmentsJson as any) || {};
+        const attachments = Array.isArray(meta) ? meta : (meta.attachments || []);
+        const obj = Array.isArray(meta) ? {} : meta;
+        return { ...r, ...obj, attachments };
+      }));
     } catch (error) {
       console.error("Error fetching project tasks:", error);
       res.status(500).json({ error: "Failed to fetch project tasks" });
@@ -19778,14 +19810,23 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
         status: rfiTable.status,
         priority: rfiTable.priority,
         dueDate: rfiTable.dueDate,
+        answer: rfiTable.answer,
+        answeredAt: rfiTable.answeredAt,
         attachmentsJson: rfiTable.attachmentsJson,
+        distributionJson: rfiTable.distributionJson,
         createdAt: rfiTable.createdAt,
+        updatedAt: rfiTable.updatedAt,
         projectName: projectsTable.name,
       }).from(rfiTable)
         .leftJoin(projectsTable, eq(rfiTable.projectId, projectsTable.id))
         .where(and(...conditions))
         .orderBy(desc(rfiTable.createdAt));
-      res.json(rows);
+      res.json(rows.map((r: any) => {
+        const meta = (r.distributionJson as any) || {};
+        const obj = Array.isArray(meta) ? {} : meta;
+        // Map `answer` to `response` for UI compat
+        return { ...r, ...obj, response: r.answer ?? obj.response };
+      }));
     } catch (error) {
       console.error("Error fetching RFIs:", error);
       res.status(500).json({ error: "Failed to fetch RFIs" });
@@ -19822,63 +19863,317 @@ BlackHawk's proposed price of **${formattedValue}** is realistic based on:
     }
   });
 
-  // PATCH endpoints for all document types
-  app.patch("/api/project-tasks/:id", async (req: Request, res: Response) => {
-    try {
-      const { projectTasks } = await import("@shared/schema");
-      const { eq, and } = await import("drizzle-orm");
-      const [updated] = await db.update(projectTasks)
-        .set(req.body)
-        .where(and(eq(projectTasks.id, p(req.params.id)), eq(projectTasks.tenantId, DEFAULT_TENANT_ID)))
-        .returning();
-      if (!updated) return res.status(404).json({ error: "Task not found" });
-      res.json(updated);
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
-    }
-  });
+  // ========================================================================
+  // POST + PATCH endpoints for RFI/Submittal/Task/PO with required projectId
+  // and jsonb-backed extras (no schema migration needed).
+  // ========================================================================
+  // Whitelist of allowed top-level DB columns per entity. Everything else
+  // sent by the client lands in the relevant jsonb meta column.
+  const RFI_COLS = new Set(["projectId","rfiNumber","subject","question","status","priority","dueDate","answer","answeredAt","attachmentsJson","distributionJson","assignedToUserId"]);
+  const SUBMITTAL_COLS = new Set(["projectId","submittalNumber","name","revision","status","priority","submittalType","description","managerName","contractorName","approvers","reference","labels","attachmentsJson","submittedAt","approvedAt"]);
+  const TASK_COLS = new Set(["projectId","name","description","assignees","status","priority","labels","dueDate","completedAt","attachmentsJson","source"]);
+  const PO_COLS = new Set(["poNumber","vendorId","projectId","status","subtotal","taxAmount","totalAmount","orderDate","expectedDeliveryDate","receivedDate","notesJson","needsReview"]);
 
-  app.patch("/api/submittals/:id", async (req: Request, res: Response) => {
-    try {
-      const { submittals } = await import("@shared/schema");
-      const { eq, and } = await import("drizzle-orm");
-      const [updated] = await db.update(submittals)
-        .set(req.body)
-        .where(and(eq(submittals.id, p(req.params.id)), eq(submittals.tenantId, DEFAULT_TENANT_ID)))
-        .returning();
-      if (!updated) return res.status(404).json({ error: "Submittal not found" });
-      res.json(updated);
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
+  function splitMeta(body: any, cols: Set<string>) {
+    const core: any = {};
+    const meta: any = {};
+    for (const [k, v] of Object.entries(body || {})) {
+      if (cols.has(k)) core[k] = v;
+      else if (k !== "projectName" && k !== "vendorName" && k !== "id" && k !== "createdAt" && k !== "updatedAt" && k !== "tenantId" && k !== "isUnlinked" && k !== "attachments" && k !== "lineItems" && k !== "response") meta[k] = v;
     }
-  });
+    // Map UI "response" -> column "answer" for RFIs
+    if ("response" in (body || {}) && cols.has("answer")) core.answer = (body as any).response;
+    return { core, meta };
+  }
 
+  function coerceDate(v: any) {
+    if (!v) return null;
+    if (v instanceof Date) return v;
+    const d = new Date(v);
+    return isNaN(d.getTime()) ? null : d;
+  }
+
+  // ---- RFIs ----
   app.patch("/api/rfis/:id", async (req: Request, res: Response) => {
     try {
       const { rfis } = await import("@shared/schema");
       const { eq, and } = await import("drizzle-orm");
-      const [updated] = await db.update(rfis)
-        .set(req.body)
-        .where(and(eq(rfis.id, p(req.params.id)), eq(rfis.tenantId, DEFAULT_TENANT_ID)))
-        .returning();
-      if (!updated) return res.status(404).json({ error: "RFI not found" });
-      res.json(updated);
+      const id = p(req.params.id);
+      const { core, meta } = splitMeta(req.body, RFI_COLS);
+      if (core.dueDate !== undefined) core.dueDate = coerceDate(core.dueDate);
+      if (core.answeredAt !== undefined) core.answeredAt = coerceDate(core.answeredAt);
+      // Merge meta into existing distributionJson
+      const [existing] = await db.select({ distributionJson: rfis.distributionJson }).from(rfis).where(and(eq(rfis.id, id), eq(rfis.tenantId, DEFAULT_TENANT_ID)));
+      if (!existing) return res.status(404).json({ error: "RFI not found" });
+      const existingMeta = (existing.distributionJson as any) || {};
+      const mergedMeta = { ...(Array.isArray(existingMeta) ? {} : existingMeta), ...meta };
+      const updateData: any = { ...core, updatedAt: new Date() };
+      if (Object.keys(meta).length > 0) updateData.distributionJson = mergedMeta;
+      if (core.status === "answered" && !core.answeredAt) updateData.answeredAt = new Date();
+      const [updated] = await db.update(rfis).set(updateData).where(and(eq(rfis.id, id), eq(rfis.tenantId, DEFAULT_TENANT_ID))).returning();
+      res.json({ ...updated, ...mergedMeta, response: (updated as any).answer ?? mergedMeta.response });
     } catch (error: any) {
+      console.error("PATCH /api/rfis error:", error);
       res.status(500).json({ error: error.message });
     }
   });
 
+  app.post("/api/rfis", async (req: Request, res: Response) => {
+    try {
+      const { rfis } = await import("@shared/schema");
+      const { eq, and, desc } = await import("drizzle-orm");
+      if (!req.body?.projectId) return res.status(400).json({ error: "projectId is required" });
+      if (!req.body?.subject) return res.status(400).json({ error: "subject is required" });
+      if (!req.body?.question) return res.status(400).json({ error: "question is required" });
+      const { core, meta } = splitMeta(req.body, RFI_COLS);
+      if (core.dueDate !== undefined) core.dueDate = coerceDate(core.dueDate);
+      // Auto-number: RFI-NNNN per project
+      let rfiNumber = core.rfiNumber;
+      if (!rfiNumber) {
+        const [last] = await db.select({ rfiNumber: rfis.rfiNumber }).from(rfis).where(and(eq(rfis.tenantId, DEFAULT_TENANT_ID), eq(rfis.projectId, core.projectId))).orderBy(desc(rfis.createdAt)).limit(1);
+        const lastN = last?.rfiNumber?.match(/(\d+)/);
+        const n = lastN ? parseInt(lastN[1], 10) + 1 : 1;
+        rfiNumber = `RFI-${String(n).padStart(4, "0")}`;
+      }
+      const insertData: any = {
+        tenantId: DEFAULT_TENANT_ID,
+        projectId: core.projectId,
+        rfiNumber,
+        subject: core.subject,
+        question: core.question,
+        status: core.status || "draft",
+        priority: core.priority || "normal",
+        dueDate: core.dueDate,
+        distributionJson: Object.keys(meta).length > 0 ? meta : null,
+      };
+      const [created] = await db.insert(rfis).values(insertData).returning();
+      res.status(201).json({ ...created, ...meta });
+    } catch (error: any) {
+      console.error("POST /api/rfis error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // ---- Submittals ----
+  app.patch("/api/submittals/:id", async (req: Request, res: Response) => {
+    try {
+      const { submittals } = await import("@shared/schema");
+      const { eq, and } = await import("drizzle-orm");
+      const id = p(req.params.id);
+      const { core, meta } = splitMeta(req.body, SUBMITTAL_COLS);
+      if (core.submittedAt !== undefined) core.submittedAt = coerceDate(core.submittedAt);
+      if (core.approvedAt !== undefined) core.approvedAt = coerceDate(core.approvedAt);
+      const [existing] = await db.select({ attachmentsJson: submittals.attachmentsJson }).from(submittals).where(and(eq(submittals.id, id), eq(submittals.tenantId, DEFAULT_TENANT_ID)));
+      if (!existing) return res.status(404).json({ error: "Submittal not found" });
+      const existingMeta = (existing.attachmentsJson as any) || {};
+      const existingObj = Array.isArray(existingMeta) ? { attachments: existingMeta } : existingMeta;
+      const mergedMeta = { ...existingObj, ...meta };
+      const updateData: any = { ...core, updatedAt: new Date() };
+      if (Object.keys(meta).length > 0) updateData.attachmentsJson = mergedMeta;
+      // Auto-bump revision on "revise"
+      if (req.body?.status === "revise_resubmit") {
+        updateData.revision = (req.body.revision ?? 0) + 1;
+      }
+      if (core.status === "submitted" && !core.submittedAt) updateData.submittedAt = new Date();
+      if (core.status === "approved" && !core.approvedAt) updateData.approvedAt = new Date();
+      const [updated] = await db.update(submittals).set(updateData).where(and(eq(submittals.id, id), eq(submittals.tenantId, DEFAULT_TENANT_ID))).returning();
+      res.json({ ...updated, ...mergedMeta });
+    } catch (error: any) {
+      console.error("PATCH /api/submittals error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post("/api/submittals", async (req: Request, res: Response) => {
+    try {
+      const { submittals } = await import("@shared/schema");
+      const { eq, and, desc } = await import("drizzle-orm");
+      if (!req.body?.projectId) return res.status(400).json({ error: "projectId is required" });
+      if (!req.body?.name) return res.status(400).json({ error: "name is required" });
+      const { core, meta } = splitMeta(req.body, SUBMITTAL_COLS);
+      let submittalNumber = core.submittalNumber;
+      if (!submittalNumber) {
+        const [last] = await db.select({ submittalNumber: submittals.submittalNumber }).from(submittals).where(and(eq(submittals.tenantId, DEFAULT_TENANT_ID), eq(submittals.projectId, core.projectId))).orderBy(desc(submittals.createdAt)).limit(1);
+        const lastN = last?.submittalNumber?.match(/(\d+)/);
+        const n = lastN ? parseInt(lastN[1], 10) + 1 : 1;
+        submittalNumber = `S-${String(n).padStart(3, "0")}`;
+      }
+      const insertData: any = {
+        tenantId: DEFAULT_TENANT_ID,
+        projectId: core.projectId,
+        submittalNumber,
+        name: core.name,
+        revision: 0,
+        status: core.status || "draft",
+        priority: core.priority || "medium",
+        submittalType: core.submittalType,
+        description: core.description,
+        managerName: core.managerName,
+        contractorName: core.contractorName,
+        approvers: core.approvers,
+        reference: core.reference,
+        attachmentsJson: Object.keys(meta).length > 0 ? meta : null,
+      };
+      const [created] = await db.insert(submittals).values(insertData).returning();
+      res.status(201).json({ ...created, ...meta });
+    } catch (error: any) {
+      console.error("POST /api/submittals error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // ---- Project Tasks ----
+  app.patch("/api/project-tasks/:id", async (req: Request, res: Response) => {
+    try {
+      const { projectTasks } = await import("@shared/schema");
+      const { eq, and } = await import("drizzle-orm");
+      const id = p(req.params.id);
+      const { core, meta } = splitMeta(req.body, TASK_COLS);
+      if (core.dueDate !== undefined) core.dueDate = coerceDate(core.dueDate);
+      if (core.completedAt !== undefined) core.completedAt = coerceDate(core.completedAt);
+      const [existing] = await db.select({ attachmentsJson: projectTasks.attachmentsJson }).from(projectTasks).where(and(eq(projectTasks.id, id), eq(projectTasks.tenantId, DEFAULT_TENANT_ID)));
+      if (!existing) return res.status(404).json({ error: "Task not found" });
+      const existingMeta = (existing.attachmentsJson as any) || {};
+      const existingObj = Array.isArray(existingMeta) ? { attachments: existingMeta } : existingMeta;
+      const mergedMeta = { ...existingObj, ...meta };
+      const updateData: any = { ...core, updatedAt: new Date() };
+      if (Object.keys(meta).length > 0) updateData.attachmentsJson = mergedMeta;
+      if (core.status === "completed" && !core.completedAt) updateData.completedAt = new Date();
+      const [updated] = await db.update(projectTasks).set(updateData).where(and(eq(projectTasks.id, id), eq(projectTasks.tenantId, DEFAULT_TENANT_ID))).returning();
+      res.json({ ...updated, ...mergedMeta });
+    } catch (error: any) {
+      console.error("PATCH /api/project-tasks error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post("/api/project-tasks", async (req: Request, res: Response) => {
+    try {
+      const { projectTasks } = await import("@shared/schema");
+      if (!req.body?.projectId) return res.status(400).json({ error: "projectId is required" });
+      if (!req.body?.name) return res.status(400).json({ error: "name is required" });
+      const { core, meta } = splitMeta(req.body, TASK_COLS);
+      if (core.dueDate !== undefined) core.dueDate = coerceDate(core.dueDate);
+      const insertData: any = {
+        tenantId: DEFAULT_TENANT_ID,
+        projectId: core.projectId,
+        name: core.name,
+        description: core.description,
+        assignees: core.assignees,
+        status: core.status || "not_started",
+        priority: core.priority || "medium",
+        labels: core.labels,
+        dueDate: core.dueDate,
+        source: core.source || "manual",
+        attachmentsJson: Object.keys(meta).length > 0 ? meta : null,
+      };
+      const [created] = await db.insert(projectTasks).values(insertData).returning();
+      res.status(201).json({ ...created, ...meta });
+    } catch (error: any) {
+      console.error("POST /api/project-tasks error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // ---- Purchase Orders ----
   app.patch("/api/purchase-orders/:id", async (req: Request, res: Response) => {
     try {
-      const { purchaseOrders } = await import("@shared/schema");
+      const { purchaseOrders, purchaseOrderLines } = await import("@shared/schema");
       const { eq, and } = await import("drizzle-orm");
-      const [updated] = await db.update(purchaseOrders)
-        .set(req.body)
-        .where(and(eq(purchaseOrders.id, p(req.params.id)), eq(purchaseOrders.tenantId, DEFAULT_TENANT_ID)))
-        .returning();
-      if (!updated) return res.status(404).json({ error: "Purchase order not found" });
-      res.json(updated);
+      const id = p(req.params.id);
+      const lineItems = req.body?.lineItems;
+      const { core, meta } = splitMeta(req.body, PO_COLS);
+      if (core.orderDate !== undefined) core.orderDate = coerceDate(core.orderDate);
+      if (core.expectedDeliveryDate !== undefined) core.expectedDeliveryDate = coerceDate(core.expectedDeliveryDate);
+      if (core.receivedDate !== undefined) core.receivedDate = coerceDate(core.receivedDate);
+      const [existing] = await db.select({ notesJson: purchaseOrders.notesJson }).from(purchaseOrders).where(and(eq(purchaseOrders.id, id), eq(purchaseOrders.tenantId, DEFAULT_TENANT_ID)));
+      if (!existing) return res.status(404).json({ error: "Purchase order not found" });
+      const existingMeta = (existing.notesJson as any) || {};
+      const existingObj = Array.isArray(existingMeta) ? {} : existingMeta;
+      const mergedMeta = { ...existingObj, ...meta };
+      const updateData: any = { ...core, updatedAt: new Date() };
+      if (Object.keys(meta).length > 0) updateData.notesJson = mergedMeta;
+      // Replace line items if provided + recompute totals
+      if (Array.isArray(lineItems)) {
+        await db.delete(purchaseOrderLines).where(eq(purchaseOrderLines.purchaseOrderId, id));
+        let subtotal = 0;
+        for (const ln of lineItems) {
+          const qty = Number(ln.quantity || 0);
+          const unit = Number(ln.unitCost || 0);
+          const total = qty * unit;
+          subtotal += total;
+          await db.insert(purchaseOrderLines).values({
+            tenantId: DEFAULT_TENANT_ID,
+            purchaseOrderId: id,
+            description: ln.description || "",
+            quantity: String(qty),
+            unitCost: String(unit),
+            totalCost: String(total),
+            receivedQty: String(ln.receivedQty || 0),
+          });
+        }
+        updateData.subtotal = String(subtotal);
+        updateData.totalAmount = String(subtotal + Number(core.taxAmount || existingObj.taxAmount || 0));
+      }
+      const [updated] = await db.update(purchaseOrders).set(updateData).where(and(eq(purchaseOrders.id, id), eq(purchaseOrders.tenantId, DEFAULT_TENANT_ID))).returning();
+      res.json({ ...updated, ...mergedMeta });
     } catch (error: any) {
+      console.error("PATCH /api/purchase-orders error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post("/api/purchase-orders", async (req: Request, res: Response) => {
+    try {
+      const { purchaseOrders, purchaseOrderLines } = await import("@shared/schema");
+      const { eq, and, desc } = await import("drizzle-orm");
+      if (!req.body?.projectId) return res.status(400).json({ error: "projectId is required" });
+      if (!req.body?.vendorId) return res.status(400).json({ error: "vendorId is required" });
+      const { core, meta } = splitMeta(req.body, PO_COLS);
+      const lineItems = Array.isArray(req.body?.lineItems) ? req.body.lineItems : [];
+      let poNumber = core.poNumber;
+      if (!poNumber) {
+        const [last] = await db.select({ poNumber: purchaseOrders.poNumber }).from(purchaseOrders).where(eq(purchaseOrders.tenantId, DEFAULT_TENANT_ID)).orderBy(desc(purchaseOrders.createdAt)).limit(1);
+        const lastN = last?.poNumber?.match(/(\d+)/);
+        const n = lastN ? parseInt(lastN[1], 10) + 1 : 1;
+        poNumber = `PO-${String(n).padStart(4, "0")}`;
+      }
+      let subtotal = 0;
+      for (const ln of lineItems) subtotal += Number(ln.quantity || 0) * Number(ln.unitCost || 0);
+      const tax = Number(core.taxAmount || 0);
+      const insertData: any = {
+        tenantId: DEFAULT_TENANT_ID,
+        poNumber,
+        vendorId: core.vendorId,
+        projectId: core.projectId,
+        status: core.status || "draft",
+        subtotal: String(subtotal),
+        taxAmount: String(tax),
+        totalAmount: String(subtotal + tax),
+        orderDate: coerceDate(core.orderDate) || new Date(),
+        expectedDeliveryDate: coerceDate(core.expectedDeliveryDate),
+        notesJson: Object.keys(meta).length > 0 ? meta : null,
+      };
+      const [created] = await db.insert(purchaseOrders).values(insertData).returning();
+      // Insert line items
+      const insertedLines: any[] = [];
+      for (const ln of lineItems) {
+        const qty = Number(ln.quantity || 0);
+        const unit = Number(ln.unitCost || 0);
+        const [createdLine] = await db.insert(purchaseOrderLines).values({
+          tenantId: DEFAULT_TENANT_ID,
+          purchaseOrderId: created.id,
+          description: ln.description || "",
+          quantity: String(qty),
+          unitCost: String(unit),
+          totalCost: String(qty * unit),
+          receivedQty: String(0),
+        }).returning();
+        insertedLines.push(createdLine);
+      }
+      res.status(201).json({ ...created, ...meta, lineItems: insertedLines });
+    } catch (error: any) {
+      console.error("POST /api/purchase-orders error:", error);
       res.status(500).json({ error: error.message });
     }
   });
