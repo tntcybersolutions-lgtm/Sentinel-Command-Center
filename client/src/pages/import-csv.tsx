@@ -20,10 +20,8 @@ function parseCsv(text: string): { headers: string[]; rows: string[][] } {
     } else {
       if (ch === '"') { inQ = true; }
       else if (ch === ",") { row.push(cur); cur = ""; }
-      else if (ch === "
-") { row.push(cur); out.push(row); row = []; cur = ""; }
-      else if (ch === "
-") { /* skip */ }
+      else if (ch === "\n") { row.push(cur); out.push(row); row = []; cur = ""; }
+      else if (ch === "\r") { /* skip */ }
       else { cur += ch; }
     }
   }
@@ -110,7 +108,7 @@ export default function ImportCsv() {
               >
                 <Upload className="h-10 w-10 mx-auto mb-4 text-muted-foreground" />
                 <p className="font-medium">Drop a CSV here or click to browse</p>
-                <p className="text-xs text-muted-foreground mt-2">UTF-8 encoded · First row treated as headers</p>
+                <p className="text-xs text-muted-foreground mt-2">UTF-8 encoded Â· First row treated as headers</p>
                 <input ref={inputRef} type="file" accept=".csv,text/csv" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) onFile(f); }} data-testid="input-csv-file" />
               </div>
             </CardContent>
@@ -119,7 +117,7 @@ export default function ImportCsv() {
           <Card>
             <CardContent className="p-0">
               <div className="flex items-center justify-between p-4 border-b">
-                <div className="flex items-center gap-3"><FileSpreadsheet className="h-5 w-5 text-green-500" /><div><p className="font-medium text-sm">{file.name}</p><p className="text-xs text-muted-foreground">{rows.length} rows · {headers.length} columns</p></div></div>
+                <div className="flex items-center gap-3"><FileSpreadsheet className="h-5 w-5 text-green-500" /><div><p className="font-medium text-sm">{file.name}</p><p className="text-xs text-muted-foreground">{rows.length} rows Â· {headers.length} columns</p></div></div>
                 <Button variant="ghost" size="sm" onClick={clear} className="gap-1" data-testid="button-clear-csv"><X className="h-4 w-4" />Remove</Button>
               </div>
               <div className="overflow-auto max-h-96">
@@ -141,7 +139,7 @@ export default function ImportCsv() {
               )}
               <div className="flex items-center justify-between p-4 border-t bg-muted/20">
                 <div className="flex items-center gap-2 text-xs text-muted-foreground"><AlertTriangle className="h-4 w-4" />Review the data above before importing.</div>
-                <Button onClick={submit} disabled={importing} className="gap-2" data-testid="button-import-csv"><CheckCircle2 className="h-4 w-4" />{importing ? "Importing…" : `Import ${rows.length} rows`}</Button>
+                <Button onClick={submit} disabled={importing} className="gap-2" data-testid="button-import-csv"><CheckCircle2 className="h-4 w-4" />{importing ? "Importingâ¦" : `Import ${rows.length} rows`}</Button>
               </div>
             </CardContent>
           </Card>
