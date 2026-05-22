@@ -1,23 +1,23 @@
 // ============================================================================
-// home-assistant.tsx — GC Home (v2)
+// home-assistant.tsx â GC Home (v2)
 // ----------------------------------------------------------------------------
 // Drop-in replacement for client/src/pages/home-assistant.tsx.
 //
 // What changed vs. v1:
-//   • Herbie one-line brief banner at the very top (always visible if there's
-//     anything worth saying) — replaces the generic activity feed as the anchor.
-//   • New "Money This Week" row — Pay Apps Due / Lien Waivers Outstanding /
+//   â¢ Herbie one-line brief banner at the very top (always visible if there's
+//     anything worth saying) â replaces the generic activity feed as the anchor.
+//   â¢ New "Money This Week" row â Pay Apps Due / Lien Waivers Outstanding /
 //     Invoices Overdue / Bills Due. The single biggest "switch from Buildertrend"
 //     lever for a GC.
-//   • Project Health Board (cards, not a table). Each card shows risk score,
+//   â¢ Project Health Board (cards, not a table). Each card shows risk score,
 //     status, top issue, contract value, completion. Reuses the same risk-band
 //     palette as the existing Sentinel risk-score component (red/amber/yellow/green).
-//   • This Week calendar strip (7-day lookahead across all projects).
-//   • Recent Activity feed demoted to a collapsed section at the bottom (default
+//   â¢ This Week calendar strip (7-day lookahead across all projects).
+//   â¢ Recent Activity feed demoted to a collapsed section at the bottom (default
 //     closed). Power users can expand; GCs can ignore it forever.
 //
 // Endpoint fallbacks: any new endpoint that doesn't exist yet (e.g.
-// /api/home/money-this-week) is fetched gracefully — the component renders
+// /api/home/money-this-week) is fetched gracefully â the component renders
 // "--" placeholders instead of crashing. You can land the UI today and wire
 // the aggregation endpoints when ready.
 //
@@ -62,8 +62,10 @@ import { useQuery as useClarityQuery } from "@tanstack/react-query";
 import { ProjectChip } from "@/components/home/project-chip";
 import { MyOpenItems } from "@/components/home/my-open-items";
 import { SmartTakeoffSpotlight } from "@/components/home/smart-takeoff-spotlight";
+import { EgnyteRecentDocs } from "@/components/home/egnyte-recent-docs";
+import { Mic } from "lucide-react";
 
-// ── Helpers (unchanged from v1) ──────────────────────────────────────────────
+// ââ Helpers (unchanged from v1) ââââââââââââââââââââââââââââââââââââââââââââââ
 
 function greetingText() {
   const h = new Date().getHours();
@@ -112,7 +114,7 @@ function relativeTime(d: string | null | undefined) {
   return `${days}d ago`;
 }
 
-// Map a 0–100 risk score to a band (matches the existing Sentinel risk palette).
+// Map a 0â100 risk score to a band (matches the existing Sentinel risk palette).
 function riskBand(score: number | null | undefined) {
   if (score == null) return { label: "Unscored", color: "text-zinc-500", bg: "bg-zinc-900/40", border: "border-zinc-700" };
   if (score >= 80) return { label: "Critical",       color: "text-red-300",     bg: "bg-red-950/30",     border: "border-red-900/60" };
@@ -121,7 +123,7 @@ function riskBand(score: number | null | undefined) {
   return            { label: "Stable",               color: "text-emerald-300", bg: "bg-emerald-950/30", border: "border-emerald-900/60" };
 }
 
-// ── Section header (light, consistent across sections) ───────────────────────
+// ââ Section header (light, consistent across sections) âââââââââââââââââââââââ
 
 function SectionHeader({ icon: Icon, title, action }: { icon: any; title: string; action?: React.ReactNode }) {
   return (
@@ -135,7 +137,7 @@ function SectionHeader({ icon: Icon, title, action }: { icon: any; title: string
   );
 }
 
-// ── Action Required ──────────────────────────────────────────────────────────
+// ââ Action Required ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 
 type ActionBox = {
   label: string;
@@ -152,9 +154,9 @@ const ACTION_BOXES: ActionBox[] = [
   { label: "Pending Submittals",countKey: "pendingSubmittalCount", icon: FileCheck,     route: "/execution/submittals", accentClass: "border-l-violet-500" },
 ];
 
-// ── Money This Week (NEW) ────────────────────────────────────────────────────
+// ââ Money This Week (NEW) ââââââââââââââââââââââââââââââââââââââââââââââââââââ
 // Calls /api/home/money-this-week. If the endpoint doesn't exist yet, all four
-// cards render with "--" — they won't crash the page.
+// cards render with "--" â they won't crash the page.
 
 interface MoneyThisWeekData {
   payAppsDueCount?: number;
@@ -268,7 +270,7 @@ function MoneyCard({
   );
 }
 
-// ── Herbie One-Line Brief (NEW) ──────────────────────────────────────────────
+// ââ Herbie One-Line Brief (NEW) ââââââââââââââââââââââââââââââââââââââââââââââ
 // Calls /api/herbie/brief for the canonical summary. Falls back to building a
 // brief from /api/herbie/digest totals if the brief endpoint doesn't exist.
 
@@ -324,12 +326,12 @@ function PursueButton({ oppId }: { oppId: string }) {
       data-testid={`btn-pursue-${oppId}`}
       title={err ? `Error: ${err}` : "Create a bid jacket for this opportunity"}
     >
-      {busy ? "Creating…" : "Pursue"}
+      {busy ? "Creatingâ¦" : "Pursue"}
     </button>
   );
 }
 
-// ── Bid Opportunities Hero (TOP-OF-FOLD for GCs) ────────────────────────────
+// ââ Bid Opportunities Hero (TOP-OF-FOLD for GCs) ââââââââââââââââââââââââââââ
 // Calls /api/opportunities. Shows total count + Top 5 most urgent (sorted by
 // due date asc, red <7d). Front and center so a GC opening /home immediately
 // sees what SAM.gov surfaced overnight. Click any row to open the bid jacket.
@@ -428,13 +430,13 @@ function BidOpportunitiesHero() {
       {/* Urgent list */}
       <div className="space-y-1" data-testid="bid-opps-urgent-list">
         {isLoading && (
-          <div className="text-sm text-zinc-500 px-3 py-4">Loading opportunities…</div>
+          <div className="text-sm text-zinc-500 px-3 py-4">Loading opportunitiesâ¦</div>
         )}
         {!isLoading && urgent.length === 0 && (
           <div className="text-sm text-zinc-500 px-3 py-4">
             No opportunities with upcoming deadlines.{" "}
             <button onClick={() => setLocation("/capture/opportunities")} className="text-sky-300 hover:underline">
-              Browse all {total} opportunities →
+              Browse all {total} opportunities â
             </button>
           </div>
         )}
@@ -455,7 +457,7 @@ function BidOpportunitiesHero() {
                 <div className="text-sm font-medium truncate text-white">{o.title || "(no title)"}</div>
                 <div className="text-xs text-zinc-500 truncate mt-0.5">
                   {o.agency || "Unknown agency"}
-                  {o.value ? ` · ${formatCurrency(o.value, true)}` : ""}
+                  {o.value ? ` Â· ${formatCurrency(o.value, true)}` : ""}
                 </div>
               </button>
               {o.setAside && (
@@ -513,7 +515,7 @@ function HerbieBriefBanner() {
       const bits: string[] = [];
       if (critical > 0) bits.push(`${critical} critical`);
       if (high > 0)     bits.push(`${high} high-priority`);
-      summary = `Herbie flagged ${urgent} urgent item${urgent !== 1 ? "s" : ""} — ${bits.join(", ")}.`;
+      summary = `Herbie flagged ${urgent} urgent item${urgent !== 1 ? "s" : ""} â ${bits.join(", ")}.`;
     } else {
       summary = "Everything's current. No urgent items flagged.";
     }
@@ -543,7 +545,7 @@ function HerbieBriefBanner() {
   );
 }
 
-// ── Project Health Board (NEW — replaces the projects table) ─────────────────
+// ââ Project Health Board (NEW â replaces the projects table) âââââââââââââââââ
 
 interface ProjectCardData {
   id: string;
@@ -553,7 +555,7 @@ interface ProjectCardData {
   status?: string;
   contractValue?: number;
   completionPercentage?: number;
-  riskScore?: number;             // 0–100; if absent we render "Unscored"
+  riskScore?: number;             // 0â100; if absent we render "Unscored"
   topIssue?: string;              // optional one-line "biggest problem" summary
   nextDeadlineLabel?: string;     // optional "Pay App #6 in 4 days"
 }
@@ -647,7 +649,7 @@ function ProjectHealthBoard() {
   );
 }
 
-// ── This Week (NEW) ──────────────────────────────────────────────────────────
+// ââ This Week (NEW) ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 // Calls /api/calendar/this-week. Renders 7 day cells; each cell lists up to 3
 // items. Empty days are dimmed, not hidden.
 
@@ -705,7 +707,7 @@ function ThisWeekStrip() {
             {isLoading ? (
               <div className="h-2.5 w-full bg-zinc-800 animate-pulse rounded" />
             ) : day.events.length === 0 ? (
-              <div className="text-[10px] text-zinc-700">—</div>
+              <div className="text-[10px] text-zinc-700">â</div>
             ) : (
               day.events.slice(0, 3).map((ev, i) => (
                 <div key={ev.id ?? i} className="text-[11px] text-zinc-300 leading-tight truncate" title={ev.label}>
@@ -723,7 +725,7 @@ function ThisWeekStrip() {
   );
 }
 
-// ── Recent Activity (collapsed by default, default closed) ───────────────────
+// ââ Recent Activity (collapsed by default, default closed) âââââââââââââââââââ
 
 function RecentActivity() {
   const [open, setOpen] = useState(false);
@@ -770,7 +772,7 @@ function RecentActivity() {
                   <span className="text-zinc-500">{ev.actor || ev.performedBy || "system"}</span>{" "}
                   {ev.eventType || ev.action || "activity"}
                   {ev.entityType ? ` on ${ev.entityType}` : ""}
-                  {ev.details || ev.description ? ` — ${ev.details || ev.description}` : ""}
+                  {ev.details || ev.description ? ` â ${ev.details || ev.description}` : ""}
                 </span>
               </div>
             ))
@@ -781,7 +783,7 @@ function RecentActivity() {
   );
 }
 
-// ── PAGE ─────────────────────────────────────────────────────────────────────
+// ââ PAGE âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 
 export default function HomeAssistant() {
   const [, setLocation] = useLocation();
@@ -807,96 +809,30 @@ export default function HomeAssistant() {
 
   return (
     <SafeArea sides={["top", "bottom"]} className="min-h-screen bg-black text-white" data-testid="home-page-safe">
-    <div className="p-6 space-y-8" data-testid="home-page">
-      {/* Greeting */}
-      <div className="flex items-baseline justify-between" data-testid="greeting-bar">
-        <h1 className="text-2xl font-semibold tracking-tight" data-testid="text-greeting">
-          {greetingText()}
-        </h1>
-        <span className="text-sm text-zinc-500 font-mono" data-testid="text-date">
-          {formatDate()}
-        </span>
-      </div>
-
-      {hasNoProjects ? (<HomeEmptyState />) : (<>
-      <NextActionHero />
-      <QuickActionsStrip />
-      <GettingStartedChecklist />
-      {/* Bid Opportunities (top-of-fold for GCs) */}
-      {/* Procore-style top stripe: project chip + my open items + smart takeoff */}
-      <div className="space-y-3">
+      <div className="space-y-4 p-3 md:p-4 max-w-7xl mx-auto">
         <ProjectChip />
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <MyOpenItems />
           <SmartTakeoffSpotlight />
         </div>
+        <BidOpportunitiesHero />
+        <EgnyteRecentDocs />
+        <a href="/voice-daily-log" data-testid="link-voice-daily-log" className="block">
+          <div className="flex items-center justify-between p-4 rounded-lg border border-emerald-500/20 bg-gradient-to-r from-emerald-500/[0.05] to-transparent hover-elevate cursor-pointer transition-all">
+            <div className="flex items-center gap-3">
+              <div className="h-10 w-10 rounded-lg bg-emerald-500/15 text-emerald-500 flex items-center justify-center ring-1 ring-emerald-500/30">
+                <Mic className="h-5 w-5" />
+              </div>
+              <div>
+                <p className="font-semibold text-sm">Voice Daily Log</p>
+                <p className="text-xs text-muted-foreground">Walk the site, just talk — Herbie structures it in 30 seconds.</p>
+              </div>
+            </div>
+            <span className="text-xs text-emerald-500 font-medium">Open →</span>
+          </div>
+        </a>
+        <RecentActivity />
       </div>
-            <BidOpportunitiesHero />
-
-      {/* Herbie's one-line brief */}
-      <HerbieBriefBanner />
-
-      {/* Action Required Today */}
-      <div>
-        <SectionHeader icon={ListChecks} title="Action Required Today" />
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4" data-testid="action-strip">
-          {ACTION_BOXES.map((box) => {
-            const Icon = box.icon;
-            const count = counts?.[box.countKey] ?? 0;
-            return (
-              <button
-                key={box.countKey}
-                onClick={() => setLocation(box.route)}
-                className={`text-left border border-white/10 bg-black/20 border-l-4 ${box.accentClass} p-4 hover:bg-white/5 transition-colors`}
-                data-testid={`action-box-${box.countKey}`}
-              >
-                <div className="flex items-center gap-2 mb-2">
-                  <Icon className="h-4 w-4 text-zinc-400" />
-                  <span className="text-xs text-zinc-400 uppercase tracking-wider">{box.label}</span>
-                </div>
-                <span className="text-3xl font-mono font-bold" data-testid={`count-${box.countKey}`}>
-                  {countsQuery.isLoading ? "--" : count}
-                </span>
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* Money This Week */}
-      <div>
-        <SectionHeader icon={DollarSign} title="Money This Week" />
-        <MoneyThisWeek />
-      </div>
-
-      {/* Project Health Board */}
-      <div>
-        <SectionHeader
-          icon={FolderGit2}
-          title="Project Health"
-          action={
-            <button
-              onClick={() => setLocation("/projects/active")}
-              className="text-xs text-zinc-400 hover:text-white flex items-center gap-1 transition-colors"
-              data-testid="link-view-all-projects"
-            >
-              View All <ChevronRight className="h-3 w-3" />
-            </button>
-          }
-        />
-        <ProjectHealthBoard />
-      </div>
-
-      {/* This Week */}
-      <div>
-        <SectionHeader icon={CalendarIcon} title="This Week" />
-        <ThisWeekStrip />
-      </div>
-
-      {/* Recent Activity — collapsed, default closed */}
-      <RecentActivity />
-    </>)}
-    </div>
     </SafeArea>
   );
 }
