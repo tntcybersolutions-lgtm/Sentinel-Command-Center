@@ -258,8 +258,114 @@ async function recordImportLog(opts: {
 }
 
 /**
+ * Fetch the LIVE opportunity record from api.sam.gov so we pick up every
+ * current resourceLink, link, additionalInfoLink, and related-notice link
+ * — not just what was cached in documentation_json at ingest time.
+ * Returns null if no API key or the call fails (caller falls back to local).
+ */
+async function fetchLiveOpportunity(noticeId: string): Promise<{
+  raw: any;
+  allUrls: string[];
+  relatedNotices: string[];
+} | null> {
+  const key = process.env.SAM_GOV_API_KEY;
+  if (!key) return null;
+  try {
+    const url = `${SAM_BASE}?api_key=${encodeURIComponent(key)}&noticeId=${encodeURIComponent(noticeId)}`;
+    const r = await fetch(url, {
+      headers: { Accept: "application/json", "User-Agent": "SentinelCommandCenter/1.0 (+bids@blackhawkconst.com)" },
+      signal: AbortSignal.timeout(30000),
+    });
+    if (!r.ok) {
+      console.warn(`[sam-importer] live fetch failed for ${noticeId}: HTTP ${r.status}`);
+      return null;
+    }
+    const data = await r.json();
+    const opp = data.opportunitiesData?.[0];
+    if (!opp) {
+      console.warn(`[sam-importer] live fetch returned no opportunitiesData for ${noticeId}`);
+      return null;
+    }
+    const seen = new Set<string>();
+    const urls: string[] = [];
+    const pushIfNew = (u?: string) => { if (u && !seen.has(u)) { seen.add(u); urls.push(u); } };
+
+    // 1. resourceLinks (the primary attachment list)
+    if (Array.isArray(opp.resourceLinks)) for (const u of opp.resourceLinks) pushIfNew(u);
+    // 2. opp.links[].href (alternate link container some notice types use)
+    if (Array.isArray(opp.links)) for (const l of opp.links) {
+      if (l && l.href && l.rel !== "self") pushIfNew(l.href);
+    }
+    // 3. additionalInfoLink (links to attachment portal page outside api)
+    if (opp.additionalInfoLink) pushIfNew(opp.additionalInfoLink);
+    // 4. description endpoint (so we always capture the body text/HTML)
+    pushIfNew(`https://api.sam.gov/opportunities/v1/noticedesc?noticeid=${encodeURIComponent(noticeId)}`);
+
+    const relatedNotices: string[] = [];
+    if (opp.relatedNotice) {
+      if (typeof opp.relatedNotice === "string") relatedNotices.push(opp.relatedNotice);
+      else if (Array.isArray(opp.relatedNotice)) relatedNotices.push(...opp.relatedNotice);
+    }
+    if (Array.isArray(opp.related_notices)) relatedNotices.push(...opp.related_notices);
+
+    return { raw: opp, allUrls: urls, relatedNotices };
+  } catch (e: any) {
+    console.warn(`[sam-importer] live fetch error for ${noticeId}:`, e?.message);
+    return null;
+  }
+}
+
+/**
+ * Save an in-memory buffer (JSON metadata or HTML snapshot) as a jacket
+ * doc. Used to persist the full opportunity payload and description.
+ */
+async function recordSyntheticDoc(opts: {
+  tenantId: string;
+  folderId: string;
+  bidProjectId: string;
+  fileName: string;
+  mimeType: string;
+  bytes: Buffer;
+  noticeId: string | null;
+  sourceLabel: string;
+}): Promise<{ ok: boolean; dup: boolean; bytes: number; error?: string }> {
+  const sha = sha256OfBytes(opts.bytes);
+  const dup = await alreadyImportedHash(opts.tenantId, opts.folderId, sha);
+  if (dup) return { ok: true, dup: true, bytes: opts.bytes.byteLength };
+  const storageKey = `jackets/${opts.bidProjectId}/sam-source/${sha.slice(0,12)}-${opts.fileName}`;
+  const upload = await objectStorage.uploadFromBytes(storageKey, opts.bytes);
+  if (!upload.ok) {
+    return { ok: false, dup: false, bytes: 0, error: `Object Storage upload failed: ${upload.error?.message || "unknown"}` };
+  }
+  await recordDocument({
+    tenantId: opts.tenantId,
+    folderId: opts.folderId,
+    bidProjectId: opts.bidProjectId,
+    fileName: opts.fileName,
+    mimeType: opts.mimeType,
+    bytes: opts.bytes,
+    storageKey,
+    sha256: sha,
+    sourceUrl: opts.sourceLabel,
+    noticeId: opts.noticeId,
+  });
+  return { ok: true, dup: false, bytes: opts.bytes.byteLength };
+}
+
+/**
  * Main entry point. Imports every document for the bid project's underlying
- * SAM.gov opportunity into the jacket. Idempotent.
+ * SAM.gov opportunity into the jacket — pulling the FULL bid opportunity:
+ *
+ *   1. Live-refreshes opportunity metadata from api.sam.gov (no longer
+ *      relies solely on locally cached documentationJson, so we never
+ *      miss attachments added after ingest).
+ *   2. Saves the full opportunity JSON as opportunity-{noticeId}.json
+ *      so the bid jacket has a permanent record of what SAM.gov showed.
+ *   3. Pulls description HTML, all resourceLinks, opp.links[], the
+ *      additionalInfoLink, and follows relatedNotice references to pull
+ *      amendment attachments too.
+ *
+ * Idempotent (SHA-256 dedup). One bad link does not abort the rest.
  */
 export async function importSamGovDocumentsForBidProject(bidProjectId: string): Promise<ImportResult> {
   const out: ImportResult = {
@@ -290,42 +396,95 @@ export async function importSamGovDocumentsForBidProject(bidProjectId: string): 
     return out;
   }
 
-  // Pull resourceLinks from documentation_json (sam-ingest stores the parsed payload there)
   const docJson: any = (opp as any).documentationJson || {};
-  const resourceLinks: string[] = Array.isArray(docJson.resourceLinks) ? docJson.resourceLinks : [];
-  const noticeId: string | null = docJson.noticeId || null;
+  const noticeId: string | null = docJson.noticeId || (opp as any).externalId || null;
 
-  // Also include the description endpoint as a synthetic doc URL.
-  // (api.sam.gov serves description as text/html; we save it as a .html.)
-  const descUrls: string[] = [];
+  // Build the canonical URL set:
+  //   start with whatever is cached locally (documentationJson),
+  //   then merge in everything the live SAM.gov record currently shows
+  //   (additional attachments, amendments).
+  const seenUrls = new Set<string>();
+  const allUrls: string[] = [];
+  const pushIfNew = (u?: string) => { if (u && !seenUrls.has(u)) { seenUrls.add(u); allUrls.push(u); } };
+
+  const cachedResource: string[] = Array.isArray(docJson.resourceLinks) ? docJson.resourceLinks : [];
+  for (const u of cachedResource) pushIfNew(u);
+
+  let liveRaw: any = null;
+  const relatedNoticeIds: string[] = [];
   if (noticeId) {
-    descUrls.push(`https://api.sam.gov/opportunities/v1/noticedesc?noticeid=${encodeURIComponent(noticeId)}`);
+    const live = await fetchLiveOpportunity(noticeId);
+    if (live) {
+      liveRaw = live.raw;
+      for (const u of live.allUrls) pushIfNew(u);
+      for (const rn of live.relatedNotices) if (rn && rn !== noticeId) relatedNoticeIds.push(rn);
+    } else {
+      // Fall back to local-only — still include the description endpoint.
+      pushIfNew(`https://api.sam.gov/opportunities/v1/noticedesc?noticeid=${encodeURIComponent(noticeId)}`);
+    }
   }
 
-  const allUrls = Array.from(new Set([...resourceLinks, ...descUrls]));
-  out.filesAttempted = allUrls.length;
-
-  if (allUrls.length === 0) {
-    out.ok = true; // nothing to import is success
-    return out;
+  // Pull each related notice (amendments) so their attachments come in too.
+  for (const rn of relatedNoticeIds) {
+    const live = await fetchLiveOpportunity(rn);
+    if (!live) continue;
+    for (const u of live.allUrls) pushIfNew(u);
   }
 
   const folderId = await ensureSamSourceFolder(project.tenantId, bidProjectId);
   const ctx = { tenantId: project.tenantId, folderId, bidProjectId, noticeId };
 
-  const results = await processInPool(allUrls, MAX_PARALLEL, url => downloadOne(url, ctx));
-  for (const r of results) {
-    if (r.ok) {
-      if ((r as any).dup) out.filesSkippedDuplicate++;
-      else {
-        out.filesImported++;
-        out.bytesImported += (r as any).bytes || 0;
+  // 1. Save the full live opportunity JSON as a doc (permanent snapshot).
+  if (liveRaw) {
+    const jsonBytes = Buffer.from(JSON.stringify(liveRaw, null, 2), "utf-8");
+    const jsonName = `opportunity-${noticeId || "unknown"}.json`;
+    out.filesAttempted++;
+    const r = await recordSyntheticDoc({
+      tenantId: project.tenantId, folderId, bidProjectId,
+      fileName: jsonName, mimeType: "application/json",
+      bytes: jsonBytes, noticeId, sourceLabel: "sam.gov:live-opportunity-payload",
+    });
+    if (r.ok) { if (r.dup) out.filesSkippedDuplicate++; else { out.filesImported++; out.bytesImported += r.bytes; } }
+    else out.errors.push({ url: jsonName, reason: r.error || "unknown" });
+  }
+
+  // 2. Save the description body text from opp.description (if present)
+  //    as a separate HTML file — easier to read than the JSON.
+  if (liveRaw && typeof liveRaw.description === "string" && liveRaw.description.length > 0) {
+    const html = `<!doctype html><meta charset="utf-8"><title>SAM.gov ${noticeId || ""} — Description</title><body>${liveRaw.description}</body>`;
+    const descBytes = Buffer.from(html, "utf-8");
+    const descName = `opportunity-${noticeId || "unknown"}-description.html`;
+    out.filesAttempted++;
+    const r = await recordSyntheticDoc({
+      tenantId: project.tenantId, folderId, bidProjectId,
+      fileName: descName, mimeType: "text/html",
+      bytes: descBytes, noticeId, sourceLabel: "sam.gov:opp.description",
+    });
+    if (r.ok) { if (r.dup) out.filesSkippedDuplicate++; else { out.filesImported++; out.bytesImported += r.bytes; } }
+    else out.errors.push({ url: descName, reason: r.error || "unknown" });
+  }
+
+  // 3. Pull every URL we collected (resourceLinks + links + amendments +
+  //    description endpoint). Pool the downloads.
+  out.filesAttempted += allUrls.length;
+  if (allUrls.length > 0) {
+    const results = await processInPool(allUrls, MAX_PARALLEL, url => downloadOne(url, ctx));
+    for (const r of results) {
+      if (r.ok) {
+        if ((r as any).dup) out.filesSkippedDuplicate++;
+        else {
+          out.filesImported++;
+          out.bytesImported += (r as any).bytes || 0;
+        }
+      } else {
+        out.errors.push({ url: r.url, reason: (r as any).reason || "unknown" });
       }
-    } else {
-      out.errors.push({ url: r.url, reason: (r as any).reason || "unknown" });
     }
   }
-  out.ok = out.errors.length < allUrls.length;
+
+  out.ok = out.filesAttempted === 0 || out.errors.length < out.filesAttempted;
+  console.log(`[sam-importer] bid=${bidProjectId} notice=${noticeId} attempted=${out.filesAttempted} imported=${out.filesImported} dup=${out.filesSkippedDuplicate} errors=${out.errors.length}`);
+
   await recordImportLog({
     tenantId: project.tenantId,
     bidProjectId,

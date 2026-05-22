@@ -6,6 +6,44 @@ import { initTheme } from "./lib/theme";
 
 console.log("[CLIENT_DEPLOY_MARKER] LIENWAIVERS_v2 " + new Date().toISOString());
 
+// =====================================================================
+// Stale-chunk auto-recovery. Vite emits hashed chunk filenames; after a
+// redeploy the old hashes 404. Without this handler the user sees a
+// blank screen and a console error like "Failed to fetch dynamically
+// imported module". We catch that case and force a fresh page load so
+// the new index.html (with new chunk hashes) is fetched.
+// We guard against reload-loops with a one-shot sessionStorage flag.
+// =====================================================================
+function isChunkLoadError(err: any): boolean {
+  if (!err) return false;
+  const msg = String(err?.message || err?.reason?.message || err || "");
+  return /Failed to fetch dynamically imported module|Loading chunk \d+ failed|ChunkLoadError|Importing a module script failed/i.test(msg);
+}
+function recoverFromChunkError(label: string) {
+  const flag = "__sentinel_chunk_reload__";
+  if (sessionStorage.getItem(flag)) {
+    console.warn("[chunk-recover] already reloaded once; not looping. Source:", label);
+    sessionStorage.removeItem(flag);
+    return;
+  }
+  sessionStorage.setItem(flag, String(Date.now()));
+  console.warn("[chunk-recover] stale bundle detected (" + label + "), reloading…");
+  // Bust caches by adding a one-time query param
+  const url = new URL(window.location.href);
+  url.searchParams.set("_r", String(Date.now()).slice(-6));
+  window.location.replace(url.toString());
+}
+window.addEventListener("error", (ev) => {
+  if (isChunkLoadError(ev.error || ev.message)) recoverFromChunkError("window.error");
+});
+window.addEventListener("unhandledrejection", (ev) => {
+  if (isChunkLoadError(ev.reason)) recoverFromChunkError("unhandledrejection");
+});
+// Clear the one-shot flag once boot succeeds — so subsequent stale chunks
+// during the same session can still trigger one more recovery.
+setTimeout(() => { try { sessionStorage.removeItem("__sentinel_chunk_reload__"); } catch {} }, 5000);
+
+
 // Boot diagnostics
 declare global {
   interface Window {
