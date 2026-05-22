@@ -30,7 +30,7 @@ import { randomUUID } from "crypto";
 
 const objectStorage = new ObjectStorageClient();
 
-const SAM_BASE = process.env.SAM_API_BASE || "https://api.sam.gov/opportunities/v2/search";
+const SAM_BASE = process.env.SAM_API_BASE || "https://api.sam.gov/prod/opportunities/v2/search";
 
 const MAX_PARALLEL = 3;
 const MAX_BYTES_PER_FILE = 250 * 1024 * 1024; // 250 MB hard cap
@@ -299,7 +299,7 @@ async function fetchLiveOpportunity(noticeId: string): Promise<{
     // 3. additionalInfoLink (links to attachment portal page outside api)
     if (opp.additionalInfoLink) pushIfNew(opp.additionalInfoLink);
     // 4. description endpoint (so we always capture the body text/HTML)
-    pushIfNew(`https://api.sam.gov/opportunities/v1/noticedesc?noticeid=${encodeURIComponent(noticeId)}`);
+    pushIfNew(`https://api.sam.gov/prod/opportunities/v1/noticedesc?noticeid=${encodeURIComponent(noticeId)}`);
 
     const relatedNotices: string[] = [];
     if (opp.relatedNotice) {
@@ -420,7 +420,7 @@ export async function importSamGovDocumentsForBidProject(bidProjectId: string): 
       for (const rn of live.relatedNotices) if (rn && rn !== noticeId) relatedNoticeIds.push(rn);
     } else {
       // Fall back to local-only — still include the description endpoint.
-      pushIfNew(`https://api.sam.gov/opportunities/v1/noticedesc?noticeid=${encodeURIComponent(noticeId)}`);
+      pushIfNew(`https://api.sam.gov/prod/opportunities/v1/noticedesc?noticeid=${encodeURIComponent(noticeId)}`);
     }
   }
 

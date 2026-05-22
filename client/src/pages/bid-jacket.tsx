@@ -1931,19 +1931,25 @@ export default function BidJacket() {
   });
 
   const generateBinderMutation = useMutation({
-    mutationFn: (opts: { includeMergedPdf: boolean; includeZip: boolean; watermark: boolean; includeLegacyFolders: boolean }) =>
-      apiRequest("POST", `/api/bids/${bidId}/binder`, opts),
-    onSuccess: async (response: any) => {
-      const data = typeof response === "object" ? response : await response.json?.() || response;
+    mutationFn: async (opts: { includeMergedPdf: boolean; includeZip: boolean; watermark: boolean; includeLegacyFolders: boolean }) => {
+      const res = await apiRequest("POST", `/api/bids/${bidId}/binder`, opts);
+      // apiRequest returns a raw Response; parse JSON ourselves so callers
+      // actually see { jobId, status }.
+      try { return await res.json(); } catch { return null; }
+    },
+    onSuccess: (data: any) => {
       const jobId = data?.jobId;
       if (jobId) {
         setBinderJobId(jobId);
-        setBinderJobStatus({ status: "queued", progress: 0 });
+        setBinderJobStatus({ status: data?.status || "queued", progress: 0 });
         setActiveTab("binder");
+        toast({ title: "Binder generation started", description: "Building your bid binder — switching to Binder tab to watch progress." });
+      } else {
+        toast({ title: "Binder job didn\u2019t start", description: "Server accepted the request but didn\u2019t return a job ID. Check the server logs.", variant: "destructive" });
       }
     },
-    onError: () => {
-      toast({ title: "Binder Generation Failed", description: "Could not start the bid binder job.", variant: "destructive" });
+    onError: (e: any) => {
+      toast({ title: "Binder Generation Failed", description: e?.message || "Could not start the bid binder job.", variant: "destructive" });
     },
   });
 

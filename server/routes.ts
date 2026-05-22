@@ -4522,7 +4522,7 @@ export async function registerRoutes(
       if (resourceLinks.length === 0 && !descriptionUrl && noticeId && process.env.SAM_GOV_API_KEY) {
         try {
           const fetchOpp = async (nid: string): Promise<any | null> => {
-            const u = `https://api.sam.gov/opportunities/v2/search?api_key=${encodeURIComponent(process.env.SAM_GOV_API_KEY!)}&noticeId=${encodeURIComponent(nid)}`;
+            const u = `https://api.sam.gov/prod/opportunities/v2/search?api_key=${encodeURIComponent(process.env.SAM_GOV_API_KEY!)}&noticeId=${encodeURIComponent(nid)}`;
             const r = await fetch(u, { headers: { Accept: "application/json", "User-Agent": "SentinelCommandCenter/1.0" }, signal: AbortSignal.timeout(30000) });
             if (!r.ok) { console.warn(`[sync-sam] live fetch ${nid} HTTP ${r.status}`); return null; }
             const data = await r.json();
@@ -4533,7 +4533,7 @@ export async function registerRoutes(
           if (liveFetchedPayload) {
             collectFromPayload(liveFetchedPayload);
             // Pull the noticedesc endpoint too (description body) as a synthetic doc.
-            const descEndpoint = `https://api.sam.gov/opportunities/v1/noticedesc?noticeid=${encodeURIComponent(noticeId)}&api_key=${encodeURIComponent(process.env.SAM_GOV_API_KEY)}`;
+            const descEndpoint = `https://api.sam.gov/prod/opportunities/v1/noticedesc?noticeid=${encodeURIComponent(noticeId)}&api_key=${encodeURIComponent(process.env.SAM_GOV_API_KEY)}`;
             if (!resourceLinks.includes(descEndpoint)) resourceLinks.push(descEndpoint);
 
             // Walk amendments (relatedNotice) so we capture them too.
@@ -4643,7 +4643,7 @@ export async function registerRoutes(
     if (needsLiveFetch && noticeId && process.env.SAM_GOV_API_KEY) {
       try {
         const fetchOpp = async (nid: string): Promise<any | null> => {
-          const u = `https://api.sam.gov/opportunities/v2/search?api_key=${encodeURIComponent(process.env.SAM_GOV_API_KEY!)}&noticeId=${encodeURIComponent(nid)}`;
+          const u = `https://api.sam.gov/prod/opportunities/v2/search?api_key=${encodeURIComponent(process.env.SAM_GOV_API_KEY!)}&noticeId=${encodeURIComponent(nid)}`;
           const r = await fetch(u, { headers: { Accept: "application/json", "User-Agent": "SentinelCommandCenter/1.0" }, signal: AbortSignal.timeout(30000) });
           if (!r.ok) return null;
           const data = await r.json();
@@ -4663,7 +4663,7 @@ export async function registerRoutes(
             if (amPayload) collect(amPayload, docMap);
           }
           // Add the description endpoint as a synthetic doc.
-          const descUrl = `https://api.sam.gov/opportunities/v1/noticedesc?noticeid=${encodeURIComponent(noticeId)}&api_key=${encodeURIComponent(process.env.SAM_GOV_API_KEY)}`;
+          const descUrl = `https://api.sam.gov/prod/opportunities/v1/noticedesc?noticeid=${encodeURIComponent(noticeId)}&api_key=${encodeURIComponent(process.env.SAM_GOV_API_KEY)}`;
           if (!docMap.has(descUrl)) docMap.set(descUrl, { name: "Opportunity Description (HTML)", source: "noticedesc" });
           // Persist back to rawPayloadJson so future GETs are fast.
           rawPayload = { ...(rawPayload || {}), ...live, noticeId, refreshedAt: new Date().toISOString() };
