@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRoute, Link } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -42,6 +42,11 @@ import {
   Zap,
   ThumbsUp,
   ThumbsDown,
+  Paperclip,
+  RefreshCw,
+  ExternalLink,
+  Download,
+  FolderOpen,
 } from "lucide-react";
 
 interface PipelineItem {
@@ -82,7 +87,7 @@ interface OpportunityFallback {
 interface SummaryResult {
   executiveSummary: string;
   keyRequirements: string[];
-  criticalDates: string[];
+  criticalDates: ({ label: string; date: string } | string)[];
   competitiveFactors: string[];
   riskAssessment: string;
   recommendedAction: string;
@@ -658,6 +663,10 @@ export default function CaptureDetail() {
             <ListChecks className="h-4 w-4 mr-1.5" />
             Reqs
           </TabsTrigger>
+          <TabsTrigger value="documents" data-testid="tab-documents">
+            <Paperclip className="h-4 w-4 mr-1.5" />
+            Docs
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="overview" className="mt-4 space-y-4">
@@ -825,7 +834,7 @@ export default function CaptureDetail() {
                       {summaryResult.keyRequirements.map((req, i) => (
                         <li key={i} className="flex items-start gap-2 text-sm text-muted-foreground">
                           <CheckCircle2 className="h-3 w-3 mt-1 shrink-0 text-primary/60" />
-                          <span>{req}</span>
+                          <span>{typeof req === 'string' ? req : JSON.stringify(req)}</span>
                         </li>
                       ))}
                     </ul>
@@ -839,9 +848,16 @@ export default function CaptureDetail() {
                       Critical Dates
                     </p>
                     <ul className="space-y-1">
-                      {summaryResult.criticalDates.map((date, i) => (
-                        <li key={i} className="text-sm text-muted-foreground">{date}</li>
-                      ))}
+                      {summaryResult.criticalDates.map((d, i) => {
+                        const label = typeof d === "string" ? null : (d as any).label;
+                        const date = typeof d === "string" ? d : (d as any).date;
+                        return (
+                          <li key={i} className="text-sm text-muted-foreground">
+                            {label && <span className="font-medium text-foreground">{label}: </span>}
+                            <span>{date}</span>
+                          </li>
+                        );
+                      })}
                     </ul>
                   </div>
                 )}
@@ -851,7 +867,7 @@ export default function CaptureDetail() {
                     <p className="text-sm font-medium">Competitive Factors</p>
                     <ul className="space-y-1">
                       {summaryResult.competitiveFactors.map((factor, i) => (
-                        <li key={i} className="text-sm text-muted-foreground">{factor}</li>
+                        <li key={i} className="text-sm text-muted-foreground">{typeof factor === 'string' ? factor : JSON.stringify(factor)}</li>
                       ))}
                     </ul>
                   </div>
@@ -1433,7 +1449,109 @@ export default function CaptureDetail() {
             </Card>
           )}
         </TabsContent>
+
+        <TabsContent value="documents" className="mt-4 space-y-4">
+          <DocumentsTab opportunityId={id!} opportunity={opportunity} />
+        </TabsContent>
       </Tabs>
+    </div>
+  );
+}
+
+// ============================================================================
+// DocumentsTab — SAM.gov documents for this opportunity, with live-fetch.
+// ============================================================================
+interface SamDoc { url: string; name: string; source: string; sizeBytes?: number; mime?: string; }
+interface SamDocsResponse { ok: boolean; noticeId: string | null; cached: boolean; fetchedAt?: string; documents: SamDoc[]; descriptionHtml?: string; rawTitle?: string; agency?: string; error?: string; }
+
+function DocumentsTab({ opportunityId, opportunity }: { opportunityId: string; opportunity: any }) {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const { data, isLoading, isError, refetch } = useQuery<SamDocsResponse>({
+    queryKey: [`/api/opportunities/${opportunityId}/sam-documents`],
+    queryFn: async () => { const r = await fetch(`/api/opportunities/${opportunityId}/sam-documents`); if (!r.ok) throw new Error("Failed to load docs"); return r.json(); },
+    staleTime: 60_000,
+  });
+
+  const syncMutation = useMutation({
+    mutationFn: async () => {
+      const r = await apiRequest("POST", `/api/opportunities/${opportunityId}/sync-sam-documents`);
+      return r.json();
+    },
+    onSuccess: (d: any) => {
+      queryClient.invalidateQueries({ queryKey: [`/api/opportunities/${opportunityId}/sam-documents`] });
+      const found = d?.documents?.length ?? 0;
+      toast({ title: `SAM.gov sync: ${found} document${found === 1 ? "" : "s"}`, description: d?.message });
+    },
+    onError: (e: any) => toast({ title: "Sync failed", description: e?.message ?? "Server error", variant: "destructive" }),
+  });
+
+  const docs = data?.documents ?? [];
+  const noticeId = data?.noticeId ?? opportunity?.externalId ?? null;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div>
+          <h3 className="text-base font-semibold flex items-center gap-2"><Paperclip className="h-4 w-4" />SAM.gov Source Documents</h3>
+          <p className="text-xs text-muted-foreground">All attachments, the description body, and amendments — live from SAM.gov.</p>
+        </div>
+        <div className="flex items-center gap-2">
+          {noticeId && <a href={`https://sam.gov/opp/${noticeId}`} target="_blank" rel="noreferrer" className="text-xs text-blue-400 hover:underline flex items-center gap-1"><ExternalLink className="h-3 w-3" />Open on SAM.gov</a>}
+          <Button size="sm" variant="outline" onClick={() => refetch()} disabled={isLoading} className="gap-1"><RefreshCw className="h-3 w-3" />Reload</Button>
+          <Button size="sm" onClick={() => syncMutation.mutate()} disabled={syncMutation.isPending} className="gap-1" data-testid="btn-sync-sam-docs">{syncMutation.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Download className="h-3 w-3" />}{syncMutation.isPending ? "Pulling from SAM.gov..." : "Pull from SAM.gov"}</Button>
+        </div>
+      </div>
+
+      {noticeId && (
+        <div className="text-xs text-muted-foreground flex items-center gap-3 flex-wrap">
+          <span><strong className="text-foreground">Notice ID:</strong> <code className="font-mono">{noticeId}</code></span>
+          {data?.fetchedAt && <span><strong className="text-foreground">Last fetched:</strong> {new Date(data.fetchedAt).toLocaleString()}</span>}
+          {data?.cached && <Badge variant="outline" className="text-[10px]">cached</Badge>}
+        </div>
+      )}
+
+      {isLoading && <Card><CardContent className="py-8 text-center text-sm text-muted-foreground">Loading documents…</CardContent></Card>}
+      {isError && <Card><CardContent className="py-8 text-center text-sm"><p className="text-red-400 mb-2">Failed to load documents</p><Button size="sm" variant="outline" onClick={() => refetch()}>Retry</Button></CardContent></Card>}
+
+      {!isLoading && !isError && docs.length === 0 && (
+        <Card>
+          <CardContent className="py-10 text-center space-y-3">
+            <FolderOpen className="h-10 w-10 text-muted-foreground mx-auto" />
+            <p className="text-sm text-muted-foreground">{data?.error || "No SAM.gov documents have been pulled for this opportunity yet."}</p>
+            <p className="text-xs text-muted-foreground">Click <strong>Pull from SAM.gov</strong> above to fetch the full opportunity package (attachments, description, amendments).</p>
+            {!noticeId && <p className="text-xs text-amber-400">This opportunity has no noticeId — it may have been ingested from a non-SAM source.</p>}
+          </CardContent>
+        </Card>
+      )}
+
+      {docs.length > 0 && (
+        <Card>
+          <CardHeader className="py-2 px-4 border-b border-white/10"><CardTitle className="text-xs font-medium text-muted-foreground grid grid-cols-12 gap-3"><span className="col-span-7">File</span><span className="col-span-2">Source</span><span className="col-span-2 text-right">Size</span><span className="col-span-1 text-right">Open</span></CardTitle></CardHeader>
+          <CardContent className="p-0">
+            {docs.map((d, i) => (
+              <div key={i} className="grid grid-cols-12 gap-3 px-4 py-2.5 border-b last:border-b-0 border-white/10 text-sm items-center hover:bg-white/[0.02]">
+                <div className="col-span-7 flex items-center gap-2 min-w-0">
+                  <Paperclip className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                  <span className="truncate" title={d.name}>{d.name}</span>
+                </div>
+                <div className="col-span-2 text-xs"><Badge variant="outline" className="text-[10px]">{d.source}</Badge></div>
+                <div className="col-span-2 text-xs text-right font-mono text-muted-foreground">{d.sizeBytes ? `${(d.sizeBytes/1024).toFixed(1)} KB` : "—"}</div>
+                <div className="col-span-1 flex justify-end"><a href={d.url} target="_blank" rel="noreferrer" className="text-blue-400 hover:text-blue-300" title="Open"><ExternalLink className="h-3.5 w-3.5" /></a></div>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+
+      {data?.descriptionHtml && (
+        <Card>
+          <CardHeader><CardTitle className="text-sm flex items-center gap-1.5"><FileText className="h-4 w-4" />Opportunity Description</CardTitle></CardHeader>
+          <CardContent>
+            <div className="prose prose-sm prose-invert max-w-none text-sm" dangerouslySetInnerHTML={{ __html: data.descriptionHtml }} />
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }

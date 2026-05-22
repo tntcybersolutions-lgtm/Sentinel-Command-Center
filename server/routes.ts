@@ -4489,26 +4489,94 @@ export async function registerRoutes(
       const [opp] = await db.select().from(opportunities).where(eq(opportunities.id, oppId)).limit(1);
       if (!opp) return res.json({ inserted: 0, updated: 0, total: 0, message: "Opportunity not found" });
 
+      // 1) Try cached rawPayloadJson first (fast path).
       const resourceLinks: string[] = [];
       let descriptionUrl: string | undefined;
-      const rawPayload = (opp as any).rawPayloadJson as any;
-      if (rawPayload) {
-        if (Array.isArray(rawPayload.resourceLinks)) {
-          for (const rl of rawPayload.resourceLinks) {
+      let rawPayload = (opp as any).rawPayloadJson as any;
+      const collectFromPayload = (payload: any) => {
+        if (!payload) return;
+        if (Array.isArray(payload.resourceLinks)) {
+          for (const rl of payload.resourceLinks) {
             if (typeof rl === "string") resourceLinks.push(rl);
             else if (rl?.url) resourceLinks.push(rl.url);
           }
         }
-        if (rawPayload.descriptionUrl) descriptionUrl = rawPayload.descriptionUrl;
-        if (rawPayload.description?.url) descriptionUrl = rawPayload.description.url;
+        if (Array.isArray(payload.links)) {
+          for (const l of payload.links) {
+            if (l && l.href && l.rel !== "self") resourceLinks.push(l.href);
+          }
+        }
+        if (payload.additionalInfoLink) resourceLinks.push(payload.additionalInfoLink);
+        if (payload.descriptionUrl) descriptionUrl = payload.descriptionUrl;
+        if (payload.description?.url) descriptionUrl = payload.description.url;
+      };
+      collectFromPayload(rawPayload);
+
+      // 2) If empty, live-fetch from api.sam.gov using the externalId/noticeId.
+      //    This is the fix for opportunities ingested before rawPayloadJson
+      //    was being captured fully — without this we report "No SAM.gov
+      //    attachments found" forever even when SAM has plenty.
+      const noticeId = (opp as any).externalId || (rawPayload && rawPayload.noticeId) || null;
+      let liveFetchedPayload: any = null;
+      let amendmentNoticeIds: string[] = [];
+      if (resourceLinks.length === 0 && !descriptionUrl && noticeId && process.env.SAM_GOV_API_KEY) {
+        try {
+          const fetchOpp = async (nid: string): Promise<any | null> => {
+            const u = `https://api.sam.gov/opportunities/v2/search?api_key=${encodeURIComponent(process.env.SAM_GOV_API_KEY!)}&noticeId=${encodeURIComponent(nid)}`;
+            const r = await fetch(u, { headers: { Accept: "application/json", "User-Agent": "SentinelCommandCenter/1.0" }, signal: AbortSignal.timeout(30000) });
+            if (!r.ok) { console.warn(`[sync-sam] live fetch ${nid} HTTP ${r.status}`); return null; }
+            const data = await r.json();
+            return data.opportunitiesData?.[0] || null;
+          };
+
+          liveFetchedPayload = await fetchOpp(noticeId);
+          if (liveFetchedPayload) {
+            collectFromPayload(liveFetchedPayload);
+            // Pull the noticedesc endpoint too (description body) as a synthetic doc.
+            const descEndpoint = `https://api.sam.gov/opportunities/v1/noticedesc?noticeid=${encodeURIComponent(noticeId)}&api_key=${encodeURIComponent(process.env.SAM_GOV_API_KEY)}`;
+            if (!resourceLinks.includes(descEndpoint)) resourceLinks.push(descEndpoint);
+
+            // Walk amendments (relatedNotice) so we capture them too.
+            if (liveFetchedPayload.relatedNotice) {
+              if (typeof liveFetchedPayload.relatedNotice === "string") amendmentNoticeIds.push(liveFetchedPayload.relatedNotice);
+              else if (Array.isArray(liveFetchedPayload.relatedNotice)) amendmentNoticeIds.push(...liveFetchedPayload.relatedNotice);
+            }
+            for (const amNid of amendmentNoticeIds) {
+              if (!amNid || amNid === noticeId) continue;
+              const amPayload = await fetchOpp(amNid);
+              if (amPayload) collectFromPayload(amPayload);
+            }
+
+            // Cache the live payload back onto opportunities.rawPayloadJson so
+            // subsequent calls hit the fast path.
+            try {
+              const cached = { ...(rawPayload || {}), ...liveFetchedPayload, noticeId, refreshedAt: new Date().toISOString() };
+              await db.update(opportunities)
+                .set({ rawPayloadJson: cached, updatedAt: new Date() } as any)
+                .where(eq(opportunities.id, oppId));
+            } catch (e: any) {
+              console.warn(`[sync-sam] failed to cache rawPayloadJson: ${e?.message}`);
+            }
+          }
+        } catch (e: any) {
+          console.error(`[sync-sam] live fetch error for ${noticeId}: ${e?.message}`);
+        }
       }
 
       if (resourceLinks.length === 0 && !descriptionUrl) {
-        return res.json({ inserted: 0, updated: 0, total: 0, message: "No SAM.gov attachments found on linked opportunity" });
+        const reason = !process.env.SAM_GOV_API_KEY
+          ? "SAM_GOV_API_KEY not set — set it in Replit Secrets and retry"
+          : !noticeId
+            ? "Opportunity has no SAM.gov noticeId/externalId — cannot live-fetch"
+            : "No SAM.gov attachments found (live fetch returned 0 documents — opp may genuinely have none, or notice was withdrawn)";
+        return res.json({ inserted: 0, updated: 0, total: 0, message: reason });
       }
 
+      // Dedupe before insert.
+      const uniqueLinks = Array.from(new Set(resourceLinks));
+
       const { ingestSamAttachments } = await import("./services/bid-jacket-artifacts.service");
-      const count = await ingestSamAttachments(DEFAULT_TENANT_ID, bidProjectId, resourceLinks, descriptionUrl);
+      const count = await ingestSamAttachments(DEFAULT_TENANT_ID, bidProjectId, uniqueLinks, descriptionUrl);
 
       const totalResult = await db.execute(sql`
         SELECT count(*)::int as total FROM bid_jacket_artifacts
@@ -4516,12 +4584,139 @@ export async function registerRoutes(
       `);
       const total = (totalResult.rows[0] as any)?.total ?? 0;
 
-      res.json({ inserted: count, total });
+      console.log(`[sync-sam] bid=${bidProjectId} notice=${noticeId} liveFetch=${liveFetchedPayload ? "yes" : "no"} amendments=${amendmentNoticeIds.length} links=${uniqueLinks.length} inserted=${count} total=${total}`);
+      res.json({ inserted: count, total, liveFetched: !!liveFetchedPayload, amendments: amendmentNoticeIds.length });
     } catch (error) {
       console.error("Error syncing SAM artifacts:", error);
       res.status(500).json({ error: "Failed to sync SAM artifacts" });
     }
   });
+
+  // ========================================================================
+  // Opportunity-level SAM documents API. The capture-detail page calls these.
+  //   GET  /api/opportunities/:id/sam-documents     -> cached list
+  //   POST /api/opportunities/:id/sync-sam-documents -> live refresh
+  // Both pull from cached rawPayloadJson + live api.sam.gov as needed.
+  // ========================================================================
+  async function buildSamDocsFromOpportunity(opportunityId: string, forceRefresh: boolean): Promise<{
+    ok: boolean;
+    noticeId: string | null;
+    cached: boolean;
+    fetchedAt?: string;
+    documents: { url: string; name: string; source: string; sizeBytes?: number; mime?: string }[];
+    descriptionHtml?: string;
+    rawTitle?: string;
+    agency?: string;
+    error?: string;
+  }> {
+    const [opp] = await db.select().from(opportunities).where(eq(opportunities.id, opportunityId)).limit(1);
+    if (!opp) return { ok: false, noticeId: null, cached: false, documents: [], error: "Opportunity not found" };
+
+    const noticeId: string | null = (opp as any).externalId || ((opp as any).rawPayloadJson?.noticeId) || null;
+    let rawPayload: any = (opp as any).rawPayloadJson || null;
+    let didFetch = false;
+
+    const collect = (payload: any, into: Map<string, { name: string; source: string }>) => {
+      if (!payload) return;
+      const push = (url: string, name: string, source: string) => {
+        if (!url) return;
+        if (!into.has(url)) into.set(url, { name: name || (url.split("/").pop() || "document"), source });
+      };
+      if (Array.isArray(payload.resourceLinks)) {
+        for (const rl of payload.resourceLinks) {
+          if (typeof rl === "string") push(rl, decodeURIComponent(rl.split("/").pop() || rl), "resourceLinks");
+          else if (rl?.url) push(rl.url, rl.name || rl.title || rl.url.split("/").pop() || rl.url, rl.source || "resourceLinks");
+        }
+      }
+      if (Array.isArray(payload.links)) {
+        for (const l of payload.links) {
+          if (l && l.href && l.rel !== "self") push(l.href, l.rel || (l.href.split("/").pop() || "linked"), "links");
+        }
+      }
+      if (payload.additionalInfoLink) push(payload.additionalInfoLink, "Additional Information", "additionalInfoLink");
+    };
+
+    const docMap = new Map<string, { name: string; source: string }>();
+    collect(rawPayload, docMap);
+
+    const needsLiveFetch = forceRefresh || docMap.size === 0;
+    if (needsLiveFetch && noticeId && process.env.SAM_GOV_API_KEY) {
+      try {
+        const fetchOpp = async (nid: string): Promise<any | null> => {
+          const u = `https://api.sam.gov/opportunities/v2/search?api_key=${encodeURIComponent(process.env.SAM_GOV_API_KEY!)}&noticeId=${encodeURIComponent(nid)}`;
+          const r = await fetch(u, { headers: { Accept: "application/json", "User-Agent": "SentinelCommandCenter/1.0" }, signal: AbortSignal.timeout(30000) });
+          if (!r.ok) return null;
+          const data = await r.json();
+          return data.opportunitiesData?.[0] || null;
+        };
+        const live = await fetchOpp(noticeId);
+        if (live) {
+          didFetch = true;
+          collect(live, docMap);
+          // Amendments via relatedNotice
+          const amendmentIds: string[] = [];
+          if (typeof live.relatedNotice === "string") amendmentIds.push(live.relatedNotice);
+          else if (Array.isArray(live.relatedNotice)) amendmentIds.push(...live.relatedNotice);
+          for (const amNid of amendmentIds) {
+            if (!amNid || amNid === noticeId) continue;
+            const amPayload = await fetchOpp(amNid);
+            if (amPayload) collect(amPayload, docMap);
+          }
+          // Add the description endpoint as a synthetic doc.
+          const descUrl = `https://api.sam.gov/opportunities/v1/noticedesc?noticeid=${encodeURIComponent(noticeId)}&api_key=${encodeURIComponent(process.env.SAM_GOV_API_KEY)}`;
+          if (!docMap.has(descUrl)) docMap.set(descUrl, { name: "Opportunity Description (HTML)", source: "noticedesc" });
+          // Persist back to rawPayloadJson so future GETs are fast.
+          rawPayload = { ...(rawPayload || {}), ...live, noticeId, refreshedAt: new Date().toISOString() };
+          await db.update(opportunities).set({ rawPayloadJson: rawPayload, updatedAt: new Date() } as any).where(eq(opportunities.id, opportunityId));
+        }
+      } catch (e: any) {
+        console.warn(`[opp-sam-docs] live fetch error for ${noticeId}: ${e?.message}`);
+      }
+    }
+
+    // If we still have zero docs AND no API key, surface that helpfully.
+    if (docMap.size === 0 && !process.env.SAM_GOV_API_KEY) {
+      return { ok: false, noticeId, cached: !!rawPayload, documents: [], error: "SAM_GOV_API_KEY not set in Replit Secrets — cannot live-fetch attachments." };
+    }
+    if (docMap.size === 0 && !noticeId) {
+      return { ok: false, noticeId: null, cached: !!rawPayload, documents: [], error: "This opportunity has no SAM.gov noticeId — likely ingested from another source." };
+    }
+
+    const documents = Array.from(docMap.entries()).map(([url, v]) => ({ url, name: v.name, source: v.source }));
+    const descriptionHtml: string | undefined = typeof rawPayload?.description === "string" ? rawPayload.description : undefined;
+
+    return {
+      ok: true,
+      noticeId,
+      cached: !didFetch && !!rawPayload,
+      fetchedAt: rawPayload?.refreshedAt || (opp as any).updatedAt?.toISOString?.() || undefined,
+      documents,
+      descriptionHtml,
+      rawTitle: rawPayload?.title,
+      agency: rawPayload?.fullParentPathName || rawPayload?.organizationName,
+    };
+  }
+
+  app.get("/api/opportunities/:id/sam-documents", async (req: Request, res: Response) => {
+    try {
+      const result = await buildSamDocsFromOpportunity(p(req.params.id), false);
+      res.json(result);
+    } catch (error: any) {
+      console.error("[opp-sam-docs] error:", error);
+      res.status(500).json({ ok: false, documents: [], error: error?.message || "Unknown" });
+    }
+  });
+
+  app.post("/api/opportunities/:id/sync-sam-documents", async (req: Request, res: Response) => {
+    try {
+      const result = await buildSamDocsFromOpportunity(p(req.params.id), true);
+      res.json({ ...result, message: result.ok ? `Pulled ${result.documents.length} document${result.documents.length === 1 ? "" : "s"} from SAM.gov` : result.error });
+    } catch (error: any) {
+      console.error("[opp-sync-sam] error:", error);
+      res.status(500).json({ ok: false, documents: [], error: error?.message || "Unknown" });
+    }
+  });
+
 
   app.get("/api/bid-projects/:bidProjectId/missing-artifacts", async (req: Request, res: Response) => {
     try {
