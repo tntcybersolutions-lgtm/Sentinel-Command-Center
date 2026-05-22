@@ -1602,6 +1602,11 @@ export default function BidJacket() {
       });
       queryClient.invalidateQueries({ queryKey: ["/api/jackets/bid", bidId, "integrity"] });
       queryClient.invalidateQueries({ queryKey: ["/api/jackets/bid", bidId, "documents"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/bid-projects", bidId, "artifacts"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/bid-projects", bidId, "artifacts", "summary"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/bid-projects", bidId] });
+    queryClient.invalidateQueries({ queryKey: ["/api/documents"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/nav-counts"] });
     },
     onError: (error: any) => {
       toast({
@@ -4152,7 +4157,7 @@ export default function BidJacket() {
                         {new Date(rfi.dueDate).toLocaleDateString()}
                       </TableCell>
                       <TableCell className="max-w-xs truncate text-muted-foreground" data-testid={`text-rfi-response-${rfi.id}`}>
-                        {rfi.response || "—"}
+                        {rfi.response || "â"}
                       </TableCell>
                     </TableRow>
                   ))}
@@ -4204,7 +4209,7 @@ export default function BidJacket() {
                             {sub.linkedDocName}
                           </Button>
                         ) : (
-                          <span className="text-muted-foreground">—</span>
+                          <span className="text-muted-foreground">â</span>
                         )}
                       </TableCell>
                     </TableRow>
@@ -4258,8 +4263,8 @@ export default function BidJacket() {
                           {co.status}
                         </Badge>
                       </TableCell>
-                      <TableCell data-testid={`text-co-impact-${co.id}`}>{co.scheduleImpact || "—"}</TableCell>
-                      <TableCell data-testid={`text-co-approval-${co.id}`}>{co.approval || "—"}</TableCell>
+                      <TableCell data-testid={`text-co-impact-${co.id}`}>{co.scheduleImpact || "â"}</TableCell>
+                      <TableCell data-testid={`text-co-approval-${co.id}`}>{co.approval || "â"}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
@@ -4655,9 +4660,9 @@ export default function BidJacket() {
                           v{bv.version}
                         </TableCell>
                         <TableCell data-testid={`text-binder-time-${bv.id}`}>
-                          {bv.generatedAt ? new Date(bv.generatedAt).toLocaleString() : "—"}
+                          {bv.generatedAt ? new Date(bv.generatedAt).toLocaleString() : "â"}
                         </TableCell>
-                        <TableCell data-testid={`text-binder-pages-${bv.id}`}>{bv.pageCount ?? "—"}</TableCell>
+                        <TableCell data-testid={`text-binder-pages-${bv.id}`}>{bv.pageCount ?? "â"}</TableCell>
                         <TableCell>
                           <Badge variant={getStatusBadgeVariant(bv.status)} data-testid={`badge-binder-status-${bv.id}`}>
                             {bv.status}
@@ -5946,7 +5951,7 @@ export default function BidJacket() {
                 Bid Binder - Version {latestBinder?.version || 1}
               </DialogTitle>
               <DialogDescription>
-                {latestBinder?.pageCount || 0} pages {binderPage > 1 ? `• Viewing page ${binderPage}` : ""} • Generated {latestBinder?.generatedAt ? new Date(latestBinder.generatedAt).toLocaleString() : "Not yet generated"}
+                {latestBinder?.pageCount || 0} pages {binderPage > 1 ? `â¢ Viewing page ${binderPage}` : ""} â¢ Generated {latestBinder?.generatedAt ? new Date(latestBinder.generatedAt).toLocaleString() : "Not yet generated"}
               </DialogDescription>
             </DialogHeader>
 
@@ -6503,7 +6508,7 @@ export default function BidJacket() {
                 </div>
                 <div className="space-y-1">
                   <p className="text-xs text-muted-foreground">MIME Type</p>
-                  <p className="text-sm font-medium">{detailDoc.mimeType || "—"}</p>
+                  <p className="text-sm font-medium">{detailDoc.mimeType || "â"}</p>
                 </div>
                 <div className="space-y-1">
                   <p className="text-xs text-muted-foreground">Source</p>
@@ -6511,7 +6516,7 @@ export default function BidJacket() {
                 </div>
                 <div className="col-span-2 space-y-1">
                   <p className="text-xs text-muted-foreground">Storage Key</p>
-                  <p className="text-sm font-mono text-muted-foreground break-all">{detailDoc.storageKey || "—"}</p>
+                  <p className="text-sm font-mono text-muted-foreground break-all">{detailDoc.storageKey || "â"}</p>
                 </div>
                 <div className="col-span-2 space-y-1">
                   <p className="text-xs text-muted-foreground">Visibility</p>
@@ -7292,7 +7297,7 @@ function BinderHtmlRenderer(props: {
               <span className="text-muted-foreground text-right">File:</span>
               <span className="font-medium truncate max-w-[200px]">{doc.fileName}</span>
               <span className="text-muted-foreground text-right">Type:</span>
-              <span className="font-medium">{doc.fileType?.toUpperCase() || "—"}</span>
+              <span className="font-medium">{doc.fileType?.toUpperCase() || "â"}</span>
               <span className="text-muted-foreground text-right">Size:</span>
               <span className="font-medium">{formatBytesCompact(doc.fileSizeBytes)}</span>
               <span className="text-muted-foreground text-right">Version:</span>
