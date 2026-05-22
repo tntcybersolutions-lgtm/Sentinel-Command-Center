@@ -430,7 +430,7 @@ export function DocumentViewer({ url, fileName, fileType, onClose }: DocumentVie
           {isDocx && docxHtml && !error && (
             <div className="flex justify-center p-4" data-testid="docx-viewer">
               <div
-                className="bg-white dark:bg-gray-900 shadow-lg p-8 max-w-4xl w-full prose dark:prose-invert prose-sm"
+                className="bg-card border border-card-border shadow-lg p-8 max-w-4xl w-full prose dark:prose-invert prose-sm rounded-md"
                 style={{ transform: `scale(${scale})`, transformOrigin: 'top center' }}
                 dangerouslySetInnerHTML={{ __html: docxHtml }}
               />
@@ -440,7 +440,7 @@ export function DocumentViewer({ url, fileName, fileType, onClose }: DocumentVie
           {isText && textContent && !error && (
             <div className="flex justify-center p-4" data-testid="text-viewer">
               <pre
-                className="bg-white dark:bg-gray-900 shadow-lg p-6 max-w-5xl w-full text-sm font-mono whitespace-pre-wrap break-words overflow-auto border rounded-md"
+                className="bg-card border border-card-border shadow-lg p-6 max-w-5xl w-full text-sm font-mono whitespace-pre-wrap break-words overflow-auto rounded-md"
                 style={{ transform: `scale(${scale})`, transformOrigin: 'top center' }}
               >
                 {textContent}

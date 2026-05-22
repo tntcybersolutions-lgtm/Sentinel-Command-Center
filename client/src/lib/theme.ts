@@ -16,7 +16,14 @@ function systemPref(): "light" | "dark" {
 
 function applyTheme(resolved: "light" | "dark") {
   if (typeof document === "undefined") return;
-  document.documentElement.setAttribute("data-theme", resolved);
+  const html = document.documentElement;
+  html.setAttribute("data-theme", resolved);
+  // Also toggle the Tailwind dark-mode class so `dark:` utilities resolve.
+  // Tailwind config's darkMode is configured to honor both selectors, but
+  // setting the class makes things bulletproof even if config drifts.
+  html.classList.toggle("dark", resolved === "dark");
+  html.classList.toggle("light", resolved === "light");
+  html.style.colorScheme = resolved;
 }
 
 export function resolveTheme(saved: Theme): "light" | "dark" {
@@ -25,10 +32,10 @@ export function resolveTheme(saved: Theme): "light" | "dark" {
 }
 
 export function getSavedTheme(): Theme {
-  if (typeof localStorage === "undefined") return "auto";
+  if (typeof localStorage === "undefined") return "dark";
   const v = localStorage.getItem(STORAGE_KEY);
   if (v === "light" || v === "dark" || v === "auto") return v;
-  return "auto";
+  return "dark"; // BlackHawk default — dark-first product
 }
 
 export function setTheme(theme: Theme): void {

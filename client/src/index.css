@@ -159,6 +159,45 @@
   body {
     @apply font-sans antialiased bg-background text-foreground;
   }
+
+  /* App-wide safety net: prevent any page from showing the browser's white
+     default background (e.g. before React hydrates, on lazy-route load,
+     or inside iframes that don't inherit body bg). */
+  html, body, #root {
+    background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
+  }
+
+  /* Make sure every dialog/sheet/popover surface uses the themed card color
+     instead of system white. Some shadcn primitives leak through with no
+     bg class set. */
+  [role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"] {
+    background-color: hsl(var(--popover));
+    color: hsl(var(--popover-foreground));
+  }
+
+  /* Common skeleton/empty states often render as bright white boxes —
+     fall back to the muted surface so they read as "loading" not "broken". */
+  .skeleton-loading, [data-loading="true"]:empty {
+    background-color: hsl(var(--muted) / 0.4);
+  }
+
+  /* Force form controls to honor theme — fixes the "stark white input
+     on dark page" mismatch reported app-wide. */
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+  textarea, select {
+    color-scheme: dark light;
+  }
+
+  /* Native date / time pickers get the system color scheme so the
+     calendar popout matches the page theme. */
+  input[type="date"], input[type="datetime-local"], input[type="time"], input[type="month"], input[type="week"] {
+    color-scheme: dark;
+  }
+  html[data-theme="light"] input[type="date"], html[data-theme="light"] input[type="datetime-local"],
+  html[data-theme="light"] input[type="time"], html[data-theme="light"] input[type="month"], html[data-theme="light"] input[type="week"] {
+    color-scheme: light;
+  }
 }
 
 @layer utilities {
