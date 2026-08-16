@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Sparkles, Upload, Zap, Ruler, ArrowRight, FileText } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { detectSheetFormat, SHEET_FORMATS, SHEET_ACCEPT_ATTRIBUTE } from "@shared/sheet-formats";
 
 export function SmartTakeoffSpotlight() {
   const [, setLocation] = useLocation();
@@ -14,21 +15,50 @@ export function SmartTakeoffSpotlight() {
   const [uploading, setUploading] = useState(false);
 
   const handleFile = async (file: File) => {
-    if (!file.name.toLowerCase().endsWith(".pdf")) {
-      toast({ title: "Please drop a PDF sheet", description: "Smart Takeoff reads architectural and structural PDF sheets.", variant: "destructive" });
+    const format = detectSheetFormat(file.name, file.type);
+    if (!format) {
+      toast({
+        title: "That isn't a drawing file",
+        description: `Accepted: ${SHEET_FORMATS.map((f) => f.label).join(", ")}.`,
+        variant: "destructive",
+      });
       return;
     }
+    if (!format.measurable) {
+      toast({
+        title: `${format.label} can't be measured directly`,
+        description: format.note ?? "Convert to PDF or DXF to take quantities off it.",
+        variant: "destructive",
+      });
+      return;
+    }
+
     setUploading(true);
     try {
       const fd = new FormData();
       fd.append("file", file);
-      const res = await fetch("/api/blueprints/upload", { method: "POST", body: fd }).catch(() => null);
-      if (res && res.ok) {
-        const data = await res.json().catch(() => ({}));
-        toast({ title: "Sheet queued for takeoff", description: file.name });
-        setLocation(data?.id ? `/blueprints/${data.id}/smart-takeoff` : "/estimate/blueprints");
-      } else { toast({ title: "Opening takeoff workspace", description: file.name }); setLocation("/estimate/blueprints"); }
-    } finally { setUploading(false); }
+      fd.append("title", file.name);
+      const res = await fetch("/api/takeoff/sheets", { method: "POST", body: fd }).catch(() => null);
+
+      // Report failure as failure. This previously fell through to
+      // "Opening takeoff workspace" and navigated anyway, so a failed upload
+      // was indistinguishable from a successful one — and the endpoint it
+      // posted to (/api/blueprints/upload) did not exist, so it always failed.
+      if (!res) {
+        toast({ title: "Upload failed", description: "Could not reach the server.", variant: "destructive" });
+        return;
+      }
+      const data = await res.json().catch(() => ({} as any));
+      if (!res.ok) {
+        toast({ title: "Upload failed", description: data?.error ?? `Server returned ${res.status}.`, variant: "destructive" });
+        return;
+      }
+
+      toast({ title: "Sheet uploaded", description: `${file.name} — calibrate it to start measuring.` });
+      setLocation(data?.sheet?.id ? `/blueprints/${data.sheet.id}/smart-takeoff` : "/estimate/blueprints");
+    } finally {
+      setUploading(false);
+    }
   };
 
   const onDrop = (e: React.DragEvent) => { e.preventDefault(); setDrag(false); const f = e.dataTransfer.files?.[0]; if (f) handleFile(f); };
@@ -47,15 +77,15 @@ export function SmartTakeoffSpotlight() {
           <Badge variant="outline" className="text-[10px] h-5 px-1.5 border-violet-500/50 text-violet-200 bg-violet-500/15 font-semibold">BETA</Badge>
         </div>
         <div className="p-4 space-y-3">
-          <p className="text-xs text-muted-foreground">Drop a sheet PDF, get AI quantities in ~90 seconds.</p>
+          <p className="text-xs text-muted-foreground">Drop a sheet, calibrate it, and measure real quantities off the drawing.</p>
           <div onDragOver={(e) => { e.preventDefault(); setDrag(true); }} onDragLeave={() => setDrag(false)} onDrop={onDrop} onClick={() => inputRef.current?.click()} className={`group relative cursor-pointer rounded-lg border-2 border-dashed py-5 px-4 text-center transition-all ${drag ? "border-violet-500 bg-violet-500/15 scale-[0.99]" : "border-violet-500/40 hover:border-violet-500/70 hover:bg-violet-500/[0.08]"}`} data-testid="dropzone-takeoff">
-            {uploading ? (<><Zap className="h-6 w-6 mx-auto mb-1.5 text-violet-400 animate-pulse" /><p className="text-sm font-semibold">Reading the sheet…</p></>) : (<div className="flex items-center justify-center gap-3"><Upload className="h-5 w-5 text-violet-300 group-hover:text-violet-200 transition-colors" /><div className="text-left"><p className="text-sm font-semibold leading-tight text-foreground">Drop a PDF sheet</p><p className="text-xs text-muted-foreground leading-tight">or click to browse</p></div></div>)}
-            <input ref={inputRef} type="file" accept="application/pdf,.pdf" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); }} data-testid="input-takeoff-pdf" />
+            {uploading ? (<><Zap className="h-6 w-6 mx-auto mb-1.5 text-violet-400 animate-pulse" /><p className="text-sm font-semibold">Reading the sheet…</p></>) : (<div className="flex items-center justify-center gap-3"><Upload className="h-5 w-5 text-violet-300 group-hover:text-violet-200 transition-colors" /><div className="text-left"><p className="text-sm font-semibold leading-tight text-foreground">Drop a sheet</p><p className="text-xs text-muted-foreground leading-tight">or click to browse</p></div></div>)}
+            <input ref={inputRef} type="file" accept={SHEET_ACCEPT_ATTRIBUTE} className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); }} data-testid="input-takeoff-pdf" />
           </div>
           <div className="grid grid-cols-3 gap-2">
-            <Stat icon={FileText} label="Sheets read" value="~90s" tone="text-cyan-400" ring="ring-cyan-500/20" />
+            <Stat icon={FileText} label="Formats" value="PDF / TIFF / DXF" tone="text-cyan-400" ring="ring-cyan-500/20" />
             <Stat icon={Ruler} label="Quantities" value="LF / SF / EA" tone="text-emerald-400" ring="ring-emerald-500/20" />
-            <Stat icon={Sparkles} label="Accuracy" value="94% avg" tone="text-violet-400" ring="ring-violet-500/20" />
+            <Stat icon={Sparkles} label="Method" value="Measured" tone="text-violet-400" ring="ring-violet-500/20" />
           </div>
           <Button variant="outline" size="sm" onClick={() => setLocation("/estimate/blueprints")} className="w-full justify-between text-xs h-8 border-violet-500/40 bg-violet-500/10 text-violet-100 hover:bg-violet-500/20 hover:text-white" data-testid="button-open-takeoff"><span className="font-semibold">Open Smart Takeoff workspace</span><ArrowRight className="h-3.5 w-3.5" /></Button>
         </div>

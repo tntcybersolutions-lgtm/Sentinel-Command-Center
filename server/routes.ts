@@ -1405,6 +1405,13 @@ export async function registerRoutes(
   app.use("/api/lien-waivers", lienWaiversRouter);
   app.use("/api/herbie-command", herbieCommandRoutes);
 
+  // Quantity takeoff — sheet upload (PDF/TIFF/DXF/images), per-page calibration,
+  // and quantities computed server-side from the geometry the user drew.
+  // Mounted at /api/takeoff (singular); /api/takeoffs (plural) is the existing
+  // manual line-item CRUD and is left untouched.
+  const { takeoffRouter } = await import("./routes/takeoff.routes");
+  app.use("/api/takeoff", takeoffRouter);
+
   app.use("/api/herbie", herbieRouter);
 
   app.use("/api/herbie/tools", herbieToolsRouter);

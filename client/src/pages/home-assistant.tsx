@@ -457,7 +457,7 @@ function BidOpportunitiesHero() {
                 <div className="text-sm font-medium truncate text-white">{o.title || "(no title)"}</div>
                 <div className="text-xs text-zinc-500 truncate mt-0.5">
                   {o.agency || "Unknown agency"}
-                  {o.value ? ` Â· ${formatCurrency(o.value, true)}` : ""}
+                  {o.value ? ` · ${formatCurrency(o.value, true)}` : ""}
                 </div>
               </button>
               {o.setAside && (

@@ -86,7 +86,7 @@ async function fetchPunchAssignedToMe(): Promise<InboxItem[]> {
             p.status.replace(/_/g, " "),
           ]
             .filter(Boolean)
-            .join(" Â· "),
+            .join(" · "),
           href: `/punch-list?focus=${encodeURIComponent(p.id)}`,
           tone: isOverdue ? "critical" : tone,
           ts: new Date(p.updatedAt || p.createdAt || Date.now()).getTime(),
@@ -287,7 +287,7 @@ export default function MobileInboxPage() {
             <div className="mt-0.5 text-xs text-zinc-500">
               {loading
                 ? "Refreshingâ¦"
-                : `${items.length} item${items.length === 1 ? "" : "s"} Â· updated ${timeAgo(lastRefresh)}`}
+                : `${items.length} item${items.length === 1 ? "" : "s"} · updated ${timeAgo(lastRefresh)}`}
             </div>
           </div>
           <button
