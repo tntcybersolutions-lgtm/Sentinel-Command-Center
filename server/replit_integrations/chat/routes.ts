@@ -1,8 +1,9 @@
 import type { Express, Request, Response } from "express";
+import { lazyOpenAI } from "../../lib/lazy-openai";
 import OpenAI from "openai";
 import { chatStorage } from "./storage";
 
-const openai = new OpenAI({
+const openai = lazyOpenAI({
   apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
   baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
 });

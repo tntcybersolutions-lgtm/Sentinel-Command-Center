@@ -23,8 +23,57 @@ import punchItemsRouter from "./routes/punch-items.routes";
 import dailyLogsRouter from "./routes/daily-logs.routes";
 import transcribeRouter from "./routes/transcribe.routes";
 
-console.log("[STARTUP] DEPLOY_SENTINEL_LIENWAIVERS_FIX active â " + new Date().toISOString());
+console.log("[STARTUP] DEPLOY_SENTINEL_LIENWAIVERS_FIX active · " + new Date().toISOString());
 validateBidJacketTaxonomy();
+
+/**
+ * Prove the database is reachable before anything that depends on it runs.
+ *
+ * Route registration happens before the port is bound, so a database that
+ * accepts a TCP connection but never answers leaves this process alive, silent,
+ * and not listening. A deployment health check then times out and reports only
+ * "built successfully but failed to start" — with nothing in the logs to act on.
+ *
+ * Failing here turns that into one actionable line. The timeout matters as much
+ * as the query: without it an unreachable host hangs rather than throwing, which
+ * is precisely the failure this exists to surface.
+ */
+async function assertDatabaseReachable(timeoutMs = 15000): Promise<void> {
+  if (!process.env.DATABASE_URL) {
+    console.error(
+      "[BOOT] FATAL: DATABASE_URL is not set. If this is a deployment, note that its secrets are configured separately from the workspace."
+    );
+    process.exit(1);
+  }
+
+  const { pool } = await import("./db");
+  let timer: NodeJS.Timeout | undefined;
+
+  try {
+    await Promise.race([
+      pool.query("SELECT 1"),
+      new Promise((_resolve, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`no response within ${timeoutMs}ms`)),
+          timeoutMs
+        );
+      }),
+    ]);
+    log("database reachable", "boot");
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    // Host only — never log the connection string itself, it carries the password.
+    let host = "unknown host";
+    try { host = new URL(process.env.DATABASE_URL as string).host; } catch { /* a malformed URL is itself the answer */ }
+    console.error(
+      `[BOOT] FATAL: cannot reach the database at ${host} — ${detail}. ` +
+        "Check that DATABASE_URL points at a database this environment can actually reach."
+    );
+    process.exit(1);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 
 const app = express();
 const httpServer = createServer(app);
@@ -83,6 +132,10 @@ app.use((req, res, next) => {
 });
 
 (async () => {
+  // Before anything that touches the database. A failure here is reported in
+  // one line rather than as a silent boot that never binds the port.
+  await assertDatabaseReachable();
+
   await registerRoutes(httpServer, app);
     app.use("/api/lien-waivers", lienWaiverRouter);
         app.use(takeoffItemsRouter);

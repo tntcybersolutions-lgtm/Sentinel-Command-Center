@@ -1,4 +1,5 @@
 import type { Express, Request, Response } from "express";
+import { lazyOpenAI } from "./lib/lazy-openai";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { registerChatRoutes } from "./replit_integrations/chat";
@@ -160,7 +161,7 @@ import { runPMAnalysis } from "./agents/pmAgent";
 import { runFieldOpsAnalysis } from "./agents/fieldOpsAgent";
 import { runKPIAnalysis } from "./agents/kpiAgent";
 
-const openai = new OpenAI({
+const openai = lazyOpenAI({
   apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
   baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
 });
