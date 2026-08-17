@@ -109,6 +109,11 @@ export function log(message: string, source = "express") {
   console.log(`${formattedTime} [${source}] ${message}`);
 }
 
+// Above this, a response body is summarised by size rather than printed. 2 KB
+// keeps ordinary payloads readable in the log without ever letting a large one
+// through.
+const BODY_LOG_LIMIT_BYTES = 2048;
+
 app.use((req, res, next) => {
   const start = Date.now();
   const path = req.path;
@@ -122,14 +127,27 @@ app.use((req, res, next) => {
 
   res.on("finish", () => {
     const duration = Date.now() - start;
-    if (path.startsWith("/api")) {
-      let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
-      if (capturedJsonResponse) {
-        logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;
-      }
+    if (!path.startsWith("/api")) return;
 
-      log(logLine);
+    // Response size comes from the header Express already set, so a large body
+    // is never serialised a second time just to be logged. This used to
+    // JSON.stringify() every /api response in full: GET /api/opportunities
+    // returns about 6 MB, so each call paid for a second full serialisation on
+    // the event loop and wrote all 6 MB into the deployment log, where it
+    // showed up as a single unreadable entry.
+    const size = Number(res.getHeader("content-length")) || 0;
+    let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
+    if (size) logLine += ` (${size}b)`;
+
+    // A small body is worth seeing while debugging; a large one is not worth
+    // the cost. Auth-ish routes are skipped entirely — their small responses
+    // are exactly the ones that carry tokens.
+    const sensitive = /auth|login|logout|token|secret|password|session|register/i.test(path);
+    if (capturedJsonResponse && !sensitive && size > 0 && size <= BODY_LOG_LIMIT_BYTES) {
+      logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;
     }
+
+    log(logLine);
   });
 
   next();
