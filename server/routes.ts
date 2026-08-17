@@ -2259,12 +2259,15 @@ export async function registerRoutes(
   app.get("/api/dashboard/recent-opportunities", async (req: Request, res: Response) => {
     try {
       const opportunities = await storage.getOpportunities(DEFAULT_TENANT_ID);
+      // Same hardcoded-null defect as GET /api/opportunities — see the comment there.
+      const scoresByOpportunity = await storage.getLatestOpportunityScores(DEFAULT_TENANT_ID);
       const formatted = opportunities.slice(0, 5).map((opp) => ({
         id: opp.id,
         title: opp.title,
         agency: opp.agency || null,
         dueAt: opp.dueAt?.toISOString() || null,
-        score: null,
+        score: scoresByOpportunity.get(opp.id)?.score ?? null,
+        recommendedAction: scoresByOpportunity.get(opp.id)?.recommendedAction ?? null,
         status: opp.status,
         value: Number(opp.contractValue) || null,
       }));
@@ -2561,7 +2564,14 @@ export async function registerRoutes(
         DEFAULT_TENANT_ID,
         status as string | undefined
       );
-      
+
+      // HERBIE's scores live in opportunity_scores, not on the opportunity row.
+      // This response used to hardcode `score: null`, so the dashboard's Top Fit
+      // tile computed Math.max over an array of nulls and rendered "--" no
+      // matter how many opportunities had actually been scored. One query for
+      // the whole page rather than one per row.
+      const scoresByOpportunity = await storage.getLatestOpportunityScores(DEFAULT_TENANT_ID);
+
       const formatted = opportunities.map((opp) => {
         const locationData = opp.locationJson as { city?: string; state?: string } | null;
         const locationStr = locationData?.city && locationData?.state 
@@ -2578,7 +2588,8 @@ export async function registerRoutes(
           value: Number(opp.contractValue) || null,
           dueAt: opp.dueAt?.toISOString() || null,
           postedAt: opp.postedAt?.toISOString() || opp.createdAt.toISOString(),
-          score: null,
+          score: scoresByOpportunity.get(opp.id)?.score ?? null,
+          recommendedAction: scoresByOpportunity.get(opp.id)?.recommendedAction ?? null,
           status: opp.status,
           location: locationStr,
           url: opp.url || null,

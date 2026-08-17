@@ -115,6 +115,9 @@ export interface IStorage {
   
   // Opportunities
   getOpportunities(tenantId: string, status?: string): Promise<Opportunity[]>;
+  getLatestOpportunityScores(
+    tenantId: string,
+  ): Promise<Map<string, { score: number; recommendedAction: string }>>;
   getOpportunity(id: string): Promise<Opportunity | undefined>;
   createOpportunity(opportunity: InsertOpportunity): Promise<Opportunity>;
   updateOpportunity(id: string, updates: Partial<Opportunity>): Promise<Opportunity | undefined>;
@@ -328,6 +331,44 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(opportunities)
       .where(eq(opportunities.tenantId, tenantId))
       .orderBy(desc(opportunities.createdAt));
+  }
+
+  /**
+   * The current fit score for each opportunity, keyed by opportunity id.
+   *
+   * opportunity_scores is append-only — HERBIE inserts a fresh row every
+   * scoring cycle rather than updating — so an opportunity scored three times
+   * has three rows. A plain join would multiply opportunity rows and mix stale
+   * scores in with current ones; DISTINCT ON takes the newest row per
+   * opportunity in a single pass instead.
+   *
+   * Opportunities that have never been scored are simply absent from the map.
+   * Callers distinguish "not scored yet" from "scored zero" by checking for the
+   * key, never by testing the value for falsiness.
+   */
+  async getLatestOpportunityScores(
+    tenantId: string,
+  ): Promise<Map<string, { score: number; recommendedAction: string }>> {
+    const result = await db.execute(sql`
+      SELECT DISTINCT ON (opportunity_id)
+             opportunity_id, score, recommended_action
+        FROM opportunity_scores
+       WHERE tenant_id = ${tenantId}
+       ORDER BY opportunity_id, created_at DESC
+    `);
+    const rows = ((result as any).rows ?? result) as Array<{
+      opportunity_id: string;
+      score: number | string;
+      recommended_action: string;
+    }>;
+    const byOpportunity = new Map<string, { score: number; recommendedAction: string }>();
+    for (const row of rows) {
+      byOpportunity.set(row.opportunity_id, {
+        score: Number(row.score),
+        recommendedAction: row.recommended_action,
+      });
+    }
+    return byOpportunity;
   }
 
   async getOpportunity(id: string): Promise<Opportunity | undefined> {
