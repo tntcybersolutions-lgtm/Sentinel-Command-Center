@@ -18,9 +18,15 @@ import { eq, and, sql } from "drizzle-orm";
 import { emitEvent } from "./event-bus.service";
 import { entityLinkService } from "./entity-link.service";
 import crypto from "crypto";
-import { createRequire } from "module";
-const require2 = createRequire(import.meta.url);
-const AdmZip = require2("adm-zip");
+// adm-zip is CommonJS, but it needs no createRequire dance — esbuild replaces
+// import.meta with {} in CJS output, so createRequire(import.meta.url) was
+// createRequire(undefined) and threw ERR_INVALID_ARG_VALUE the moment this
+// module loaded. It loads lazily from the /api/procore/ingest handler, so boot
+// survived and the route returned "Data ingest failed: The argument 'filename'
+// must be a file URL object" — an error naming nothing about the real problem.
+// A plain import works in dev (tsx/ESM) and production alike. Same trap that
+// server/static.ts already documents.
+import AdmZip from "adm-zip";
 
 const DEFAULT_TENANT_ID = "blackhawk-default";
 
