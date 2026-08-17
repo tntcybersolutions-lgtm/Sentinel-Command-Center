@@ -100,7 +100,71 @@ export const WAIVER_TYPES: { type: string; title: string; description: string }[
 
 // ─── Seed: generate all 200 templates (50 states x 4 types) ──────────────────
 
+/**
+ * Bring lien_waiver_templates up to the shape this seeder expects.
+ *
+ * migrations/meta/0010_lien_waivers.sql uses CREATE TABLE IF NOT EXISTS, which
+ * is a no-op when an older version of the table is already present. On any
+ * database that had a prior lien_waiver_templates, that migration therefore
+ * "succeeded" while leaving columns missing, and every boot since has logged:
+ *
+ *   Failed to seed lien waiver templates: column "tenant_id" does not exist
+ *
+ * Nothing in this repo runs the .sql files in migrations/meta automatically —
+ * they are applied by hand — so the repair has to happen where the seeder can
+ * guarantee it runs. Every statement below is idempotent and safe against an
+ * already-correct schema.
+ */
+async function ensureLienWaiverTemplateSchema(): Promise<void> {
+  await db.execute(sql`
+    DO $$ BEGIN
+      CREATE TYPE lien_waiver_type AS ENUM (
+        'conditional_progress',
+        'unconditional_progress',
+        'conditional_final',
+        'unconditional_final'
+      );
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END $$;
+  `);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS lien_waiver_templates (
+      id VARCHAR(36) PRIMARY KEY DEFAULT gen_random_uuid()::text
+    );
+  `);
+
+  // Added without NOT NULL: an existing table may already hold rows, and a
+  // NOT NULL add would fail on them. The seeder always supplies these values.
+  await db.execute(sql`
+    ALTER TABLE lien_waiver_templates
+      ADD COLUMN IF NOT EXISTS tenant_id   VARCHAR(100),
+      ADD COLUMN IF NOT EXISTS state_code  CHAR(2),
+      ADD COLUMN IF NOT EXISTS state_name  VARCHAR(100),
+      ADD COLUMN IF NOT EXISTS waiver_type lien_waiver_type,
+      ADD COLUMN IF NOT EXISTS title       TEXT,
+      ADD COLUMN IF NOT EXISTS description TEXT,
+      ADD COLUMN IF NOT EXISTS is_active   BOOLEAN   NOT NULL DEFAULT TRUE,
+      ADD COLUMN IF NOT EXISTS sort_order  INTEGER   NOT NULL DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS created_at  TIMESTAMP NOT NULL DEFAULT NOW(),
+      ADD COLUMN IF NOT EXISTS updated_at  TIMESTAMP NOT NULL DEFAULT NOW();
+  `);
+
+  // The seeder's INSERT relies on ON CONFLICT DO NOTHING, which needs this
+  // constraint to make re-seeding idempotent rather than duplicating 200 rows.
+  await db.execute(sql`
+    DO $$ BEGIN
+      ALTER TABLE lien_waiver_templates
+        ADD CONSTRAINT lien_waiver_templates_tenant_state_type_key
+        UNIQUE (tenant_id, state_code, waiver_type);
+    EXCEPTION WHEN duplicate_table OR duplicate_object THEN NULL;
+    END $$;
+  `);
+}
+
 export async function seedLienWaiverTemplates(tenantId: string): Promise<void> {
+    await ensureLienWaiverTemplateSchema();
+
     const existing = await db.execute(
           sql`SELECT COUNT(*)::int as count FROM lien_waiver_templates WHERE tenant_id = ${tenantId}`
         );
