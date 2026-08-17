@@ -1,8 +1,9 @@
 import fs from "node:fs";
+import { lazyOpenAI } from "../../lib/lazy-openai";
 import OpenAI, { toFile } from "openai";
 import { Buffer } from "node:buffer";
 
-export const openai = new OpenAI({
+export const openai = lazyOpenAI({
   apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
   baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
 });

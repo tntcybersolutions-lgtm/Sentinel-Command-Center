@@ -1,4 +1,5 @@
 import OpenAI from "openai";
+import { lazyOpenAI } from "../lib/lazy-openai";
 import { db } from "../db";
 import { 
   opportunities, capturePlans, captureTasks, outreachDrafts, 
@@ -6,7 +7,7 @@ import {
 } from "@shared/schema";
 import { eq, and, sql, desc, lt } from "drizzle-orm";
 
-const openai = new OpenAI({
+const openai = lazyOpenAI({
   apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
   baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
 });

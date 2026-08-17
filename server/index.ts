@@ -27,7 +27,7 @@ console.log("[STARTUP] DEPLOY_SENTINEL_LIENWAIVERS_FIX active · " + new Date().
 validateBidJacketTaxonomy();
 
 /**
- * Prove the database is reachable before anything that depends on it runs.
+ * Report whether the database is reachable, without blocking startup.
  *
  * Route registration happens before the port is bound, so a database that
  * accepts a TCP connection but never answers leaves this process alive, silent,
@@ -38,12 +38,20 @@ validateBidJacketTaxonomy();
  * as the query: without it an unreachable host hangs rather than throwing, which
  * is precisely the failure this exists to surface.
  */
-async function assertDatabaseReachable(timeoutMs = 15000): Promise<void> {
+async function reportDatabaseReachability(timeoutMs = 10000): Promise<void> {
   if (!process.env.DATABASE_URL) {
     console.error(
-      "[BOOT] FATAL: DATABASE_URL is not set. If this is a deployment, note that its secrets are configured separately from the workspace."
+      "[BOOT] WARNING: DATABASE_URL is not set. Deployment secrets are configured separately from the workspace; every database-backed route will fail until it is."
     );
-    process.exit(1);
+    return;
+  }
+
+  // Host only — never log the connection string itself, it carries the password.
+  let host = "unknown host";
+  try {
+    host = new URL(process.env.DATABASE_URL).host;
+  } catch {
+    /* a malformed URL is itself the answer */
   }
 
   const { pool } = await import("./db");
@@ -59,17 +67,13 @@ async function assertDatabaseReachable(timeoutMs = 15000): Promise<void> {
         );
       }),
     ]);
-    log("database reachable", "boot");
+    log(`database reachable (${host})`, "boot");
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
-    // Host only — never log the connection string itself, it carries the password.
-    let host = "unknown host";
-    try { host = new URL(process.env.DATABASE_URL as string).host; } catch { /* a malformed URL is itself the answer */ }
     console.error(
-      `[BOOT] FATAL: cannot reach the database at ${host} — ${detail}. ` +
-        "Check that DATABASE_URL points at a database this environment can actually reach."
+      `[BOOT] WARNING: database at ${host} did not answer — ${detail}. ` +
+        "Starting anyway; database-backed routes will error until it recovers."
     );
-    process.exit(1);
   } finally {
     if (timer) clearTimeout(timer);
   }
@@ -134,7 +138,7 @@ app.use((req, res, next) => {
 (async () => {
   // Before anything that touches the database. A failure here is reported in
   // one line rather than as a silent boot that never binds the port.
-  await assertDatabaseReachable();
+  await reportDatabaseReachability();
 
   await registerRoutes(httpServer, app);
     app.use("/api/lien-waivers", lienWaiverRouter);
@@ -280,7 +284,10 @@ app.use((req, res, next) => {
     {
       port,
       host: "0.0.0.0",
-      reusePort: true,
+      // SO_REUSEPORT is not implemented on Windows: passing it there fails the
+      // listen outright with ENOTSUP, so the server cannot start for local
+      // development or verification. Linux deployment is unaffected.
+      ...(process.platform === "win32" ? {} : { reusePort: true }),
     },
     async () => {
       log(`serving on port ${port}`);
@@ -344,4 +351,21 @@ app.use((req, res, next) => {
       log("Scheduler started - HERBIE is now active", "herbie");
     },
   );
-})();
+})().catch((err) => {
+  // Everything above runs before the port is bound. Without this, a rejection
+  // here exits the process with a bare stack trace and the deployment reports
+  // only "the required port was never opened" — true, but not a cause.
+  console.error("[BOOT] FATAL: startup failed before the server could listen.");
+  console.error(err);
+  process.exit(1);
+});
+
+// A rejected promise or a thrown callback anywhere in startup would otherwise
+// take the process down with no attribution. Naming it is the difference
+// between a five-minute fix and an afternoon.
+process.on("unhandledRejection", (reason) => {
+  console.error("[BOOT] Unhandled promise rejection:", reason);
+});
+process.on("uncaughtException", (err) => {
+  console.error("[BOOT] Uncaught exception:", err);
+});
