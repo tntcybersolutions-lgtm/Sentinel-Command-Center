@@ -139,7 +139,7 @@ export default function ImportCsv() {
               )}
               <div className="flex items-center justify-between p-4 border-t bg-muted/20">
                 <div className="flex items-center gap-2 text-xs text-muted-foreground"><AlertTriangle className="h-4 w-4" />Review the data above before importing.</div>
-                <Button onClick={submit} disabled={importing} className="gap-2" data-testid="button-import-csv"><CheckCircle2 className="h-4 w-4" />{importing ? "Importingâ¦" : `Import ${rows.length} rows`}</Button>
+                <Button onClick={submit} disabled={importing} className="gap-2" data-testid="button-import-csv"><CheckCircle2 className="h-4 w-4" />{importing ? "Importing…" : `Import ${rows.length} rows`}</Button>
               </div>
             </CardContent>
           </Card>

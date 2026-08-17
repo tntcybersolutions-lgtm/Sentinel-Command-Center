@@ -1,5 +1,5 @@
 /**
- * Sprint L3-G â Unified Inbox (m-inbox)
+ * Sprint L3-G — Unified Inbox (m-inbox)
  *
  * Mobile-first combined feed: punch items assigned to me, daily-log drafts,
  * and (future hook-points) RFI replies, approval pending, @mentions.
@@ -32,7 +32,7 @@ import { CardTiered } from "@/components/ui/card-tiered";
 import { SafeArea } from "@/components/ui/safe-area";
 import { usePullToRefresh } from "@/hooks/use-pull-to-refresh";
 
-// ââ Item types ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// ── Item types ────────────────────────────────────────────────────────────────
 
 type InboxItemKind = "punch" | "daily_log_draft" | "rfi" | "mention" | "approval";
 
@@ -47,7 +47,7 @@ interface InboxItem {
   badge?: string;
 }
 
-// ââ Source fetchers (each one is fault-tolerant) ââââââââââââââââââââââââââââââ
+// ── Source fetchers (each one is fault-tolerant) ──────────────────────────────
 
 async function fetchPunchAssignedToMe(): Promise<InboxItem[]> {
   try {
@@ -81,7 +81,7 @@ async function fetchPunchAssignedToMe(): Promise<InboxItem[]> {
           kind: "punch" as InboxItemKind,
           title: p.title,
           subtitle: [
-            p.assignee && `â ${p.assignee}`,
+            p.assignee && `→ ${p.assignee}`,
             isOverdue && "OVERDUE",
             p.status.replace(/_/g, " "),
           ]
@@ -111,7 +111,7 @@ async function fetchDailyLogDrafts(): Promise<InboxItem[]> {
     return items.slice(0, 25).map((d) => ({
       id: `dl_${d.id}`,
       kind: "daily_log_draft" as InboxItemKind,
-      title: `Daily log draft${d.projectName ? ` â ${d.projectName}` : ""}`,
+      title: `Daily log draft${d.projectName ? ` — ${d.projectName}` : ""}`,
       subtitle: d.logDate
         ? `for ${new Date(d.logDate).toLocaleDateString()}`
         : "no date set",
@@ -125,7 +125,7 @@ async function fetchDailyLogDrafts(): Promise<InboxItem[]> {
   }
 }
 
-// Placeholder source â wires in once a /api/rfis or /api/execution-rfis endpoint  // no-placeholder-gate: allow-line
+// Placeholder source — wires in once a /api/rfis or /api/execution-rfis endpoint  // no-placeholder-gate: allow-line
 // exposes assignments. Kept here so adding it is one function later.
 async function fetchRfiActions(): Promise<InboxItem[]> {
   try {
@@ -162,7 +162,7 @@ async function fetchAllSources(): Promise<InboxItem[]> {
   return [...punch, ...drafts, ...rfis].sort((a, b) => b.ts - a.ts);
 }
 
-// ââ Per-row UI ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// ── Per-row UI ────────────────────────────────────────────────────────────────
 
 const KIND_ICON: Record<InboxItemKind, typeof AlertCircle> = {
   punch: AlertCircle,
@@ -223,7 +223,7 @@ function InboxRow({ item, onOpen }: { item: InboxItem; onOpen: () => void }) {
   );
 }
 
-// ââ Page ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function MobileInboxPage() {
   const [, setLocation] = useLocation();
@@ -286,7 +286,7 @@ export default function MobileInboxPage() {
             </div>
             <div className="mt-0.5 text-xs text-zinc-500">
               {loading
-                ? "Refreshingâ¦"
+                ? "Refreshing…"
                 : `${items.length} item${items.length === 1 ? "" : "s"} · updated ${timeAgo(lastRefresh)}`}
             </div>
           </div>

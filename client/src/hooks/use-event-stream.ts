@@ -32,9 +32,12 @@ const EVENT_QUERY_MAP: Partial<Record<SSEEventType, string[][]>> = {
   EGNYTE_SYNC_PROGRESS: [["/api/egnyte/sync/status"]],
   EGNYTE_SYNC_DONE: [["/api/egnyte/sync/status"], ["/api/egnyte/tree"], ["/api/debug/egnyte"]],
   EGNYTE_SYNC_ERROR: [["/api/egnyte/sync/status"], ["/api/debug/egnyte"]],
-  SAM_INGEST_NEW: [["/api/opportunities"], ["/api/dashboard/stats"], ["/api/debug/sam"]],
-  SAM_INGEST_UPDATE: [["/api/opportunities"], ["/api/dashboard/stats"]],
-  SAM_INGEST_ATTACHMENTS_DONE: [["/api/opportunities"]],
+  // "/api/opportunities/summary" is a distinct key rather than a prefix match of
+  // "/api/opportunities", so it must be listed explicitly or the home page's
+  // counts stop refreshing when new opportunities land.
+  SAM_INGEST_NEW: [["/api/opportunities"], ["/api/opportunities/summary"], ["/api/dashboard/stats"], ["/api/debug/sam"]],
+  SAM_INGEST_UPDATE: [["/api/opportunities"], ["/api/opportunities/summary"], ["/api/dashboard/stats"]],
+  SAM_INGEST_ATTACHMENTS_DONE: [["/api/opportunities"], ["/api/opportunities/summary"]],
   BID_CHECKLIST_UPDATED: [["/api/dashboard/stats"]],
   BINDER_GENERATING: [["/api/dashboard/stats"]],
   BINDER_READY: [["/api/dashboard/stats"]],

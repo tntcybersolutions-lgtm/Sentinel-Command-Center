@@ -1,5 +1,5 @@
 /**
- * Sprint L3-A â Saved Filters
+ * Sprint L3-A — Saved Filters
  *
  * Reusable component for any list page with filter state. Persists named
  * filter combinations to localStorage and renders them as tap-to-apply chips
@@ -12,7 +12,7 @@
  *     onApply={(s) => { setFilterSeverity(s.severity); setFilterAssignee(s.assignee); setSearchText(s.q); }}
  *   />
  *
- * Storage key: sentinel:savedFilters:<filterKey> â Array<{ id, name, state }>
+ * Storage key: sentinel:savedFilters:<filterKey> → Array<{ id, name, state }>
  */
 
 import { useEffect, useState, useCallback } from "react";
@@ -26,11 +26,11 @@ export interface SavedFilter<T = Record<string, unknown>> {
 }
 
 interface SavedFiltersProps<T extends Record<string, unknown>> {
-  /** Storage namespace â e.g. "punch", "daily-log", "rfi". */
+  /** Storage namespace — e.g. "punch", "daily-log", "rfi". */
   filterKey: string;
   /** Current filter state from the parent. Used to seed the Save dialog. */
   currentState: T;
-  /** Called when user taps a saved chip â parent applies the state to its filters. */
+  /** Called when user taps a saved chip — parent applies the state to its filters. */
   onApply: (state: T) => void;
   /** Optional className for the wrapper. */
   className?: string;
@@ -53,7 +53,7 @@ function saveFilters<T>(key: string, filters: SavedFilter<T>[]) {
   try {
     localStorage.setItem(`${STORAGE_PREFIX}:${key}`, JSON.stringify(filters));
   } catch {
-    /* quota / private mode â ignore */
+    /* quota / private mode — ignore */
   }
 }
 
@@ -156,7 +156,7 @@ export function SavedFilters<T extends Record<string, unknown>>({
                 setName("");
               }
             }}
-            placeholder="Filter nameâ¦"
+            placeholder="Filter name…"
             maxLength={40}
             className="w-32 bg-transparent text-slate-100 placeholder:text-slate-500 outline-none"
             data-testid="saved-filters-name-input"

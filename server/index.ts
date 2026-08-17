@@ -145,7 +145,7 @@ app.use((req, res, next) => {
         app.use(takeoffItemsRouter);
     app.use(deliverableGeneratorRouter);
   app.use(documentContentRouter);
-  // Phase 2 v2.1 â POST /api/bid-projects/:bidProjectId/auto-fill-jacket
+  // Phase 2 v2.1 — POST /api/bid-projects/:bidProjectId/auto-fill-jacket
   app.use(bidJacketAutoFillRouter);
   registerHomeRoutes(app);
   registerSprint3Routes(app);

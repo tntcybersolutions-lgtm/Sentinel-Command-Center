@@ -118,6 +118,21 @@ export interface IStorage {
   getLatestOpportunityScores(
     tenantId: string,
   ): Promise<Map<string, { score: number; recommendedAction: string }>>;
+  getOpportunitySummary(tenantId: string): Promise<{
+    total: number;
+    needsTriage: number;
+    dueThisWeek: number;
+    topFit: number | null;
+    urgent: Array<{
+      id: string;
+      title: string;
+      agency: string | null;
+      setAside: string | null;
+      dueAt: string | null;
+      value: number | null;
+      score: number | null;
+    }>;
+  }>;
   getOpportunity(id: string): Promise<Opportunity | undefined>;
   createOpportunity(opportunity: InsertOpportunity): Promise<Opportunity>;
   updateOpportunity(id: string, updates: Partial<Opportunity>): Promise<Opportunity | undefined>;
@@ -369,6 +384,86 @@ export class DatabaseStorage implements IStorage {
       });
     }
     return byOpportunity;
+  }
+
+  /**
+   * Everything the home page's Bid Opportunities panel shows: four counts and
+   * the five soonest deadlines.
+   *
+   * It used to GET /api/opportunities and derive these in the browser. With
+   * ~9,900 opportunities that is a 6 MB response parsed, structurally shared by
+   * React Query, and re-diffed on every websocket invalidation — to render four
+   * numbers and five rows. It blocked the main thread long enough that a
+   * setTimeout(..., 100) in main.tsx fired 56-126 seconds late, so the whole app
+   * sat on its boot loader and every tile read "--".
+   *
+   * Two indexed queries, a few hundred bytes. The counts are computed in
+   * Postgres because the answer is four integers, not ten thousand rows.
+   */
+  async getOpportunitySummary(tenantId: string): Promise<{
+    total: number;
+    needsTriage: number;
+    dueThisWeek: number;
+    topFit: number | null;
+    urgent: Array<{
+      id: string;
+      title: string;
+      agency: string | null;
+      setAside: string | null;
+      dueAt: string | null;
+      value: number | null;
+      score: number | null;
+    }>;
+  }> {
+    // Mirrors the client's old predicate exactly: a blank, 'open', or
+    // 'undecided' status means nobody has dispositioned it yet.
+    const countsResult = await db.execute(sql`
+      SELECT
+        (SELECT count(*) FROM opportunities WHERE tenant_id = ${tenantId})::int AS total,
+        (SELECT count(*) FROM opportunities
+          WHERE tenant_id = ${tenantId}
+            AND (status IS NULL OR lower(status) IN ('', 'open', 'undecided')))::int AS needs_triage,
+        (SELECT count(*) FROM opportunities
+          WHERE tenant_id = ${tenantId}
+            AND due_at >= now() AND due_at <= now() + interval '7 days')::int AS due_this_week,
+        (SELECT max(score) FROM (
+           SELECT DISTINCT ON (opportunity_id) score
+             FROM opportunity_scores WHERE tenant_id = ${tenantId}
+            ORDER BY opportunity_id, created_at DESC
+         ) latest)::int AS top_fit
+    `);
+    const counts = (((countsResult as any).rows ?? countsResult) as any[])[0] ?? {};
+
+    const urgentResult = await db.execute(sql`
+      SELECT o.id, o.title, o.agency, o.set_aside, o.due_at, o.contract_value, latest.score
+        FROM opportunities o
+        LEFT JOIN (
+          SELECT DISTINCT ON (opportunity_id) opportunity_id, score
+            FROM opportunity_scores WHERE tenant_id = ${tenantId}
+           ORDER BY opportunity_id, created_at DESC
+        ) latest ON latest.opportunity_id = o.id
+       WHERE o.tenant_id = ${tenantId} AND o.due_at >= now()
+       ORDER BY o.due_at ASC
+       LIMIT 5
+    `);
+    const urgentRows = ((urgentResult as any).rows ?? urgentResult) as any[];
+
+    return {
+      total: Number(counts.total ?? 0),
+      needsTriage: Number(counts.needs_triage ?? 0),
+      dueThisWeek: Number(counts.due_this_week ?? 0),
+      // null rather than 0 — nothing scored yet is not a top fit of zero.
+      topFit: counts.top_fit == null ? null : Number(counts.top_fit),
+      urgent: urgentRows.map((r) => ({
+        id: r.id,
+        title: r.title,
+        agency: r.agency ?? null,
+        setAside: r.set_aside ?? null,
+        dueAt: r.due_at ? new Date(r.due_at).toISOString() : null,
+        value: r.contract_value == null ? null : Number(r.contract_value),
+        score: r.score == null ? null : Number(r.score),
+      })),
+    };
   }
 
   async getOpportunity(id: string): Promise<Opportunity | undefined> {

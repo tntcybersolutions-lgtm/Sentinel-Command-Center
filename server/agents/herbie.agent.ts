@@ -696,7 +696,7 @@ export async function processHerbieMessage(
   conversationHistory: Array<{ role: "user" | "assistant"; content: string }> = []
 ): Promise<{ response: string; toolCalls?: Array<{ tool: string; result: any }> }> {
   // Domain composition: load role/trade/sector context for this tenant.
-  // Failure here should NOT prevent Herbie from responding â fall back
+  // Failure here should NOT prevent Herbie from responding — fall back
   // to the base system prompt only.
   let domainPrompt = "";
   try {
@@ -710,7 +710,7 @@ export async function processHerbieMessage(
     console.error("[herbie] composeDomain failed; continuing without domain context:", err);
   }
 
-  const baseSystemPrompt = `You are SENTINEL HERBIEâ¢, the AI office assistant for BlackHawk Construction's NOVA platform. You are an expert in federal construction contracting, bid management, construction operations, AND software development for this platform.
+  const baseSystemPrompt = `You are SENTINEL HERBIE™, the AI office assistant for BlackHawk Construction's NOVA platform. You are an expert in federal construction contracting, bid management, construction operations, AND software development for this platform.
 
 Your capabilities include:
 - Searching and analyzing federal opportunities from SAM.gov, GSA, and DIBBS

@@ -1,5 +1,5 @@
 /**
- * Sprint L3-B â useProjectFavorites
+ * Sprint L3-B — useProjectFavorites
  *
  * Pin/unpin a project to your favorites. Favorites are stored in
  * localStorage so they persist across sessions and work offline.
@@ -36,13 +36,13 @@ function saveFavorites(ids: string[]) {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(ids));
   } catch {
-    /* quota / private mode â ignore */
+    /* quota / private mode — ignore */
   }
   // Broadcast so other tabs/components stay in sync
   try {
     window.dispatchEvent(new CustomEvent("sentinel:favoritesChanged"));
   } catch {
-    /* SSR â ignore */
+    /* SSR — ignore */
   }
 }
 

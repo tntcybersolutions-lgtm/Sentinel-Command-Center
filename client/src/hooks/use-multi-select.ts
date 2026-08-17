@@ -1,5 +1,5 @@
 /**
- * Sprint L3-D â useMultiSelect: long-press to start, tap to toggle
+ * Sprint L3-D — useMultiSelect: long-press to start, tap to toggle
  *
  * Headless hook that any list page can wire into its rows. Long-press (600ms
  * default) on a row enters multi-select mode and selects that row. Once in
@@ -18,10 +18,10 @@
  *   const ms = useMultiSelect();
  *   {items.map(it =>
  *     <div key={it.id} {...ms.bind(it.id)} aria-selected={ms.selected.has(it.id)}>
- *       â¦rowâ¦
+ *       …row…
  *     </div>
  *   )}
- *   {ms.mode && <BulkActionBar count={ms.selected.size} onCancel={ms.clear} â¦ />}
+ *   {ms.mode && <BulkActionBar count={ms.selected.size} onCancel={ms.clear} … />}
  */
 
 import { useState, useCallback, useRef, useEffect } from "react";

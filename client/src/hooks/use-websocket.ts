@@ -41,6 +41,9 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
       case "opportunity_update":
         queryClient.invalidateQueries({ queryKey: ["/api/dashboard/recent-opportunities"] });
         queryClient.invalidateQueries({ queryKey: ["/api/opportunities"] });
+        // Distinct key, not a prefix of the one above, so it needs its own line
+        // or the home page's counts silently stop refreshing on live updates.
+        queryClient.invalidateQueries({ queryKey: ["/api/opportunities/summary"] });
         break;
       case "approval_update":
         queryClient.invalidateQueries({ queryKey: ["/api/dashboard/pending-approvals"] });

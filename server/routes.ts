@@ -2604,6 +2604,17 @@ export async function registerRoutes(
     }
   });
 
+  // Must stay above "/api/opportunities/:id" — Express matches in registration
+  // order, so the :id route would otherwise capture "summary" as an id.
+  app.get("/api/opportunities/summary", async (_req: Request, res: Response) => {
+    try {
+      res.json(await storage.getOpportunitySummary(DEFAULT_TENANT_ID));
+    } catch (error) {
+      console.error("Error building opportunity summary:", error);
+      res.status(500).json({ error: "Failed to build opportunity summary" });
+    }
+  });
+
   app.get("/api/opportunities/:id", async (req: Request, res: Response) => {
     try {
       const id = p(req.params.id);

@@ -1,12 +1,12 @@
 /**
- * Sprint L3-C â Swipe gestures on Punch cards
+ * Sprint L3-C — Swipe gestures on Punch cards
  *
- * Wraps a card with horizontal-drag detection. Swipe RIGHT past threshold â
- * onSwipeRight (advance status). Swipe LEFT past threshold â onSwipeLeft
+ * Wraps a card with horizontal-drag detection. Swipe RIGHT past threshold →
+ * onSwipeRight (advance status). Swipe LEFT past threshold → onSwipeLeft
  * (back). A colored cue slides in behind the card to show what the swipe will
  * do (green check for advance, amber arrow for back). Haptic ping on release.
  *
- * Uses framer-motion's drag handlers â already a project dep.
+ * Uses framer-motion's drag handlers — already a project dep.
  *
  * Pointer-fine devices (mouse) get drag too but with a higher threshold so
  * accidental click-drags don't fire actions.
@@ -29,7 +29,7 @@ import { CheckCircle2, ArrowLeft } from "lucide-react";
 
 const TRIGGER_PX = 90;   // distance past which the action commits
 const MAX_DRAG = 160;    // hard stop for the drag
-const VELOCITY = 600;    // px/s â fast flick also commits even if short
+const VELOCITY = 600;    // px/s — fast flick also commits even if short
 
 export interface SwipeCardProps {
   children: ReactNode;
@@ -115,7 +115,7 @@ export function SwipeCard({
 
   return (
     <div className={`relative overflow-hidden rounded-xl ${className}`}>
-      {/* Right (Advance) cue â under the card, revealed on right swipe */}
+      {/* Right (Advance) cue — under the card, revealed on right swipe */}
       <div
         aria-hidden
         className="absolute inset-0 flex items-center justify-start pl-4"
