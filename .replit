@@ -23,18 +23,27 @@ PORT = "5000"
 
 [deployment]
 deploymentTarget = "autoscale"
-# --omit=optional: @tailwindcss/oxide ships per-platform binaries as optional
-# dependencies, including @tailwindcss/oxide-wasm32-wasi. Replit's package
-# firewall returns 404 for that tarball, and npm treats the failed fetch as a
-# hard error rather than skipping an optional package. Tailwind is a build-time
-# tool — the server bundle never loads it — so omitting optional packages here
-# costs nothing.
+# Autoscale allows the container a limited window to open port 5000 before it
+# declares "the required port was never opened". Installing packages inside that
+# window spends it on work the build step already did: `npm run build` runs with
+# the full dependency tree, and the resulting filesystem is what the container
+# boots from, so node_modules is normally already present.
 #
-# ';' rather than '&&': with '&&' a failed install means node is never executed,
-# the port is never opened, and the deploy reports "the required port was never
-# opened" with zero application output — no indication that npm was the problem.
-# A registry hiccup must not be able to stop the server from starting.
-  run = ["sh", "-c", "npm install --omit=dev --omit=optional --no-audit --no-fund; node ./dist/index.cjs"]
+# So probe first and only install when something is genuinely missing. express is
+# a good canary — the server bundle marks most packages external and cannot start
+# without it. When node_modules is intact this costs milliseconds instead of
+# minutes; when it is not, the old install still runs and nothing is lost.
+#
+# --omit=optional on the fallback: @tailwindcss/oxide ships per-platform binaries
+# as optional dependencies, including @tailwindcss/oxide-wasm32-wasi. Replit's
+# package firewall returns 404 for that tarball and npm treats the failed fetch
+# as a hard error rather than skipping an optional package. Tailwind is a
+# build-time tool the server bundle never loads.
+#
+# ';' rather than '&&' before node: a failed install must not stop the server
+# from starting. With '&&' the port is never opened and the deploy reports only
+# "the required port was never opened", with no indication npm was the problem.
+  run = ["sh", "-c", "node -e \"require.resolve('express')\" 2>/dev/null || npm install --omit=dev --omit=optional --no-audit --no-fund; node ./dist/index.cjs"]
 build = ["npm", "run", "build"]
 
 [workflows]
