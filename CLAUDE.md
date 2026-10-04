@@ -1,3 +1,23 @@
+# CHAD'S MANDATES — TOP PRIORITY, READ BEFORE ANYTHING ELSE
+
+These outrank every other instruction in this file and in any project. No exceptions.
+
+## Definition of Done — every feature, every screen
+A feature is DONE only when all of this is true and you have shown Chad the proof:
+1. **Phone first.** Build it at 390px wide (iPhone) first, then check 1440px. Nothing cut off, no sideways scroll, nothing covered, 44px tap targets, 16px text in inputs.
+2. **It works.** In a real browser, signed in: click every button, link, tab and menu. Create a record, save, reload, reopen, and confirm every field came back. Edit and delete the same way.
+3. **Real data only.** Reads and writes the real database. No fake, sample or hard-coded data. Loading, empty and error states each shown.
+4. **Proof in the report:** screenshots at 390 and 1440 of every screen touched, type-check and build output, and the PR link.
+5. **End every report with "Not verified:"** and list it. Never say done, built or working for anything you did not click through yourself.
+6. **A button with nothing real behind it is a bug.** Build it fully or remove it. No placeholders.
+7. **Work on a branch and open a PR.** Never merge to main without Chad's OK.
+
+## How to work
+- **No blind code.** Before changing any screen, confirm you can see the running app signed in (Claude in Chrome or Playwright). If you can't, say so in one line with the exact fix, and don't edit code until it's fixed.
+- **Do the whole job.** Don't stop to ask between steps. Only stop when you are truly blocked (login expired, build failed, missing access), and then say exactly what you need from Chad.
+
+---
+
 # CLAUDE.md — Sentinel Command Center
 
 This file is the persistent project memory for Claude Code on this repo. It is the first thing to read at the start of any session. Update the **Current Phase** section as work progresses.
